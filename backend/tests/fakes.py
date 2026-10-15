@@ -58,10 +58,14 @@ class MemoryStore:
     def save_questions(
         self, user_id: UUID, session_id: UUID, questions: Sequence[Question]
     ) -> None:
+        if self.sessions.get(session_id, {}).get("user_id") != user_id:
+            raise LookupError(f"session {session_id} not found")
         for question in questions:
             self.questions[question.id] = question
 
     def record_attempt(self, user_id: UUID, attempt: Attempt, concept_after: Concept) -> bool:
+        if self.concepts.get(concept_after.id, (None,))[0] != user_id:
+            raise LookupError(f"concept {concept_after.id} not found")
         if attempt.id in self.attempts:
             return False
         self.attempts[attempt.id] = attempt

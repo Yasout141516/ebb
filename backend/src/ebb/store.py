@@ -25,8 +25,13 @@ class Store(Protocol):
 
     def save_questions(
         self, user_id: UUID, session_id: UUID, questions: Sequence[Question]
-    ) -> None: ...
+    ) -> None:
+        """Raises LookupError if the session or a question's concept is not the user's."""
+        ...
 
     def record_attempt(self, user_id: UUID, attempt: Attempt, concept_after: Concept) -> bool:
-        """Insert the attempt and apply `concept_after`; False if attempt.id already existed."""
+        """Insert the attempt and apply `concept_after`; False if attempt.id already existed.
+
+        Raises LookupError if the referenced question/concept is not the user's.
+        """
         ...

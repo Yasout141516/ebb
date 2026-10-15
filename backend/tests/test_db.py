@@ -104,7 +104,7 @@ def test_duplicate_attempt_is_written_once_and_moves_the_stage_once(store):
 
 
 def test_other_users_see_nothing(store):
-    subject_id, session_id, _ = subject_with_question(store)
+    subject_id, _, _ = subject_with_question(store)
     assert store.list_subjects(BOB) == []
     assert store.list_concepts(BOB, subject_id) == []
     with pytest.raises(LookupError):
@@ -115,16 +115,30 @@ def test_other_users_cannot_change_alices_rows(store, pg_pool):
     subject_id, session_id, question = subject_with_question(store)
     concept = store.list_concepts(ALICE, subject_id)[0]
     store.end_session(BOB, session_id, NOW)
-    store.record_attempt(
-        BOB,
-        Attempt(uuid4(), question.id, concept.id, "x", GradeValue.CORRECT, "ok", 0, 5, "code", NOW),
-        replace(concept, stage=5),
-    )
+    with pytest.raises(LookupError):
+        store.record_attempt(
+            BOB,
+            Attempt(
+                uuid4(), question.id, concept.id, "x", GradeValue.CORRECT, "ok", 0, 5, "code", NOW
+            ),
+            replace(concept, stage=5),
+        )
+    bobs_question = Question(uuid4(), concept.id, "short", 1, "Sneaky?", "No.")
+    with pytest.raises(LookupError):
+        store.save_questions(BOB, session_id, [bobs_question])
     with pg_pool.connection() as conn:
         ended = conn.execute(
             "select ended_at from study_sessions where id = %s", (session_id,)
         ).fetchone()
+        bob_attempts = conn.execute(
+            "select count(*) as n from attempts where user_id = %s", (BOB,)
+        ).fetchone()
+        bob_questions = conn.execute(
+            "select count(*) as n from questions where user_id = %s", (BOB,)
+        ).fetchone()
     assert ended["ended_at"] is None
+    assert bob_attempts["n"] == 0
+    assert bob_questions["n"] == 0
     assert store.list_concepts(ALICE, subject_id)[0].stage == 0
 
 

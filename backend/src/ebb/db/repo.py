@@ -88,28 +88,53 @@ class PgStore:
     def save_questions(
         self, user_id: UUID, session_id: UUID, questions: Sequence[Question]
     ) -> None:
-        with self.pool.connection() as conn, conn.cursor() as cur:
-            cur.executemany(
-                "insert into questions (id, user_id, session_id, concept_id, type, difficulty,"
-                " prompt, options, reference_answer) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                [
-                    (
-                        q.id,
-                        user_id,
-                        session_id,
-                        q.concept_id,
-                        q.type,
-                        q.difficulty,
-                        q.prompt,
-                        Jsonb([asdict(o) for o in q.options]) if q.options else None,
-                        q.reference_answer,
-                    )
-                    for q in questions
-                ],
-            )
+        with self.pool.connection() as conn, conn.transaction():
+            owned_session = conn.execute(
+                "select 1 from study_sessions where id = %s and user_id = %s",
+                (session_id, user_id),
+            ).fetchone()
+            if owned_session is None:
+                raise LookupError(f"session {session_id} not found")
+            concept_ids = list({q.concept_id for q in questions})
+            owned_concepts = conn.execute(
+                "select count(*) as n from concepts where user_id = %s and id = any(%s::uuid[])",
+                (user_id, concept_ids),
+            ).fetchone()
+            if owned_concepts["n"] != len(concept_ids):
+                raise LookupError("concept not found")
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "insert into questions (id, user_id, session_id, concept_id, type, difficulty,"
+                    " prompt, options, reference_answer)"
+                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    [
+                        (
+                            q.id,
+                            user_id,
+                            session_id,
+                            q.concept_id,
+                            q.type,
+                            q.difficulty,
+                            q.prompt,
+                            Jsonb([asdict(o) for o in q.options]) if q.options else None,
+                            q.reference_answer,
+                        )
+                        for q in questions
+                    ],
+                )
 
     def record_attempt(self, user_id: UUID, attempt: Attempt, concept_after: Concept) -> bool:
         with self.pool.connection() as conn, conn.transaction():
+            owned_question = conn.execute(
+                "select 1 from questions where id = %s and user_id = %s and concept_id = %s",
+                (attempt.question_id, user_id, attempt.concept_id),
+            ).fetchone()
+            owned_concept = conn.execute(
+                "select 1 from concepts where id = %s and user_id = %s",
+                (attempt.concept_id, user_id),
+            ).fetchone()
+            if owned_question is None or owned_concept is None:
+                raise LookupError(f"question {attempt.question_id} not found")
             inserted = conn.execute(
                 "insert into attempts (id, user_id, question_id, concept_id, answer_text, grade,"
                 " feedback, stage_before, stage_after, model_used, graded_at)"
