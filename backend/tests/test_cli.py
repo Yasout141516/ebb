@@ -4,7 +4,7 @@ import pytest
 from typer.testing import CliRunner
 
 from ebb import cli
-from ebb.config import Settings
+from ebb.config import ConfigError, Settings
 from ebb.llm.tutor import AllProvidersExhausted
 from tests.fakes import FakeTutor, MemoryStore
 
@@ -121,3 +121,47 @@ def test_new_reports_when_the_llm_is_unavailable(fakes, monkeypatch):
 
     assert result.exit_code == 1
     assert "The tutor couldn't respond" in result.output
+
+
+def test_new_shows_the_first_line_of_the_cause(fakes, monkeypatch):
+    _, tutor = fakes
+
+    def down(topic: str):
+        raise AllProvidersExhausted("503 overloaded\nstack detail")
+
+    monkeypatch.setattr(tutor, "extract_concepts", down)
+
+    result = runner.invoke(cli.app, ["new", "Networks"])
+
+    assert result.exit_code == 1
+    assert "503 overloaded" in result.output
+    assert "stack detail" not in result.output
+
+
+def test_new_exits_2_on_a_rejected_key(fakes, monkeypatch):
+    _, tutor = fakes
+
+    def rejected(topic: str):
+        raise ConfigError("Gemini rejected GOOGLE_API_KEY — check the key in .env")
+
+    monkeypatch.setattr(tutor, "extract_concepts", rejected)
+
+    result = runner.invoke(cli.app, ["new", "Networks"])
+
+    assert result.exit_code == 2
+    assert "Gemini rejected GOOGLE_API_KEY" in result.output
+
+
+def test_study_exits_2_on_a_rejected_key(fakes, monkeypatch):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    def rejected(*args, **kwargs):
+        raise ConfigError("Gemini rejected GOOGLE_API_KEY — check the key in .env")
+
+    monkeypatch.setattr(tutor, "generate_questions", rejected)
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 2
+    assert "Gemini rejected GOOGLE_API_KEY" in result.output

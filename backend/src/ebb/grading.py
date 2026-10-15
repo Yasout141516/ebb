@@ -13,7 +13,7 @@ def parse_choice(options: Sequence[str], answer: str) -> int | None:
     selects an option whose text is "62".
     """
     text = answer.strip()
-    if text.isdigit() and 1 <= int(text) <= len(options):
+    if text.isascii() and text.isdigit() and 1 <= int(text) <= len(options):
         return int(text) - 1
     folded = text.casefold()
     for index, option in enumerate(options):

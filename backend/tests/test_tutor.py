@@ -1,6 +1,8 @@
 from typing import Any
 from uuid import uuid4
 
+import groq
+import httpx
 import pytest
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
@@ -8,11 +10,24 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import RunnableLambda
+from langchain_google_genai.chat_models import (
+    GoogleAuthenticationError,
+    GoogleInvalidRequestError,
+    GoogleModelNotFoundError,
+    GooglePermissionDeniedError,
+)
 
 from ebb.config import ConfigError, Settings
 from ebb.domain import Concept, Grade, GradeValue, Option, Question
 from ebb.llm.schemas import ConceptDraft, ConceptList, GradeResult, QuestionBatch
-from ebb.llm.tutor import AllProvidersExhausted, LangChainTutor, Provider, _prompt, correct_text
+from ebb.llm.tutor import (
+    REQUEST_TIMEOUT_SECONDS,
+    AllProvidersExhausted,
+    LangChainTutor,
+    Provider,
+    _prompt,
+    correct_text,
+)
 
 QUESTION = Question(uuid4(), uuid4(), "short", 1, "Why do resolvers cache?", "To save lookups.")
 GRADE = Grade(GradeValue.INCORRECT, "You described TTL, not caching.", None)
@@ -238,3 +253,106 @@ def test_grade_converts_the_result_and_uses_the_precise_model():
     [(schema, prompt)] = precise.calls
     assert schema is GradeResult
     assert "<<<ANSWER\nIt expires entries.\nANSWER>>>" in prompt
+
+
+class Raising(BaseChatModel):
+    """A chat model whose every call raises the given exception."""
+
+    error: Any
+    calls: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "raising"
+
+    def _generate(
+        self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
+    ) -> ChatResult:
+        self.calls += 1
+        raise self.error
+
+
+def _status_error(cls: type, status: int) -> Exception:
+    response = httpx.Response(status, request=httpx.Request("POST", "https://x.test"))
+    return cls("boom", response=response, body=None)
+
+
+def test_network_errors_fall_back_to_the_next_provider():
+    down, backup = Raising(error=httpx.ConnectError("boom")), fake("Backup lesson.")
+    tutor = LangChainTutor(
+        [Provider("primary", down, down), Provider("backup", backup, backup)], attempts=1
+    )
+    out = tutor.teach(QUESTION, "TTL", GRADE)
+    assert (out.value, out.fell_back) == ("Backup lesson.", True)
+
+
+def test_network_errors_alone_exhaust_the_providers():
+    down = Raising(error=httpx.ConnectError("boom"))
+    tutor = LangChainTutor([Provider("primary", down, down)], attempts=1)
+    with pytest.raises(AllProvidersExhausted):
+        tutor.teach(QUESTION, "TTL", GRADE)
+
+
+def test_from_settings_sets_a_request_timeout_on_both_clients():
+    tutor = LangChainTutor.from_settings(
+        Settings(_env_file=None, google_api_key="g", groq_api_key="q")
+    )
+    gemini, groq_provider = tutor.providers
+    assert gemini.creative.timeout == REQUEST_TIMEOUT_SECONDS
+    assert gemini.precise.timeout == REQUEST_TIMEOUT_SECONDS
+    assert groq_provider.creative.request_timeout == REQUEST_TIMEOUT_SECONDS
+    assert groq_provider.precise.request_timeout == REQUEST_TIMEOUT_SECONDS
+
+
+GEMINI_KEY = "Gemini rejected GOOGLE_API_KEY — check the key in .env"
+GROQ_KEY = "Groq rejected GROQ_API_KEY — check the key in .env"
+NOT_FOUND = "Model 'primary' was not found — set EBB_PRIMARY_MODEL (or EBB_FALLBACK_MODEL) in .env"
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (GoogleAuthenticationError("401"), GEMINI_KEY),
+        (GooglePermissionDeniedError("403"), GEMINI_KEY),
+        (
+            GoogleInvalidRequestError("400 INVALID_ARGUMENT: API key not valid. Please pass one."),
+            GEMINI_KEY,
+        ),
+        (GoogleModelNotFoundError("404"), NOT_FOUND),
+    ],
+)
+def test_gemini_config_errors_surface_without_retry_or_fallback(error, message):
+    bad, backup = Raising(error=error), Raising(error=OutputParserException("never reached"))
+    tutor = LangChainTutor(
+        [Provider("primary", bad, bad), Provider("backup", backup, backup)], attempts=3
+    )
+    with pytest.raises(ConfigError) as caught:
+        tutor.teach(QUESTION, "TTL", GRADE)
+    assert str(caught.value) == message
+    assert (bad.calls, backup.calls) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    ("cls", "status", "message"),
+    [
+        (groq.AuthenticationError, 401, GROQ_KEY),
+        (groq.PermissionDeniedError, 403, GROQ_KEY),
+        (groq.NotFoundError, 404, NOT_FOUND),
+    ],
+)
+def test_groq_config_errors_surface_without_retry(cls, status, message):
+    bad = Raising(error=_status_error(cls, status))
+    provider = Provider("primary", bad, bad, service="Groq", key_name="GROQ_API_KEY")
+    tutor = LangChainTutor([provider], attempts=3)
+    with pytest.raises(ConfigError) as caught:
+        tutor.teach(QUESTION, "TTL", GRADE)
+    assert str(caught.value) == message
+    assert bad.calls == 1
+
+
+def test_groq_bad_request_stays_retryable():
+    bad = Raising(error=_status_error(groq.BadRequestError, 400))
+    tutor = LangChainTutor([Provider("primary", bad, bad)], attempts=2)
+    with pytest.raises(AllProvidersExhausted):
+        tutor.teach(QUESTION, "TTL", GRADE)
+    assert bad.calls == 2

@@ -6,13 +6,13 @@ services:
       POSTGRES_PASSWORD: ebb
       POSTGRES_DB: ebb
     ports:
-      - "5432:5432"
+      - "${EBB_DB_PORT:-5432}:5432"
     volumes:
       # Postgres 18 images keep data under /var/lib/postgresql/<major>/; mount the parent.
       - ebb-pgdata:/var/lib/postgresql
       - ./backend/db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ebb -d ebb"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ebb -d ebb"]
       interval: 5s
       timeout: 5s
       retries: 10

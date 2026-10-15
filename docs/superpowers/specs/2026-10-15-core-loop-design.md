@@ -135,7 +135,7 @@ Indexes: `concepts (user_id, next_review_at)`, `attempts (user_id, graded_at)`,
 
 **Migration runner** (`db/migrate.py`): creates `schema_migrations (version text
 primary key, applied_at timestamptz)`, then applies each `migrations/*.sql` not
-yet recorded, in filename order, each in its own transaction. Runs on every CLI
+yet recorded, in filename order, all pending files in one transaction holding `pg_advisory_xact_lock`, so concurrent starts cannot both apply them. Runs on every CLI
 start.
 
 ## Mastery rules (`mastery.py`)

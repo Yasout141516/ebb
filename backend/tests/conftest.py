@@ -2,6 +2,7 @@ import os
 from collections.abc import Iterator
 
 import pytest
+from psycopg.conninfo import conninfo_to_dict
 from psycopg_pool import ConnectionPool
 
 from ebb.config import ConfigError
@@ -9,6 +10,16 @@ from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 
 DEFAULT_TEST_URL = "postgresql://ebb:ebb@localhost:5432/ebb_test"
+
+
+def require_test_database(url: str) -> None:
+    """Refuse to wipe a database that is not clearly a test database."""
+    name = conninfo_to_dict(url).get("dbname") or ""
+    if not name.endswith("_test"):
+        pytest.fail(
+            f"TEST_DATABASE_URL points at database {name!r}; the tests drop its schema, "
+            "so the name must end with '_test'"
+        )
 
 
 @pytest.fixture(scope="session")
@@ -19,6 +30,7 @@ def pg_session_pool() -> Iterator[ConnectionPool]:
     where a missing database must fail rather than silently skip.
     """
     url = os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_URL)
+    require_test_database(url)
     try:
         pool = make_pool(url, max_size=2, timeout=2)
     except ConfigError:

@@ -33,6 +33,7 @@ QUESTION = Question(
         ("5", None),
         ("", None),
         ("abc", None),
+        ("²", None),
     ],
 )
 def test_parse_choice(answer, expected):

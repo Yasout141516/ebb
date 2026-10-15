@@ -96,8 +96,14 @@ def new(topic: Annotated[str, typer.Argument(help="What you are studying.")]) ->
     with console.status("Mapping the topic…"):
         try:
             generated = tutor.extract_concepts(topic)
-        except AllProvidersExhausted:
-            _fail(EXHAUSTED_NOTICE)
+        except AllProvidersExhausted as error:
+            console.print(f"[red]{escape(EXHAUSTED_NOTICE)}[/red]")
+            cause = str(error).strip()
+            if cause:
+                console.print(f"[dim]{escape(cause.splitlines()[0])}[/dim]")
+            raise typer.Exit(1) from error
+        except ConfigError as error:
+            _fail(str(error), code=2)
     concepts = [(c.name, c.description) for c in generated.value]
     store.create_subject(settings.ebb_dev_user_id, topic, concepts)
     console.print(f"[bold]{escape(topic)}[/bold] · {len(concepts)} concepts")
@@ -129,6 +135,8 @@ def study(
             reply = _ask(payload)
             with console.status("Thinking…"):
                 result = graph.invoke(Command(resume=reply), config)
+    except ConfigError as error:
+        _fail(str(error), code=2)
     except KeyboardInterrupt:
         _fail("Stopped. Every answer you finished is saved.", code=130)
     render_summary(console, result)

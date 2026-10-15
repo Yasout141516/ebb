@@ -9,10 +9,18 @@ from uuid import uuid4
 
 import google.genai.errors
 import groq
-from langchain_core.exceptions import OutputParserException
+import httpx
+import httpx2
+from langchain_core.exceptions import (
+    ModelAuthenticationError,
+    ModelNotFoundError,
+    ModelPermissionDeniedError,
+    OutputParserException,
+)
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from langchain_google_genai._common import GoogleGenerativeAIError
+from langchain_google_genai.chat_models import GoogleInvalidRequestError
 from pydantic import ValidationError
 
 from ebb.config import ConfigError, Settings
@@ -23,9 +31,38 @@ PROVIDER_ERRORS: tuple[type[BaseException], ...] = (
     GoogleGenerativeAIError,
     google.genai.errors.APIError,
     groq.APIError,
+    httpx.TransportError,
+    httpx2.TransportError,
     OutputParserException,
     ValidationError,
 )
+
+# Errors a retry or a backup model cannot fix: the key or model name is wrong.
+AUTH_ERRORS: tuple[type[BaseException], ...] = (
+    ModelAuthenticationError,
+    ModelPermissionDeniedError,
+    groq.AuthenticationError,
+    groq.PermissionDeniedError,
+)
+NOT_FOUND_ERRORS: tuple[type[BaseException], ...] = (ModelNotFoundError, groq.NotFoundError)
+# Gemini reports a malformed key as 400 INVALID_ARGUMENT rather than 401.
+BAD_KEY_MARKERS = ("api key not valid", "api_key_invalid")
+FATAL_ERRORS = AUTH_ERRORS + NOT_FOUND_ERRORS
+
+REQUEST_TIMEOUT_SECONDS = 60
+
+
+def _is_bad_key(error: BaseException) -> bool:
+    if isinstance(error, AUTH_ERRORS):
+        return True
+    text = str(error).lower()
+    return isinstance(error, GoogleInvalidRequestError) and any(m in text for m in BAD_KEY_MARKERS)
+
+
+def _retryable(error: BaseException) -> bool:
+    return isinstance(error, PROVIDER_ERRORS) and not (
+        isinstance(error, FATAL_ERRORS) or _is_bad_key(error)
+    )
 
 
 class AllProvidersExhausted(Exception):
@@ -56,6 +93,8 @@ class Provider:
     name: str
     precise: BaseChatModel  # low temperature: grading
     creative: BaseChatModel  # higher temperature: generating and teaching
+    service: str = "Gemini"
+    key_name: str = "GOOGLE_API_KEY"
 
 
 def _prompt(template: str, /, **values: str) -> str:
@@ -90,6 +129,7 @@ class LangChainTutor:
                 google_api_key=settings.google_api_key,
                 temperature=temperature,
                 max_retries=1,
+                request_timeout=REQUEST_TIMEOUT_SECONDS,
             )
 
         providers = [Provider(settings.ebb_primary_model, gemini(0.2), gemini(0.7))]
@@ -101,10 +141,17 @@ class LangChainTutor:
                     groq_api_key=settings.groq_api_key,
                     temperature=temperature,
                     max_retries=1,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
                 )
 
             providers.append(
-                Provider(settings.ebb_fallback_model, groq_model(0.2), groq_model(0.7))
+                Provider(
+                    settings.ebb_fallback_model,
+                    groq_model(0.2),
+                    groq_model(0.7),
+                    service="Groq",
+                    key_name="GROQ_API_KEY",
+                )
             )
         return cls(providers)
 
@@ -115,11 +162,22 @@ class LangChainTutor:
         for index, provider in enumerate(self.providers):
             model = provider.creative if creative else provider.precise
             chain = build(model).with_retry(
-                retry_if_exception_type=PROVIDER_ERRORS, stop_after_attempt=self.attempts
+                retry_if_exception_type=_retryable, stop_after_attempt=self.attempts
             )
             try:
                 return Generated(chain.invoke(prompt), provider.name, fell_back=index > 0)
-            except PROVIDER_ERRORS as error:
+            except Exception as error:
+                if _is_bad_key(error):
+                    raise ConfigError(
+                        f"{provider.service} rejected {provider.key_name} — check the key in .env"
+                    ) from error
+                if isinstance(error, NOT_FOUND_ERRORS):
+                    raise ConfigError(
+                        f"Model {provider.name!r} was not found — set EBB_PRIMARY_MODEL "
+                        "(or EBB_FALLBACK_MODEL) in .env"
+                    ) from error
+                if not isinstance(error, PROVIDER_ERRORS):
+                    raise
                 last_error = error
         raise AllProvidersExhausted(str(last_error)) from last_error
 
