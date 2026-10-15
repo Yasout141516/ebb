@@ -1,6 +1,6 @@
 # Milestone 1 — Core quiz loop (design)
 
-Date: 2026-10-15 · Status: approved in brainstorming, awaiting spec review
+Date: 2026-10-15 · Status: approved · updated during planning (versions, `position` column, `Generated` results, provider loop)
 
 Builds milestone 1 of [Ebb — Requirements & System Design](../../../Ebb%20—%20Requirements%20&%20System%20Design.pdf):
 the core loop in the terminal — topic → concepts → questions → grade → mastery
@@ -27,6 +27,7 @@ auth (M6).
 
 | Decision | Choice |
 |---|---|
+| Versions | latest stable at build time: Python 3.14, Postgres 18.6, uv 0.13 |
 | Where state lives in M1 | Postgres from day one (not in-memory) |
 | DB access and schema changes | psycopg 3 + plain SQL migrations, no ORM |
 | CI | GitHub Actions running pytest against a Postgres service |
@@ -50,6 +51,9 @@ ebb/
     │   ├── mastery.py              Leitner rules + tide (pure)
     │   ├── routing.py              routing decisions (pure)
     │   ├── grading.py              MCQ grading (pure)
+    │   ├── domain.py               dataclasses shared by every layer (pure)
+    │   ├── store.py                Store protocol (persistence interface)
+    │   ├── ui.py                   Rich rendering and input parsing
     │   ├── graph/state.py          QuizState
     │   ├── graph/nodes.py          node functions
     │   ├── graph/build.py          build_graph(tutor, repo, checkpointer)
@@ -85,15 +89,15 @@ when building. On startup the CLI upserts a `profiles` row for the dev user
 
 ## Docker
 
-- **`db`**: `postgres:16-alpine`; user/password/db `ebb`; named volume
-  `ebb-pgdata`; port `5432:5432`; healthcheck `pg_isready`; mounts
+- **`db`**: `postgres:18.6-alpine`; user/password/db `ebb`; named volume
+  `ebb-pgdata` mounted at `/var/lib/postgresql` (the Postgres 18 image layout); port `5432:5432`; healthcheck `pg_isready`; mounts
   `backend/db/init` to `/docker-entrypoint-initdb.d`.
 - **`ebb`**: built from `backend/`; `profiles: ["cli"]`; `depends_on: db
   (service_healthy)`; `env_file: .env`; `DATABASE_URL` points at `db`;
   `stdin_open` and `tty` on; entrypoint `ebb`.
 - **Dockerfile**: multi-stage. Stage 1 copies the `uv` binary from
   `ghcr.io/astral-sh/uv`, runs `uv sync --frozen --no-dev` into `/app/.venv`.
-  Stage 2 is `python:3.12-slim` with the venv and source, running as a non-root
+  Stage 2 is `python:3.14-slim` with the venv and source, running as a non-root
   user.
 
 Usage:
@@ -118,7 +122,7 @@ schema.
 |---|---|
 | `profiles` | `id` pk, `display_name text`, `timezone text not null default 'UTC'`, `created_at` |
 | `subjects` | `id`, `user_id`, `name text not null`, `created_at` |
-| `concepts` | `id`, `user_id`, `subject_id` fk, `name text not null`, `description text not null`, `stage smallint not null default 0 check (stage between 0 and 5)`, `next_review_at timestamptz null`, `last_reviewed_at timestamptz null`, `review_count int not null default 0` |
+| `concepts` | `id`, `user_id`, `subject_id` fk, `name text not null`, `description text not null`, `position smallint` (the LLM's foundational-to-advanced order; breaks ties when picking), `stage smallint not null default 0 check (stage between 0 and 5)`, `next_review_at timestamptz null`, `last_reviewed_at timestamptz null`, `review_count int not null default 0` |
 | `study_sessions` | `id`, `user_id`, `subject_id` fk, `mode text not null default 'quiz'`, `thread_id text not null unique`, `started_at`, `ended_at null` |
 | `questions` | `id`, `user_id`, `session_id` fk, `concept_id` fk, `type text check (type in ('mcq','short'))`, `difficulty smallint check (1..3)`, `prompt text`, `options jsonb null`, `reference_answer text`, `created_at` |
 | `attempts` | `id uuid pk` (no default — supplied by the caller), `user_id`, `question_id` fk, `concept_id` fk, `answer_text text`, `grade text check (grade in ('correct','partial','incorrect'))`, `feedback text`, `stage_before smallint`, `stage_after smallint`, `model_used text`, `graded_at timestamptz` |
@@ -217,21 +221,25 @@ stream until an interrupt, render the question with Rich (MCQ options numbered
 
 ```python
 class Tutor(Protocol):
-    def extract_concepts(self, topic: str) -> ConceptList: ...
-    def generate_questions(self, concept: Concept, avoid: list[str]) -> QuestionBatch: ...
-    def grade(self, question: Question, answer: str) -> Grade: ...
-    def teach(self, question: Question, answer: str, grade: Grade) -> str: ...
+    def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]: ...
+    def generate_questions(self, concept: Concept, avoid: list[str]) -> Generated[list[Question]]: ...
+    def grade(self, question: Question, answer: str) -> Generated[Grade]: ...
+    def teach(self, question: Question, answer: str, grade: Grade) -> Generated[str]: ...
 ```
+
+`Generated[T]` carries the value, the model that produced it and whether a
+backup model was used.
 
 - `ConceptList`: 6–10 items of `{name ≤ 60 chars, description: one sentence}`.
 - `QuestionBatch`: 5 `Question`s validated as above (MCQ has exactly 4 options and
   exactly one correct).
 - `Grade`: `{grade, explanation, misconception: str | None}`.
 - `LangChainTutor` builds `ChatGoogleGenerativeAI` (temperature 0.2 for grading,
-  0.7 for generation), wraps it `.with_fallbacks([ChatGroq])` when
-  `GROQ_API_KEY` is set, uses `.with_structured_output(...)` and
-  `.with_retry(stop_after_attempt=3)` (one try plus two retries). It records
-  which model answered, for `attempts.model_used`.
+  0.7 for generation) and, when `GROQ_API_KEY` is set, a `ChatGroq` backup. It
+  tries the providers in order itself rather than using `.with_fallbacks()`, so
+  it knows which model answered (for `attempts.model_used` and the backup-model
+  notice). Each call uses `.with_structured_output(...)` and
+  `.with_retry(stop_after_attempt=3)` (one try plus two retries).
 - Prompts live in `llm/prompts/{extract_concepts,generate_questions,grade,teach}.md`.
 
 ## Errors
@@ -269,7 +277,7 @@ DB tests read `TEST_DATABASE_URL` (default
 migrations, and are skipped with a clear message if the database is unreachable.
 
 **CI** (`.github/workflows/ci.yml`): on push and pull request, Ubuntu, a
-`postgres:16` service with database `ebb_test`, `astral-sh/setup-uv`,
+`postgres:18.6-alpine` service with database `ebb_test`, `astral-sh/setup-uv`,
 `uv run ruff check`, `uv run pytest`.
 
 ## Done when
