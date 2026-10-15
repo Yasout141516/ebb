@@ -1,16 +1,18 @@
 """Whole quiz sessions through interrupt/resume, offline (FakeTutor + MemoryStore)."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from ebb.domain import Attempt, Concept
 from ebb.graph.build import build_graph
 from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE
-from tests.fakes import FakeTutor, MemoryStore, make_subject
+from tests.fakes import FakeTutor, MemoryStore, make_subject, seed_concept
 
 NOW = datetime(2026, 10, 15, 9, 0, tzinfo=UTC)
 USER = UUID("00000000-0000-0000-0000-0000000000aa")
@@ -172,3 +174,68 @@ def test_mcq_attempts_are_graded_in_code():
 
     models = sorted(a.model_used for a in store.attempts.values())
     assert models == ["code", "fake-model"]  # short answer by the LLM, MCQ in code
+
+
+class AlreadyRecordedStore(MemoryStore):
+    """Simulates a duplicate resume: the attempt id was already stored, so nothing changes."""
+
+    def record_attempt(self, user_id: UUID, attempt: Attempt, concept_after: Concept) -> bool:
+        return False
+
+
+def test_duplicate_attempt_changes_nothing():
+    store, tutor = AlreadyRecordedStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=1)
+    answers = iter([reply("right"), {"quit": True}])
+
+    final, _ = run(tutor, store, subject_id, lambda p: next(answers))
+
+    assert store.attempts == {}
+    assert store.list_concepts(USER, subject_id)[0].stage == 0
+    assert final["results"] == []  # the tally never moved, so no result line
+
+
+def test_summary_reports_tide_and_next_review_for_a_new_concept():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=4)
+
+    final, _ = run(tutor, store, subject_id, always_right)
+
+    first = final["results"][0]
+    assert first["tide_before"] is None  # never reviewed
+    assert first["tide_after"] == pytest.approx(1.0)  # just reviewed
+    assert first["next_review_at"] == (NOW + timedelta(days=1)).isoformat()
+
+
+def test_summary_reports_tide_and_promotion_for_a_due_concept():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=1)
+    concept = store.list_concepts(USER, subject_id)[0]
+    seed_concept(
+        store,
+        concept.id,
+        stage=2,
+        last_reviewed_at=NOW - timedelta(days=4),
+        next_review_at=NOW - timedelta(days=1),
+    )
+
+    final, _ = run(tutor, store, subject_id, always_right)
+
+    result = final["results"][0]
+    assert result["stage_before"] == 2
+    assert result["stage_after"] == 3  # the first correct answer, given while due, promotes
+    assert result["tide_before"] == pytest.approx(0.7 ** (4 / 3))
+    assert result["tide_after"] == pytest.approx(1.0)
+    assert result["next_review_at"] == (NOW + timedelta(days=7)).isoformat()
+
+
+def test_concept_answered_before_a_failed_regeneration_is_still_summarised():
+    store, tutor = MemoryStore(), FakeTutor(batch_size=1, fail_generate_on_call=2)
+    subject_id = make_subject(store, USER, concepts=1)
+
+    final, _ = run(tutor, store, subject_id, lambda p: reply("no idea"))
+
+    assert final["fatal"] == EXHAUSTED_NOTICE
+    assert len(final["results"]) == 1
+    assert final["results"][0]["tally"]["incorrect"] == 1
+    assert next(iter(store.sessions.values()))["ended_at"] == NOW

@@ -84,12 +84,15 @@ class FakeTutor:
         fail_generate: bool = False,
         fail_teach: bool = False,
         fell_back: bool = False,
+        fail_generate_on_call: int | None = None,
     ) -> None:
         self.batch_size = batch_size
         self.fail_grade_times = fail_grade_times
         self.fail_generate = fail_generate
         self.fail_teach = fail_teach
         self.fell_back = fell_back
+        self.fail_generate_on_call = fail_generate_on_call  # 1-based call number that fails
+        self.generate_attempts = 0
         self.generate_calls: list[str] = []
         self.counter = 0
 
@@ -104,7 +107,8 @@ class FakeTutor:
         return self._out(drafts)
 
     def generate_questions(self, concept: Concept, avoid: list[str]) -> Generated[list[Question]]:
-        if self.fail_generate:
+        self.generate_attempts += 1
+        if self.fail_generate or self.generate_attempts == self.fail_generate_on_call:
             raise AllProvidersExhausted("generation down")
         self.generate_calls.append(concept.name)
         questions = []
