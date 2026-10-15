@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: ebb
+          POSTGRES_PASSWORD: ebb
+          POSTGRES_DB: ebb_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ebb -d ebb_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://ebb:ebb@localhost:5432/ebb_test
+      EBB_REQUIRE_DB: "1"
+      # Fail if graph state ever holds a class the checkpointer cannot serialise safely.
+      LANGGRAPH_STRICT_MSGPACK: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.13.1"
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -v
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker compose build ebb
+      - run: docker compose run --rm ebb --help

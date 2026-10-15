@@ -17,5 +17,19 @@ services:
       timeout: 5s
       retries: 10
 
+  ebb:
+    build: ./backend
+    profiles: ["cli"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://ebb:ebb@db:5432/ebb
+    stdin_open: true
+    tty: true
+
 volumes:
   ebb-pgdata:
