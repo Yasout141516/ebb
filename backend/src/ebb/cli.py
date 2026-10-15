@@ -1,12 +1,14 @@
-"""`ebb new`, `ebb study`, `ebb status`."""
+"""`ebb new`, `ebb study`, `ebb status`.
+
+The LLM and LangGraph stacks take seconds to import, so they are imported inside
+the commands that use them; `ebb --help` and `ebb status` never load them.
+"""
 
 from datetime import UTC, datetime
-from typing import Annotated, Any, NoReturn
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
 
 import typer
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command
 from rich.console import Console
 from rich.markup import escape
 
@@ -15,10 +17,10 @@ from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
 from ebb.domain import Subject
-from ebb.graph.build import build_graph
-from ebb.graph.nodes import EXHAUSTED_NOTICE
-from ebb.llm.tutor import AllProvidersExhausted, LangChainTutor
 from ebb.ui import read_reply, render_summary, render_turn, status_table
+
+if TYPE_CHECKING:
+    from ebb.llm.tutor import LangChainTutor
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -47,6 +49,8 @@ def _open_store() -> tuple[Settings, PgStore]:
 
 
 def _tutor(settings: Settings) -> LangChainTutor:
+    from ebb.llm.tutor import LangChainTutor
+
     try:
         return LangChainTutor.from_settings(settings)
     except ConfigError as error:
@@ -88,6 +92,9 @@ def _ask(payload: dict[str, Any]) -> dict[str, Any]:
 @app.command()
 def new(topic: Annotated[str, typer.Argument(help="What you are studying.")]) -> None:
     """Create a subject from a topic: Ebb lists its core concepts."""
+    from ebb.graph.nodes import EXHAUSTED_NOTICE
+    from ebb.llm.tutor import AllProvidersExhausted
+
     topic = topic.strip()
     if not topic:
         _fail('Give a topic, e.g. ebb new "Computer Networks"')
@@ -117,6 +124,11 @@ def study(
     subject: Annotated[str | None, typer.Argument(help="Subject name (default: newest).")] = None,
 ) -> None:
     """Run a quiz session."""
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+
+    from ebb.graph.build import build_graph
+
     settings, store = _open_store()
     tutor = _tutor(settings)
     user_id = settings.ebb_dev_user_id

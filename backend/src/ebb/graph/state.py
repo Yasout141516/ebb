@@ -5,6 +5,7 @@ warn on — and will soon block — custom classes, and turn tuples into lists, 
 domain objects are converted at the node boundary with the helpers below.
 """
 
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any, TypedDict
 from uuid import UUID
@@ -88,7 +89,7 @@ def question_to_dict(q: Question) -> dict[str, Any]:
         "difficulty": q.difficulty,
         "prompt": q.prompt,
         "reference_answer": q.reference_answer,
-        "options": [{"text": o.text, "is_correct": o.is_correct, "why": o.why} for o in q.options],
+        "options": [asdict(o) for o in q.options],
     }
 
 

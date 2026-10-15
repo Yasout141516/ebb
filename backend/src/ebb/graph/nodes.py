@@ -30,11 +30,15 @@ EXHAUSTED_NOTICE = "The tutor couldn't respond — your progress is saved. Try a
 Node = Callable[[QuizState], dict[str, Any]]
 
 
-def _notices(state: QuizState, generated: Generated[Any]) -> list[str]:
+def _with_notice(state: QuizState, notice: str) -> list[str]:
     notices = list(state["notices"])
-    if generated.fell_back and FALLBACK_NOTICE not in notices:
-        notices.append(FALLBACK_NOTICE)
+    if notice not in notices:
+        notices.append(notice)
     return notices
+
+
+def _notices(state: QuizState, generated: Generated[Any]) -> list[str]:
+    return _with_notice(state, FALLBACK_NOTICE) if generated.fell_back else list(state["notices"])
 
 
 def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[str, Node]:
@@ -113,7 +117,7 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
             return {
                 "fatal": EXHAUSTED_NOTICE,
                 "generation_calls_on_concept": calls,
-                "notices": [*state["notices"], EXHAUSTED_NOTICE],
+                "notices": _with_notice(state, EXHAUSTED_NOTICE),
             }
         store.save_questions(user_id, UUID(state["session_id"]), generated.value)
         return {
@@ -180,7 +184,7 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
                 "grade": None,
                 "batch": [state["question"], *state["batch"]],
                 "retry_question": True,
-                "notices": [*state["notices"], EXHAUSTED_NOTICE],
+                "notices": _with_notice(state, EXHAUSTED_NOTICE),
             }
         return {
             "grade": grade_to_dict(generated.value),
@@ -224,7 +228,7 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
                 grade_from_dict(state["grade"]),
             )
         except AllProvidersExhausted:
-            return {"lesson": None, "notices": [*state["notices"], EXHAUSTED_NOTICE]}
+            return {"lesson": None, "notices": _with_notice(state, EXHAUSTED_NOTICE)}
         return {"lesson": generated.value, "notices": _notices(state, generated)}
 
     def next_concept(state: QuizState) -> dict[str, Any]:
