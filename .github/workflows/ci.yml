@@ -31,7 +31,7 @@ jobs:
       LANGGRAPH_STRICT_MSGPACK: "true"
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           version: "0.13.1"
       - run: uv sync --frozen
@@ -44,4 +44,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: docker compose build ebb
-      - run: docker compose run --rm ebb --help
+      - run: docker compose run --rm -T ebb --help
