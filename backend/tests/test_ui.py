@@ -2,9 +2,10 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
+from rich.console import Console
 
 from ebb.domain import Concept
-from ebb.ui import due_label, format_tide, read_reply, stage_dots
+from ebb.ui import due_label, format_tide, read_reply, render_turn, stage_dots, status_table
 
 NOW = datetime(2026, 10, 15, tzinfo=UTC)
 
@@ -47,3 +48,41 @@ def test_due_label():
 )
 def test_read_reply(raw, options, expected):
     assert read_reply(raw, options) == expected
+
+
+def test_generated_text_with_brackets_is_shown_literally():
+    console = Console(record=True, width=100)
+    payload = {
+        "concept": "Routing",
+        "feedback": {"value": "incorrect", "explanation": "Close [/bold] but no."},
+        "lesson": "Use [SYN] first.",
+        "notices": ["[x] note"],
+        "question": {
+            "type": "mcq",
+            "prompt": "Which flag opens it: [SYN] or [/x]?",
+            "options": ["list[int]", "[ACK]"],
+        },
+        "number": 1,
+    }
+
+    render_turn(console, payload)
+
+    text = console.export_text()
+    for literal in [
+        "Which flag opens it: [SYN] or [/x]?",
+        "list[int]",
+        "[ACK]",
+        "Close [/bold] but no.",
+        "Use [SYN] first.",
+        "[x] note",
+    ]:
+        assert literal in text
+
+
+def test_status_table_shows_brackets_in_concept_names():
+    console = Console(record=True, width=100)
+    concept = Concept(uuid4(), uuid4(), "list[int]", "d", stage=1, next_review_at=NOW)
+
+    console.print(status_table([concept], NOW))
+
+    assert "list[int]" in console.export_text()

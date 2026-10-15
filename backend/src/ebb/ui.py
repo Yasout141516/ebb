@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -52,7 +53,7 @@ def status_table(concepts: Sequence[Concept], now: datetime) -> Table:
     table.add_column("Next review")
     for concept in concepts:
         table.add_row(
-            concept.name,
+            escape(concept.name),
             format_tide(tide(concept, now)),
             stage_dots(concept.stage),
             due_label(concept, now),
@@ -63,29 +64,30 @@ def status_table(concepts: Sequence[Concept], now: datetime) -> Table:
 def render_feedback(console: Console, grade: dict[str, Any] | None, lesson: str | None) -> None:
     if grade:
         style = GRADE_STYLE[grade["value"]]
-        console.print(f"[bold {style}]{GRADE_MARK[grade['value']]}[/]  {grade['explanation']}")
+        explanation = escape(grade["explanation"])
+        console.print(f"[bold {style}]{GRADE_MARK[grade['value']]}[/]  {explanation}")
     if lesson:
-        console.print(Panel(lesson, title="Let's fix that", border_style="cyan"))
+        console.print(Panel(escape(lesson), title="Let's fix that", border_style="cyan"))
 
 
 def render_notices(console: Console, notices: Sequence[str]) -> None:
     for notice in notices:
-        console.print(f"[dim]{notice}[/dim]")
+        console.print(f"[dim]{escape(notice)}[/dim]")
 
 
 def render_question(console: Console, payload: dict[str, Any]) -> None:
     question = payload["question"]
     kind = "Multiple choice" if question["type"] == "mcq" else "Short answer"
-    lines = [question["prompt"], ""]
+    lines = [escape(question["prompt"]), ""]
     if question["options"]:
-        lines += [f"  {n}. {text}" for n, text in enumerate(question["options"], start=1)]
+        lines += [f"  {n}. {escape(text)}" for n, text in enumerate(question["options"], start=1)]
         lines.append("")
     hint = "Type 1-4" if question["options"] else "Type your answer"
     lines.append(f"[dim]{hint}, or q to stop[/dim]")
     console.print(
         Panel(
             "\n".join(lines).rstrip(),
-            title=f"{payload['concept']} · {kind} · Q{payload['number']}",
+            title=f"{escape(payload['concept'])} · {kind} · Q{payload['number']}",
             title_align="left",
         )
     )
@@ -115,7 +117,7 @@ def render_summary(console: Console, final: dict[str, Any]) -> None:
         answers = f"{tally['correct']}✓ {tally['partial']}◐ {tally['incorrect']}✗"
         next_review = datetime.fromisoformat(row["next_review_at"]).strftime("%a %d %b")
         table.add_row(
-            row["concept"],
+            escape(row["concept"]),
             answers,
             f"{format_tide(row['tide_before'])} → {format_tide(row['tide_after'])}",
             f"{stage_dots(row['stage_before'])} → {stage_dots(row['stage_after'])}",

@@ -5,9 +5,12 @@ from typer.testing import CliRunner
 
 from ebb import cli
 from ebb.config import Settings
+from ebb.llm.tutor import AllProvidersExhausted
 from tests.fakes import FakeTutor, MemoryStore
 
 runner = CliRunner()
+# Captured at import time, before any test patches cli._tutor.
+_real_tutor = cli._tutor
 
 
 @pytest.fixture
@@ -81,3 +84,40 @@ def test_unknown_subject_lists_the_real_ones(fakes):
     result = runner.invoke(cli.app, ["status", "Biology"])
     assert result.exit_code == 1
     assert "You have: Networks" in result.output
+
+
+def test_missing_api_key_exits_2(fakes, monkeypatch):
+    # Real _tutor, real key check: no key configured means exit 2 before any LLM call.
+    store, _ = fakes
+    monkeypatch.setattr(cli, "_tutor", _real_tutor)
+    settings = Settings(_env_file=None, google_api_key=None)
+    monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
+
+    result = runner.invoke(cli.app, ["new", "Networks"])
+
+    assert result.exit_code == 2
+    assert "GOOGLE_API_KEY is not set" in result.output
+
+
+def test_unreachable_database_exits_2(monkeypatch):
+    settings = Settings(_env_file=None, database_url="postgresql://ebb:ebb@127.0.0.1:1/ebb")
+    monkeypatch.setattr(cli, "Settings", lambda: settings)
+
+    result = runner.invoke(cli.app, ["status"])
+
+    assert result.exit_code == 2
+    assert "docker compose up -d" in result.output
+
+
+def test_new_reports_when_the_llm_is_unavailable(fakes, monkeypatch):
+    _, tutor = fakes
+
+    def down(topic: str):
+        raise AllProvidersExhausted("generation down")
+
+    monkeypatch.setattr(tutor, "extract_concepts", down)
+
+    result = runner.invoke(cli.app, ["new", "Networks"])
+
+    assert result.exit_code == 1
+    assert "The tutor couldn't respond" in result.output

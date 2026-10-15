@@ -8,6 +8,7 @@ import typer
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from rich.console import Console
+from rich.markup import escape
 
 from ebb.config import ConfigError, Settings
 from ebb.db.migrate import migrate
@@ -28,7 +29,7 @@ console = Console()
 
 
 def _fail(message: str, code: int = 1) -> NoReturn:
-    console.print(f"[red]{message}[/red]")
+    console.print(f"[red]{escape(message)}[/red]")
     raise typer.Exit(code)
 
 
@@ -99,9 +100,9 @@ def new(topic: Annotated[str, typer.Argument(help="What you are studying.")]) ->
             _fail(EXHAUSTED_NOTICE)
     concepts = [(c.name, c.description) for c in generated.value]
     store.create_subject(settings.ebb_dev_user_id, topic, concepts)
-    console.print(f"[bold]{topic}[/bold] · {len(concepts)} concepts")
+    console.print(f"[bold]{escape(topic)}[/bold] · {len(concepts)} concepts")
     for number, (name, description) in enumerate(concepts, start=1):
-        console.print(f"  {number}. [bold]{name}[/bold] [dim]— {description}[/dim]")
+        console.print(f"  {number}. [bold]{escape(name)}[/bold] [dim]— {escape(description)}[/dim]")
     console.print("\nStart with: [bold]ebb study[/bold]")
 
 
@@ -117,7 +118,7 @@ def study(
     graph = build_graph(tutor, store, InMemorySaver())
     thread_id = str(uuid4())
     config = {"configurable": {"thread_id": thread_id}}
-    console.print(f"Studying [bold]{chosen.name}[/bold]. Type q at any question to stop.\n")
+    console.print(f"Studying [bold]{escape(chosen.name)}[/bold]. Type q at any question to stop.\n")
     start = {"user_id": str(user_id), "subject_id": str(chosen.id), "thread_id": thread_id}
     try:
         with console.status("Preparing questions…"):
@@ -141,5 +142,5 @@ def status(
     settings, store = _open_store()
     chosen = _subject(store, settings.ebb_dev_user_id, subject)
     concepts = store.list_concepts(settings.ebb_dev_user_id, chosen.id)
-    console.print(f"[bold]{chosen.name}[/bold]")
+    console.print(f"[bold]{escape(chosen.name)}[/bold]")
     console.print(status_table(concepts, datetime.now(UTC)))
