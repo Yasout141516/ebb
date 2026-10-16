@@ -11,8 +11,8 @@ routing) and the LLM only generates questions, grades and teaches.
 
 ## Status
 
-Milestone 1 of 6 is built: the core quiz loop in the terminal, with learning
-state in Postgres. Next: spaced review across sessions and resumable sessions.
+Milestone 2 of 6 is built: spaced review across sessions and resumable sessions.
+Next: notes upload with cited answers.
 
 ## Run it
 
@@ -26,14 +26,25 @@ docker compose run --rm ebb study
 docker compose run --rm ebb status
 ```
 
+Dates show in `EBB_TIMEZONE`, an IANA name such as `Asia/Dhaka` (set it in `.env`).
+Inside Docker the default is UTC.
+
 For development, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
 docker compose up -d
 cd backend
 uv sync
-uv run pytest                     # 179 tests; database tests need the compose db
+uv run pytest                     # database tests need the compose db
 uv run ebb study
+```
+
+**Try spaced review now:** pretend a week has passed, so every learned concept becomes due:
+
+```bash
+# Pretend a week has passed: every learned concept becomes due
+docker compose exec db psql -U ebb -d ebb -c \
+  "update concepts set last_reviewed_at = last_reviewed_at - interval '7 days', next_review_at = next_review_at - interval '7 days' where stage > 0"
 ```
 
 ## How it works
@@ -45,6 +56,11 @@ concept's Leitner stage, then route: teach on a miss, a harder question after a
 correct answer, the next concept after two correct in a row. Every routing and
 scheduling decision is plain Python with tests; the LLM only writes, grades and
 teaches.
+
+Spaced review comes first: `ebb study` greets with how many concepts are due and
+reviews the most faded first, then teaches new ones. If the terminal closes or Ebb
+crashes mid-session, the next `ebb study` within 24 hours offers to resume at the
+same question.
 
 ## What's here
 
