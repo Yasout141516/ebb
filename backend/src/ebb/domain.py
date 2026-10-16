@@ -66,3 +66,10 @@ class Answer:
     feedback: str
     model_used: str
     graded_at: datetime
+
+
+@dataclass(frozen=True)
+class ResumableSession:
+    session_id: UUID
+    thread_id: str
+    last_active_at: datetime

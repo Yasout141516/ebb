@@ -1,14 +1,25 @@
 """Test doubles: an in-memory Store and a scripted Tutor. No network, no database."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from ebb import mastery
-from ebb.domain import Answer, Concept, Grade, GradeValue, Option, Question, Subject
+from ebb.domain import (
+    Answer,
+    Concept,
+    Grade,
+    GradeValue,
+    Option,
+    Question,
+    ResumableSession,
+    Subject,
+)
 from ebb.llm.schemas import ConceptDraft
 from ebb.llm.tutor import AllProvidersExhausted, Generated
+from ebb.store import PRUNE_AFTER, RESUME_WINDOW
 
 # (type, difficulty) of each question in a fake batch, in order.
 BATCH_PATTERN = [("short", 1), ("mcq", 1), ("mcq", 2), ("short", 3), ("mcq", 3)]
@@ -25,6 +36,7 @@ class MemoryStore:
         self.stages: dict[UUID, tuple[int, int]] = {}  # answer id -> (stage before, after)
         self.question_sessions: dict[UUID, tuple[UUID, UUID]] = {}  # question -> (user, session)
         self.timezones: dict[UUID, str] = {}
+        self.locks: set[str] = set()
 
     def ensure_profile(self, user_id: UUID) -> None:
         self.profiles.add(user_id)
@@ -52,7 +64,14 @@ class MemoryStore:
         if self.subjects.get(subject_id, (None,))[0] != user_id:
             raise LookupError(f"subject {subject_id} not found")
         session_id = uuid4()
-        self.sessions[session_id] = {"user_id": user_id, "thread_id": thread_id, "ended_at": None}
+        self.sessions[session_id] = {
+            "user_id": user_id,
+            "subject_id": subject_id,
+            "thread_id": thread_id,
+            "ended_at": None,
+            "last_active_at": datetime.now(UTC),
+            "pruned_at": None,
+        }
         return session_id
 
     def end_session(self, user_id: UUID, session_id: UUID, now: datetime) -> None:
@@ -142,6 +161,60 @@ class MemoryStore:
 
     def set_timezone(self, user_id: UUID, name: str) -> None:
         self.timezones[user_id] = name
+
+    def resumable_session(
+        self, user_id: UUID, subject_id: UUID, now: datetime
+    ) -> ResumableSession | None:
+        open_sessions = [
+            (session_id, s)
+            for session_id, s in self.sessions.items()
+            if s["user_id"] == user_id
+            and s["subject_id"] == subject_id
+            and s["ended_at"] is None
+            and s["last_active_at"] > now - RESUME_WINDOW
+        ]
+        if not open_sessions:
+            return None
+        session_id, s = max(open_sessions, key=lambda item: item[1]["last_active_at"])
+        return ResumableSession(session_id, s["thread_id"], s["last_active_at"])
+
+    def close_stale_sessions(self, user_id: UUID, now: datetime) -> int:
+        closed = 0
+        for s in self.sessions.values():
+            if (
+                s["user_id"] == user_id
+                and s["ended_at"] is None
+                and s["last_active_at"] <= now - RESUME_WINDOW
+            ):
+                s["ended_at"] = s["last_active_at"]
+                closed += 1
+        return closed
+
+    def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:
+        return [
+            s["thread_id"]
+            for s in self.sessions.values()
+            if s["user_id"] == user_id
+            and s["ended_at"] is not None
+            and s["ended_at"] <= now - PRUNE_AFTER
+            and s["pruned_at"] is None
+        ]
+
+    def mark_pruned(self, user_id: UUID, thread_ids: Sequence[str], now: datetime) -> None:
+        for s in self.sessions.values():
+            if s["user_id"] == user_id and s["thread_id"] in thread_ids:
+                s["pruned_at"] = now
+
+    @contextmanager
+    def session_lock(self, user_id: UUID, thread_id: str) -> Iterator[bool]:
+        if thread_id in self.locks:
+            yield False
+            return
+        self.locks.add(thread_id)
+        try:
+            yield True
+        finally:
+            self.locks.discard(thread_id)
 
     def concept(self, concept_id: UUID) -> Concept:
         return self.concepts[concept_id][1]

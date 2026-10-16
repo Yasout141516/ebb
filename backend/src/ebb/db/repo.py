@@ -1,6 +1,7 @@
 """Postgres implementation of `Store`. Every query filters on user_id (review decision E1)."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any
@@ -10,7 +11,8 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from ebb import mastery
-from ebb.domain import Answer, Concept, Question, Subject
+from ebb.domain import Answer, Concept, Question, ResumableSession, Subject
+from ebb.store import PRUNE_AFTER, RESUME_WINDOW
 
 _CONCEPT_COLUMNS = (
     "id, subject_id, name, description, stage, next_review_at, last_reviewed_at, review_count"
@@ -271,3 +273,57 @@ class PgStore:
     def set_timezone(self, user_id: UUID, name: str) -> None:
         with self.pool.connection() as conn:
             conn.execute("update profiles set timezone = %s where id = %s", (name, user_id))
+
+    def resumable_session(
+        self, user_id: UUID, subject_id: UUID, now: datetime
+    ) -> ResumableSession | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select id, thread_id, last_active_at from study_sessions"
+                " where user_id = %s and subject_id = %s and ended_at is null"
+                " and last_active_at > %s order by last_active_at desc limit 1",
+                (user_id, subject_id, now - RESUME_WINDOW),
+            ).fetchone()
+        if row is None:
+            return None
+        return ResumableSession(row["id"], row["thread_id"], row["last_active_at"])
+
+    def close_stale_sessions(self, user_id: UUID, now: datetime) -> int:
+        with self.pool.connection() as conn:
+            return conn.execute(
+                "update study_sessions set ended_at = last_active_at"
+                " where user_id = %s and ended_at is null and last_active_at <= %s",
+                (user_id, now - RESUME_WINDOW),
+            ).rowcount
+
+    def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select thread_id from study_sessions"
+                " where user_id = %s and ended_at <= %s and pruned_at is null"
+                " order by ended_at",
+                (user_id, now - PRUNE_AFTER),
+            ).fetchall()
+        return [row["thread_id"] for row in rows]
+
+    def mark_pruned(self, user_id: UUID, thread_ids: Sequence[str], now: datetime) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "update study_sessions set pruned_at = %s"
+                " where user_id = %s and thread_id = any(%s)",
+                (now, user_id, list(thread_ids)),
+            )
+
+    @contextmanager
+    def session_lock(self, user_id: UUID, thread_id: str) -> Iterator[bool]:
+        # A session-level advisory lock belongs to one connection, so hold one for the
+        # whole block. hashtextextended gives a stable signed 64-bit key from the thread id.
+        with self.pool.connection() as conn:
+            got = conn.execute(
+                "select pg_try_advisory_lock(hashtextextended(%s, 0)) as got", (thread_id,)
+            ).fetchone()["got"]
+            try:
+                yield got
+            finally:
+                if got:
+                    conn.execute("select pg_advisory_unlock(hashtextextended(%s, 0))", (thread_id,))

@@ -255,3 +255,97 @@ def test_a_session_persists_progress_in_postgres(store):
 
     assert [c.stage for c in store.list_concepts(ALICE, subject_id)] == [1, 1]
     assert len(result["results"]) == 2
+
+
+def make_session(store, pg_pool, subject_id, thread_id, active_at, ended_at=None):
+    session_id = store.create_session(ALICE, subject_id, thread_id)
+    with pg_pool.connection() as conn:
+        conn.execute(
+            "update study_sessions set last_active_at = %s, ended_at = %s where id = %s",
+            (active_at, ended_at, session_id),
+        )
+    return session_id
+
+
+def session_row(pg_pool, session_id) -> dict:
+    with pg_pool.connection() as conn:
+        return conn.execute("select * from study_sessions where id = %s", (session_id,)).fetchone()
+
+
+def test_resumable_within_24_hours(store, pg_pool):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    session_id = make_session(
+        store, pg_pool, subject_id, "t-1", NOW - timedelta(hours=23, minutes=59)
+    )
+    found = store.resumable_session(ALICE, subject_id, NOW)
+    assert found.session_id == session_id and found.thread_id == "t-1"
+    assert store.resumable_session(BOB, subject_id, NOW) is None
+
+
+def test_exactly_24_hours_is_not_resumable(store, pg_pool):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    make_session(store, pg_pool, subject_id, "t-1", NOW - timedelta(hours=24))
+    assert store.resumable_session(ALICE, subject_id, NOW) is None
+
+
+def test_resumable_session_is_per_subject(store, pg_pool):
+    a = store.create_subject(ALICE, "A", [("x", "x")])
+    b = store.create_subject(ALICE, "B", [("y", "y")])
+    make_session(store, pg_pool, a, "t-a", NOW - timedelta(hours=1))
+    assert store.resumable_session(ALICE, b, NOW) is None
+    assert store.resumable_session(ALICE, a, NOW).thread_id == "t-a"
+
+
+def test_most_recent_resumable_session_wins(store, pg_pool):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    make_session(store, pg_pool, subject_id, "old", NOW - timedelta(hours=5))
+    make_session(store, pg_pool, subject_id, "new", NOW - timedelta(hours=1))
+    assert store.resumable_session(ALICE, subject_id, NOW).thread_id == "new"
+
+
+def test_ended_sessions_are_not_resumable(store, pg_pool):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    hour_ago = NOW - timedelta(hours=1)
+    make_session(store, pg_pool, subject_id, "t-1", hour_ago, ended_at=hour_ago)
+    assert store.resumable_session(ALICE, subject_id, NOW) is None
+
+
+def test_close_stale_sessions_uses_last_activity(store, pg_pool):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    stale_at = NOW - timedelta(hours=30)
+    stale = make_session(store, pg_pool, subject_id, "stale", stale_at)
+    fresh = make_session(store, pg_pool, subject_id, "fresh", NOW - timedelta(hours=1))
+    assert store.close_stale_sessions(BOB, NOW) == 0
+    assert store.close_stale_sessions(ALICE, NOW) == 1
+    assert session_row(pg_pool, stale)["ended_at"] == stale_at
+    assert session_row(pg_pool, fresh)["ended_at"] is None
+    assert store.close_stale_sessions(ALICE, NOW) == 0
+
+
+def test_threads_to_prune_after_7_days_once(store, pg_pool):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    ended = NOW - timedelta(days=7)
+    make_session(store, pg_pool, subject_id, "old", ended, ended_at=ended)
+    make_session(store, pg_pool, subject_id, "recent", NOW, ended_at=NOW - timedelta(days=6))
+    assert store.threads_to_prune(ALICE, NOW) == ["old"]
+    assert store.threads_to_prune(BOB, NOW) == []
+    store.mark_pruned(BOB, ["old"], NOW)
+    assert store.threads_to_prune(ALICE, NOW) == ["old"]
+    store.mark_pruned(ALICE, ["old"], NOW)
+    assert store.threads_to_prune(ALICE, NOW) == []
+
+
+def test_session_lock_refuses_a_second_holder(store):
+    with store.session_lock(ALICE, "t-1") as first:
+        with store.session_lock(ALICE, "t-1") as second:
+            assert first is True and second is False
+    with store.session_lock(ALICE, "t-1") as again:
+        assert again is True
+
+
+def test_session_lock_leaves_a_connection_for_queries_and_other_threads(store):
+    with store.session_lock(ALICE, "t-1") as held:
+        assert held is True
+        assert store.list_subjects(ALICE) == []  # the second pooled connection still serves
+    with store.session_lock(ALICE, "t-1") as a, store.session_lock(ALICE, "t-2") as b:
+        assert a is True and b is True

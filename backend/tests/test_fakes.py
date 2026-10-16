@@ -89,3 +89,34 @@ def test_counts_subject_and_timezone():
     assert store.get_subject(BOB, subject_id) is None
     store.set_timezone(ALICE, "Europe/Berlin")
     assert store.timezones[ALICE] == "Europe/Berlin"
+
+
+def test_resumable_window_and_subject():
+    store, subject_id, session_id, _ = setup()
+    other = make_subject(store, ALICE, concepts=1)
+    store.sessions[session_id]["last_active_at"] = NOW - timedelta(hours=23, minutes=59)
+    assert store.resumable_session(ALICE, subject_id, NOW).session_id == session_id
+    assert store.resumable_session(ALICE, other, NOW) is None
+    assert store.resumable_session(BOB, subject_id, NOW) is None
+    store.sessions[session_id]["last_active_at"] = NOW - timedelta(hours=24)
+    assert store.resumable_session(ALICE, subject_id, NOW) is None
+
+
+def test_close_stale_and_prune_bookkeeping():
+    store, _, session_id, _ = setup()
+    stale_at = NOW - timedelta(days=8)
+    store.sessions[session_id]["last_active_at"] = stale_at
+    assert store.close_stale_sessions(ALICE, NOW) == 1
+    assert store.sessions[session_id]["ended_at"] == stale_at
+    assert store.threads_to_prune(ALICE, NOW) == ["t"]
+    store.mark_pruned(ALICE, ["t"], NOW)
+    assert store.threads_to_prune(ALICE, NOW) == []
+
+
+def test_session_lock_refuses_a_second_holder():
+    store = MemoryStore()
+    with store.session_lock(ALICE, "t-1") as first:
+        with store.session_lock(ALICE, "t-1") as second:
+            assert first is True and second is False
+    with store.session_lock(ALICE, "t-1") as again:
+        assert again is True

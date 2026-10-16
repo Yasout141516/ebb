@@ -1,11 +1,15 @@
 """The persistence interface the graph and CLI depend on. Every method is scoped by user_id."""
 
 from collections.abc import Sequence
-from datetime import datetime
+from contextlib import AbstractContextManager
+from datetime import datetime, timedelta
 from typing import Protocol
 from uuid import UUID
 
-from ebb.domain import Answer, Concept, Question, Subject
+from ebb.domain import Answer, Concept, Question, ResumableSession, Subject
+
+RESUME_WINDOW = timedelta(hours=24)
+PRUNE_AFTER = timedelta(days=7)
 
 
 class Store(Protocol):
@@ -59,3 +63,23 @@ class Store(Protocol):
     def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None: ...
 
     def set_timezone(self, user_id: UUID, name: str) -> None: ...
+
+    def resumable_session(
+        self, user_id: UUID, subject_id: UUID, now: datetime
+    ) -> ResumableSession | None:
+        """The most recently active open session of this subject within RESUME_WINDOW."""
+        ...
+
+    def close_stale_sessions(self, user_id: UUID, now: datetime) -> int:
+        """End open sessions idle for RESUME_WINDOW, at their last activity; returns the count."""
+        ...
+
+    def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:
+        """Thread ids of sessions ended at least PRUNE_AFTER ago whose checkpoints remain."""
+        ...
+
+    def mark_pruned(self, user_id: UUID, thread_ids: Sequence[str], now: datetime) -> None: ...
+
+    def session_lock(self, user_id: UUID, thread_id: str) -> AbstractContextManager[bool]:
+        """Yields True if this process now holds the thread's lock, False if another does."""
+        ...
