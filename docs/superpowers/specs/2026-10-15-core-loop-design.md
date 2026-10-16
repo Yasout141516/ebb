@@ -79,8 +79,8 @@ or `graph`.
 | `DATABASE_URL` | yes | `postgresql://ebb:ebb@localhost:5432/ebb` |
 | `GOOGLE_API_KEY` | for `new`/`study` | — |
 | `GROQ_API_KEY` | no; enables fallback | — |
-| `EBB_PRIMARY_MODEL` | no | `gemini-2.5-flash` |
-| `EBB_FALLBACK_MODEL` | no | `llama-3.3-70b-versatile` |
+| `EBB_PRIMARY_MODEL` | no | `gemini-3.8-flash` |
+| `EBB_FALLBACK_MODEL` | no | `qwen/qwen3.8-27b` |
 | `EBB_DEV_USER_ID` | no | `00000000-0000-0000-0000-000000000001` |
 
 Model defaults must be checked against the providers' current free-tier models

@@ -4,6 +4,7 @@ The LLM and LangGraph stacks take seconds to import, so they are imported inside
 the commands that use them; `ebb --help` and `ebb status` never load them.
 """
 
+import atexit
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
@@ -41,6 +42,8 @@ def _open_store() -> tuple[Settings, PgStore]:
         pool = make_pool(settings.database_url)
     except ConfigError as error:
         _fail(str(error), code=2)
+    # Close the pool before interpreter shutdown, or its worker threads print a traceback.
+    atexit.register(pool.close)
     with pool.connection() as conn:
         migrate(conn)
     store = PgStore(pool)
