@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from ebb.domain import Attempt, Concept, Question, Subject
+from ebb.domain import Answer, Concept, Question, Subject
 
 
 class Store(Protocol):
@@ -29,9 +29,33 @@ class Store(Protocol):
         """Raises LookupError if the session or a question's concept is not the user's."""
         ...
 
-    def record_attempt(self, user_id: UUID, attempt: Attempt, concept_after: Concept) -> bool:
-        """Insert the attempt and apply `concept_after`; False if attempt.id already existed.
+    def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
+        """Grade `answer` against the concept's current row, under a row lock.
 
+        Returns the concept after the grade, or None if answer.id was already recorded.
         Raises LookupError if the referenced question/concept is not the user's.
         """
         ...
+
+    def answered_prompts(self, user_id: UUID, concept_id: UUID, limit: int = 40) -> list[str]:
+        """Distinct prompts of this concept's answered questions, newest attempt first."""
+        ...
+
+    def get_subject(self, user_id: UUID, subject_id: UUID) -> Subject | None: ...
+
+    def add_concepts(
+        self, user_id: UUID, subject_id: UUID, concepts: Sequence[tuple[str, str]]
+    ) -> int:
+        """Append concepts whose names are new (case-insensitive); returns how many were added.
+
+        Raises LookupError if the subject is not the user's.
+        """
+        ...
+
+    def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int: ...
+
+    def count_new(self, user_id: UUID, subject_id: UUID) -> int: ...
+
+    def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None: ...
+
+    def set_timezone(self, user_id: UUID, name: str) -> None: ...

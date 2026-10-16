@@ -57,14 +57,12 @@ class Grade:
 
 
 @dataclass(frozen=True)
-class Attempt:
+class Answer:
     id: UUID
     question_id: UUID
     concept_id: UUID
     answer_text: str
     grade: GradeValue
     feedback: str
-    stage_before: int
-    stage_after: int
     model_used: str
     graded_at: datetime

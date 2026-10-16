@@ -9,7 +9,8 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from ebb.domain import Attempt, Concept, Question, Subject
+from ebb import mastery
+from ebb.domain import Answer, Concept, Question, Subject
 
 _CONCEPT_COLUMNS = (
     "id, subject_id, name, description, stage, next_review_at, last_reviewed_at, review_count"
@@ -123,49 +124,150 @@ class PgStore:
                     ],
                 )
 
-    def record_attempt(self, user_id: UUID, attempt: Attempt, concept_after: Concept) -> bool:
+    def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
         with self.pool.connection() as conn, conn.transaction():
             owned_question = conn.execute(
-                "select 1 from questions where id = %s and user_id = %s and concept_id = %s",
-                (attempt.question_id, user_id, attempt.concept_id),
+                "select session_id from questions"
+                " where id = %s and user_id = %s and concept_id = %s",
+                (answer.question_id, user_id, answer.concept_id),
             ).fetchone()
-            owned_concept = conn.execute(
-                "select 1 from concepts where id = %s and user_id = %s",
-                (attempt.concept_id, user_id),
+            # The row lock makes concurrent answers for one concept grade one after the other.
+            row = conn.execute(
+                f"select {_CONCEPT_COLUMNS} from concepts where id = %s and user_id = %s"
+                " for update",
+                (answer.concept_id, user_id),
             ).fetchone()
-            if owned_question is None or owned_concept is None:
-                raise LookupError(f"question {attempt.question_id} not found")
+            if owned_question is None or row is None:
+                raise LookupError(f"question {answer.question_id} not found")
+            before = _concept(row)
+            after = mastery.apply_grade(before, answer.grade, answer.graded_at)
             inserted = conn.execute(
                 "insert into attempts (id, user_id, question_id, concept_id, answer_text, grade,"
                 " feedback, stage_before, stage_after, model_used, graded_at)"
                 " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
                 " on conflict (id) do nothing returning id",
                 (
-                    attempt.id,
+                    answer.id,
                     user_id,
-                    attempt.question_id,
-                    attempt.concept_id,
-                    attempt.answer_text,
-                    attempt.grade.value,
-                    attempt.feedback,
-                    attempt.stage_before,
-                    attempt.stage_after,
-                    attempt.model_used,
-                    attempt.graded_at,
+                    answer.question_id,
+                    answer.concept_id,
+                    answer.answer_text,
+                    answer.grade.value,
+                    answer.feedback,
+                    before.stage,
+                    after.stage,
+                    answer.model_used,
+                    answer.graded_at,
                 ),
             ).fetchone()
             if inserted is None:
-                return False
+                return None
             conn.execute(
                 "update concepts set stage = %s, next_review_at = %s, last_reviewed_at = %s,"
                 " review_count = %s where id = %s and user_id = %s",
                 (
-                    concept_after.stage,
-                    concept_after.next_review_at,
-                    concept_after.last_reviewed_at,
-                    concept_after.review_count,
-                    concept_after.id,
+                    after.stage,
+                    after.next_review_at,
+                    after.last_reviewed_at,
+                    after.review_count,
+                    after.id,
                     user_id,
                 ),
             )
-        return True
+            conn.execute(
+                "update study_sessions set last_active_at = %s where id = %s and user_id = %s",
+                (answer.graded_at, owned_question["session_id"], user_id),
+            )
+        return after
+
+    def answered_prompts(self, user_id: UUID, concept_id: UUID, limit: int = 40) -> list[str]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select prompt from ("
+                " select q.prompt, max(a.graded_at) as last_answered"
+                " from questions q join attempts a on a.question_id = q.id"
+                " where q.user_id = %s and a.user_id = %s and q.concept_id = %s"
+                " group by q.prompt) answered"
+                " order by last_answered desc limit %s",
+                (user_id, user_id, concept_id, limit),
+            ).fetchall()
+        return [row["prompt"] for row in rows]
+
+    def get_subject(self, user_id: UUID, subject_id: UUID) -> Subject | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select id, name, created_at from subjects where id = %s and user_id = %s",
+                (subject_id, user_id),
+            ).fetchone()
+        return None if row is None else Subject(**row)
+
+    def add_concepts(
+        self, user_id: UUID, subject_id: UUID, concepts: Sequence[tuple[str, str]]
+    ) -> int:
+        with self.pool.connection() as conn, conn.transaction():
+            # Locking the subject row serialises concurrent additions to its concept list.
+            owned = conn.execute(
+                "select 1 from subjects where id = %s and user_id = %s for update",
+                (subject_id, user_id),
+            ).fetchone()
+            if owned is None:
+                raise LookupError(f"subject {subject_id} not found")
+            existing = conn.execute(
+                "select name from concepts where user_id = %s and subject_id = %s",
+                (user_id, subject_id),
+            ).fetchall()
+            seen = {row["name"].strip().casefold() for row in existing}
+            fresh = []
+            for name, description in concepts:
+                key = name.strip().casefold()
+                if key not in seen:
+                    seen.add(key)
+                    fresh.append((name, description))
+            if not fresh:
+                return 0
+            top = conn.execute(
+                "select coalesce(max(position), -1) as top from concepts"
+                " where user_id = %s and subject_id = %s",
+                (user_id, subject_id),
+            ).fetchone()["top"]
+            with conn.cursor() as cur:
+                cur.executemany(
+                    "insert into concepts (user_id, subject_id, name, description, position)"
+                    " values (%s, %s, %s, %s, %s)",
+                    [
+                        (user_id, subject_id, name, description, top + 1 + offset)
+                        for offset, (name, description) in enumerate(fresh)
+                    ],
+                )
+        return len(fresh)
+
+    def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select count(*) as n from concepts where user_id = %s and subject_id = %s"
+                " and stage >= 1 and next_review_at <= %s",
+                (user_id, subject_id, now),
+            ).fetchone()
+        return row["n"]
+
+    def count_new(self, user_id: UUID, subject_id: UUID) -> int:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select count(*) as n from concepts where user_id = %s and subject_id = %s"
+                " and stage = 0",
+                (user_id, subject_id),
+            ).fetchone()
+        return row["n"]
+
+    def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select min(next_review_at) as soonest from concepts"
+                " where user_id = %s and subject_id = %s and stage >= 1",
+                (user_id, subject_id),
+            ).fetchone()
+        return row["soonest"]
+
+    def set_timezone(self, user_id: UUID, name: str) -> None:
+        with self.pool.connection() as conn:
+            conn.execute("update profiles set timezone = %s where id = %s", (name, user_id))

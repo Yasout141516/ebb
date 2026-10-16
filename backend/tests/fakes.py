@@ -5,7 +5,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from ebb.domain import Attempt, Concept, Grade, GradeValue, Option, Question, Subject
+from ebb import mastery
+from ebb.domain import Answer, Concept, Grade, GradeValue, Option, Question, Subject
 from ebb.llm.schemas import ConceptDraft
 from ebb.llm.tutor import AllProvidersExhausted, Generated
 
@@ -20,7 +21,10 @@ class MemoryStore:
         self.concepts: dict[UUID, tuple[UUID, Concept]] = {}  # insertion order = position
         self.sessions: dict[UUID, dict] = {}
         self.questions: dict[UUID, Question] = {}
-        self.attempts: dict[UUID, Attempt] = {}
+        self.attempts: dict[UUID, Answer] = {}
+        self.stages: dict[UUID, tuple[int, int]] = {}  # answer id -> (stage before, after)
+        self.question_sessions: dict[UUID, tuple[UUID, UUID]] = {}  # question -> (user, session)
+        self.timezones: dict[UUID, str] = {}
 
     def ensure_profile(self, user_id: UUID) -> None:
         self.profiles.add(user_id)
@@ -61,17 +65,83 @@ class MemoryStore:
         if self.sessions.get(session_id, {}).get("user_id") != user_id:
             raise LookupError(f"session {session_id} not found")
         for question in questions:
+            if self.concepts.get(question.concept_id, (None,))[0] != user_id:
+                raise LookupError("concept not found")
+        for question in questions:
             self.questions[question.id] = question
+            self.question_sessions[question.id] = (user_id, session_id)
 
-    def record_attempt(self, user_id: UUID, attempt: Attempt, concept_after: Concept) -> bool:
-        if self.concepts.get(concept_after.id, (None,))[0] != user_id:
-            raise LookupError(f"concept {concept_after.id} not found")
-        if attempt.id in self.attempts:
-            return False
-        self.attempts[attempt.id] = attempt
-        owner, _ = self.concepts[concept_after.id]
-        self.concepts[concept_after.id] = (owner, concept_after)
-        return True
+    def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
+        question = self.questions.get(answer.question_id)
+        owner, concept = self.concepts.get(answer.concept_id, (None, None))
+        if (
+            question is None
+            or question.concept_id != answer.concept_id
+            or self.question_sessions[question.id][0] != user_id
+            or owner != user_id
+        ):
+            raise LookupError(f"question {answer.question_id} not found")
+        if answer.id in self.attempts:
+            return None
+        after = mastery.apply_grade(concept, answer.grade, answer.graded_at)
+        self.attempts[answer.id] = answer
+        self.stages[answer.id] = (concept.stage, after.stage)
+        self.concepts[concept.id] = (owner, after)
+        self.sessions[self.question_sessions[question.id][1]]["last_active_at"] = answer.graded_at
+        return after
+
+    def answered_prompts(self, user_id: UUID, concept_id: UUID, limit: int = 40) -> list[str]:
+        newest: dict[str, datetime] = {}
+        for answer in self.attempts.values():
+            question = self.questions[answer.question_id]
+            if question.concept_id != concept_id or self.concepts[concept_id][0] != user_id:
+                continue
+            newest[question.prompt] = max(
+                newest.get(question.prompt, answer.graded_at), answer.graded_at
+            )
+        return sorted(newest, key=newest.__getitem__, reverse=True)[:limit]
+
+    def get_subject(self, user_id: UUID, subject_id: UUID) -> Subject | None:
+        owner, subject = self.subjects.get(subject_id, (None, None))
+        return subject if owner == user_id else None
+
+    def add_concepts(
+        self, user_id: UUID, subject_id: UUID, concepts: Sequence[tuple[str, str]]
+    ) -> int:
+        if self.subjects.get(subject_id, (None,))[0] != user_id:
+            raise LookupError(f"subject {subject_id} not found")
+        seen = {c.name.strip().casefold() for c in self.list_concepts(user_id, subject_id)}
+        added = 0
+        for name, description in concepts:
+            key = name.strip().casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            concept = Concept(uuid4(), subject_id, name, description)
+            self.concepts[concept.id] = (user_id, concept)
+            added += 1
+        return added
+
+    def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
+        return sum(
+            1
+            for c in self.list_concepts(user_id, subject_id)
+            if c.stage >= 1 and c.next_review_at is not None and c.next_review_at <= now
+        )
+
+    def count_new(self, user_id: UUID, subject_id: UUID) -> int:
+        return sum(1 for c in self.list_concepts(user_id, subject_id) if c.stage == 0)
+
+    def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None:
+        times = [
+            c.next_review_at
+            for c in self.list_concepts(user_id, subject_id)
+            if c.stage >= 1 and c.next_review_at is not None
+        ]
+        return min(times, default=None)
+
+    def set_timezone(self, user_id: UUID, name: str) -> None:
+        self.timezones[user_id] = name
 
     def concept(self, concept_id: UUID) -> Concept:
         return self.concepts[concept_id][1]

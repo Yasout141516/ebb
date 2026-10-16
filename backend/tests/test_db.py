@@ -1,17 +1,13 @@
 """Postgres tests: migrations, the repository, idempotency and per-user isolation."""
 
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command
 
 from ebb.db.migrate import migrate
 from ebb.db.repo import PgStore
-from ebb.domain import Attempt, GradeValue, Option, Question
-from ebb.graph.build import build_graph
+from ebb.domain import Answer, GradeValue, Option, Question
 from tests.fakes import FakeTutor
 
 pytestmark = pytest.mark.db
@@ -83,24 +79,134 @@ def test_mcq_options_round_trip_as_json(store, pg_pool):
     assert row["options"][1] == {"text": "UDP", "is_correct": True, "why": "No handshake."}
 
 
-def test_duplicate_attempt_is_written_once_and_moves_the_stage_once(store):
+def answer_for(
+    question: Question, grade: GradeValue, at: datetime = NOW, answer_id: UUID | None = None
+) -> Answer:
+    return Answer(
+        answer_id or uuid4(), question.id, question.concept_id, "text", grade, "ok", "code", at
+    )
+
+
+def attempt_row(pg_pool, answer: Answer) -> dict:
+    with pg_pool.connection() as conn:
+        return conn.execute("select * from attempts where id = %s", (answer.id,)).fetchone()
+
+
+def seed_stage(pg_pool, concept_id: UUID, stage: int, due: datetime) -> None:
+    with pg_pool.connection() as conn:
+        conn.execute(
+            "update concepts set stage = %s, next_review_at = %s, last_reviewed_at = %s,"
+            " review_count = 1 where id = %s",
+            (stage, due, due - timedelta(days=7), concept_id),
+        )
+
+
+def test_record_answer_grades_the_current_row_not_a_snapshot(store, pg_pool):
     subject_id, _, question = subject_with_question(store)
+    seed_stage(pg_pool, question.concept_id, 3, NOW - timedelta(hours=1))
+    answer_a = answer_for(question, GradeValue.INCORRECT)
+    answer_b = answer_for(question, GradeValue.CORRECT, NOW + timedelta(minutes=1))
+
+    assert store.record_answer(ALICE, answer_a).stage == 1
+    # B's session still "saw" stage 3, but the row is now stage 1 and not due.
+    assert store.record_answer(ALICE, answer_b).stage == 1
+
+    row = attempt_row(pg_pool, answer_b)
+    assert row["stage_before"] == 1 and row["stage_after"] == 1
+    assert attempt_row(pg_pool, answer_a)["stage_before"] == 3
+    assert store.list_concepts(ALICE, subject_id)[0].review_count == 2
+
+
+def test_duplicate_answer_returns_none_and_changes_nothing(store):
+    subject_id, _, question = subject_with_question(store)
+    answer = answer_for(question, GradeValue.CORRECT)
+
+    assert store.record_answer(ALICE, answer).stage == 1
+    assert store.record_answer(ALICE, answer) is None
+
     concept = store.list_concepts(ALICE, subject_id)[0]
-    first = replace(
-        concept,
-        stage=1,
-        last_reviewed_at=NOW,
-        next_review_at=NOW + timedelta(days=1),
-        review_count=1,
-    )
-    attempt = Attempt(
-        uuid4(), question.id, concept.id, "speed", GradeValue.CORRECT, "ok", 0, 1, "code", NOW
+    assert concept.stage == 1 and concept.review_count == 1
+
+
+def test_record_answer_touches_the_session(store, pg_pool):
+    _, session_id, question = subject_with_question(store)
+    later = NOW + timedelta(hours=2)
+    store.record_answer(ALICE, answer_for(question, GradeValue.CORRECT, later))
+    with pg_pool.connection() as conn:
+        row = conn.execute(
+            "select last_active_at from study_sessions where id = %s", (session_id,)
+        ).fetchone()
+    assert row["last_active_at"] == later
+
+
+def test_record_answer_refuses_other_users(store, pg_pool):
+    subject_id, _, question = subject_with_question(store)
+    with pytest.raises(LookupError):
+        store.record_answer(BOB, answer_for(question, GradeValue.CORRECT))
+    with pg_pool.connection() as conn:
+        bob_attempts = conn.execute(
+            "select count(*) as n from attempts where user_id = %s", (BOB,)
+        ).fetchone()
+    assert bob_attempts["n"] == 0
+    assert store.list_concepts(ALICE, subject_id)[0].stage == 0
+
+
+def test_answered_prompts_only_answered_newest_first(store):
+    subject_id, session_id, first = subject_with_question(store)
+    concept_id = first.concept_id
+    second = Question(uuid4(), concept_id, "short", 1, "Why TTL?", "Expiry.")
+    third = Question(uuid4(), concept_id, "short", 1, "Never asked", "-")
+    store.save_questions(ALICE, session_id, [second, third])
+    store.record_answer(ALICE, answer_for(first, GradeValue.CORRECT, NOW))
+    store.record_answer(ALICE, answer_for(second, GradeValue.CORRECT, NOW + timedelta(minutes=1)))
+
+    assert store.answered_prompts(ALICE, concept_id) == ["Why TTL?", "Why cache?"]
+    assert store.answered_prompts(ALICE, concept_id, limit=1) == ["Why TTL?"]
+    assert store.answered_prompts(BOB, concept_id) == []
+
+
+def test_add_concepts_drops_duplicates_and_appends(store):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d"), ("TCP", "d")])
+
+    added = store.add_concepts(
+        ALICE, subject_id, [("dns ", "dup"), ("UDP", "u"), ("udp", "dup"), ("QUIC", "q")]
     )
 
-    assert store.record_attempt(ALICE, attempt, first) is True
-    assert store.record_attempt(ALICE, attempt, replace(first, stage=2)) is False
+    assert added == 2
+    assert [c.name for c in store.list_concepts(ALICE, subject_id)] == ["DNS", "TCP", "UDP", "QUIC"]
+    assert all(c.stage == 0 for c in store.list_concepts(ALICE, subject_id))
+    assert store.add_concepts(ALICE, subject_id, [("QUIC", "again")]) == 0
+    with pytest.raises(LookupError):
+        store.add_concepts(BOB, subject_id, [("Sneaky", "x")])
 
-    assert store.list_concepts(ALICE, subject_id)[0].stage == 1
+
+def test_counts_and_next_review(store, pg_pool):
+    subject_id = store.create_subject(
+        ALICE, "Networks", [("DNS", "d"), ("TCP", "d"), ("UDP", "d"), ("QUIC", "d")]
+    )
+    dns, tcp, udp, _ = store.list_concepts(ALICE, subject_id)
+    seed_stage(pg_pool, dns.id, 2, NOW - timedelta(days=1))
+    seed_stage(pg_pool, tcp.id, 1, NOW + timedelta(days=2))
+    seed_stage(pg_pool, udp.id, 4, NOW + timedelta(days=5))
+
+    assert store.count_due(ALICE, subject_id, NOW) == 1
+    assert store.count_new(ALICE, subject_id) == 1
+    assert store.next_review_at(ALICE, subject_id) == NOW - timedelta(days=1)
+    assert store.count_due(BOB, subject_id, NOW) == 0
+    assert store.next_review_at(BOB, subject_id) is None
+
+
+def test_get_subject_is_scoped(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    assert store.get_subject(ALICE, subject_id).name == "Networks"
+    assert store.get_subject(BOB, subject_id) is None
+
+
+def test_set_timezone(store, pg_pool):
+    store.set_timezone(ALICE, "Europe/Berlin")
+    with pg_pool.connection() as conn:
+        row = conn.execute("select timezone from profiles where id = %s", (ALICE,)).fetchone()
+    assert row["timezone"] == "Europe/Berlin"
 
 
 def test_other_users_see_nothing(store):
@@ -115,14 +221,6 @@ def test_other_users_cannot_change_alices_rows(store, pg_pool):
     subject_id, session_id, question = subject_with_question(store)
     concept = store.list_concepts(ALICE, subject_id)[0]
     store.end_session(BOB, session_id, NOW)
-    with pytest.raises(LookupError):
-        store.record_attempt(
-            BOB,
-            Attempt(
-                uuid4(), question.id, concept.id, "x", GradeValue.CORRECT, "ok", 0, 5, "code", NOW
-            ),
-            replace(concept, stage=5),
-        )
     bobs_question = Question(uuid4(), concept.id, "short", 1, "Sneaky?", "No.")
     with pytest.raises(LookupError):
         store.save_questions(BOB, session_id, [bobs_question])
@@ -130,19 +228,20 @@ def test_other_users_cannot_change_alices_rows(store, pg_pool):
         ended = conn.execute(
             "select ended_at from study_sessions where id = %s", (session_id,)
         ).fetchone()
-        bob_attempts = conn.execute(
-            "select count(*) as n from attempts where user_id = %s", (BOB,)
-        ).fetchone()
         bob_questions = conn.execute(
             "select count(*) as n from questions where user_id = %s", (BOB,)
         ).fetchone()
     assert ended["ended_at"] is None
-    assert bob_attempts["n"] == 0
     assert bob_questions["n"] == 0
-    assert store.list_concepts(ALICE, subject_id)[0].stage == 0
 
 
 def test_a_session_persists_progress_in_postgres(store):
+    # Imported here: the graph still imports removed names until it is rewired.
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.types import Command
+
+    from ebb.graph.build import build_graph
+
     subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d"), ("TCP", "d")])
     graph = build_graph(FakeTutor(), store, InMemorySaver(), now=lambda: NOW)
     config = {"configurable": {"thread_id": "pg-run"}}
