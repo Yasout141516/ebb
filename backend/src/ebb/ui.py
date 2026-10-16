@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from rich.console import Console
 from rich.markup import escape
@@ -25,12 +26,16 @@ def stage_dots(stage: int) -> str:
     return "●" * stage + "○" * (MAX_STAGE - stage)
 
 
-def due_label(concept: Concept, now: datetime) -> str:
+def format_day(moment: datetime, tz: ZoneInfo) -> str:
+    return moment.astimezone(tz).strftime("%a %d %b")
+
+
+def due_label(concept: Concept, now: datetime, tz: ZoneInfo) -> str:
     if concept.stage == 0:
         return "new"
     if is_due(concept, now):
         return "due now"
-    return concept.next_review_at.strftime("%a %d %b")
+    return format_day(concept.next_review_at, tz)
 
 
 def read_reply(raw: str, options: Sequence[str]) -> dict[str, Any] | None:
@@ -45,7 +50,7 @@ def read_reply(raw: str, options: Sequence[str]) -> dict[str, Any] | None:
     return {"answer": text}
 
 
-def status_table(concepts: Sequence[Concept], now: datetime) -> Table:
+def status_table(concepts: Sequence[Concept], now: datetime, tz: ZoneInfo) -> Table:
     table = Table(title="Memory", title_justify="left")
     table.add_column("Concept")
     table.add_column("Tide", justify="right")
@@ -56,7 +61,7 @@ def status_table(concepts: Sequence[Concept], now: datetime) -> Table:
             escape(concept.name),
             format_tide(tide(concept, now)),
             stage_dots(concept.stage),
-            due_label(concept, now),
+            due_label(concept, now, tz),
         )
     return table
 
@@ -99,7 +104,7 @@ def render_turn(console: Console, payload: dict[str, Any]) -> None:
     render_question(console, payload)
 
 
-def render_summary(console: Console, final: dict[str, Any]) -> None:
+def render_summary(console: Console, final: dict[str, Any], tz: ZoneInfo) -> None:
     render_feedback(console, final.get("grade"), final.get("lesson"))
     render_notices(console, final.get("notices", []))
     results = final.get("results", [])
@@ -115,7 +120,7 @@ def render_summary(console: Console, final: dict[str, Any]) -> None:
     for row in results:
         tally = row["tally"]
         answers = f"{tally['correct']}✓ {tally['partial']}◐ {tally['incorrect']}✗"
-        next_review = datetime.fromisoformat(row["next_review_at"]).strftime("%a %d %b")
+        next_review = format_day(datetime.fromisoformat(row["next_review_at"]), tz)
         table.add_row(
             escape(row["concept"]),
             answers,

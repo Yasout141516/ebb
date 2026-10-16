@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
-from ebb.config import ConfigError, Settings
+from ebb.config import ConfigError, Settings, resolve_timezone
 from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
@@ -135,6 +135,10 @@ def study(
     settings, store = _open_store()
     tutor = _tutor(settings)
     user_id = settings.ebb_dev_user_id
+    try:
+        tz = resolve_timezone(settings.ebb_timezone)
+    except ConfigError as error:
+        _fail(str(error), code=2)
     chosen = _subject(store, user_id, subject)
     graph = build_graph(tutor, store, InMemorySaver())
     thread_id = str(uuid4())
@@ -154,7 +158,7 @@ def study(
         _fail(str(error), code=2)
     except KeyboardInterrupt:
         _fail("Stopped. Every answer you finished is saved.", code=130)
-    render_summary(console, result)
+    render_summary(console, result, tz)
 
 
 @app.command()
@@ -163,7 +167,11 @@ def status(
 ) -> None:
     """Show tide, stage and next review for each concept."""
     settings, store = _open_store()
+    try:
+        tz = resolve_timezone(settings.ebb_timezone)
+    except ConfigError as error:
+        _fail(str(error), code=2)
     chosen = _subject(store, settings.ebb_dev_user_id, subject)
     concepts = store.list_concepts(settings.ebb_dev_user_id, chosen.id)
     console.print(f"[bold]{escape(chosen.name)}[/bold]")
-    console.print(status_table(concepts, datetime.now(UTC)))
+    console.print(status_table(concepts, datetime.now(UTC), tz))

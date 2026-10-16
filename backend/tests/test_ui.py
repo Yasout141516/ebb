@@ -1,13 +1,24 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from rich.console import Console
 
 from ebb.domain import Concept
-from ebb.ui import due_label, format_tide, read_reply, render_turn, stage_dots, status_table
+from ebb.ui import (
+    due_label,
+    format_day,
+    format_tide,
+    read_reply,
+    render_summary,
+    render_turn,
+    stage_dots,
+    status_table,
+)
 
 NOW = datetime(2026, 10, 15, tzinfo=UTC)
+DHAKA = ZoneInfo("Asia/Dhaka")
 
 
 def test_format_tide():
@@ -23,13 +34,13 @@ def test_stage_dots():
 
 def test_due_label():
     base = Concept(uuid4(), uuid4(), "DNS", "d")
-    assert due_label(base, NOW) == "new"
+    assert due_label(base, NOW, UTC) == "new"
     due = Concept(uuid4(), uuid4(), "DNS", "d", stage=2, next_review_at=NOW - timedelta(hours=1))
-    assert due_label(due, NOW) == "due now"
+    assert due_label(due, NOW, UTC) == "due now"
     later = Concept(
         uuid4(), uuid4(), "DNS", "d", stage=2, next_review_at=datetime(2026, 10, 20, tzinfo=UTC)
     )
-    assert due_label(later, NOW) == "Tue 20 Oct"
+    assert due_label(later, NOW, UTC) == "Tue 20 Oct"
 
 
 @pytest.mark.parametrize(
@@ -83,6 +94,34 @@ def test_status_table_shows_brackets_in_concept_names():
     console = Console(record=True, width=100)
     concept = Concept(uuid4(), uuid4(), "list[int]", "d", stage=1, next_review_at=NOW)
 
-    console.print(status_table([concept], NOW))
+    console.print(status_table([concept], NOW, UTC))
 
     assert "list[int]" in console.export_text()
+
+
+def test_format_day_uses_the_time_zone():
+    assert format_day(datetime(2026, 10, 16, 20, 0, tzinfo=UTC), DHAKA) == "Sat 17 Oct"
+
+
+def test_due_label_and_summary_use_the_time_zone():
+    instant = datetime(2026, 10, 16, 20, 0, tzinfo=UTC)
+    concept = Concept(uuid4(), uuid4(), "DNS", "d", stage=2, next_review_at=instant)
+    assert due_label(concept, NOW, DHAKA) == "Sat 17 Oct"
+    assert due_label(concept, NOW, UTC) == "Fri 16 Oct"
+
+    console = Console(record=True, width=100)
+    final = {
+        "results": [
+            {
+                "concept": "DNS",
+                "tally": {"correct": 1, "partial": 0, "incorrect": 0},
+                "tide_before": None,
+                "tide_after": 1.0,
+                "stage_before": 0,
+                "stage_after": 1,
+                "next_review_at": instant.isoformat(),
+            }
+        ]
+    }
+    render_summary(console, final, DHAKA)
+    assert "Sat 17 Oct" in console.export_text()
