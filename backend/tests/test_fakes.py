@@ -6,7 +6,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from ebb.domain import Answer, GradeValue, Question
-from tests.fakes import MemoryStore, make_subject, seed_concept
+from ebb.llm.tutor import AllProvidersExhausted
+from tests.fakes import FakeTutor, MemoryStore, make_subject, seed_concept
 
 ALICE = UUID("00000000-0000-0000-0000-00000000000a")
 BOB = UUID("00000000-0000-0000-0000-00000000000b")
@@ -120,3 +121,23 @@ def test_session_lock_refuses_a_second_holder():
             assert first is True and second is False
     with store.session_lock(ALICE, "t-1") as again:
         assert again is True
+
+
+def test_fake_tutor_extensions_run_out_cleanly():
+    store = MemoryStore()
+    subject_id = make_subject(store, ALICE, concepts=2)
+    existing = store.list_concepts(ALICE, subject_id)
+    tutor = FakeTutor(extensions=[["A", "B"], ["C"]])
+
+    names = [[d.name for d in tutor.extend_concepts("Networks", existing).value] for _ in range(3)]
+
+    assert names == [["A", "B"], ["C"], []]
+    assert tutor.extend_calls == [("Networks", ["Concept 1", "Concept 2"])] * 3
+    assert FakeTutor().extend_concepts("Networks", existing).value == []
+
+
+def test_fake_tutor_can_fail_to_extend():
+    tutor = FakeTutor(fail_extend=True)
+    with pytest.raises(AllProvidersExhausted):
+        tutor.extend_concepts("Networks", [])
+    assert len(tutor.extend_calls) == 1

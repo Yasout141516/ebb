@@ -264,9 +264,9 @@ class FakeTutor:
         self.extend_calls.append((subject, [c.name for c in existing]))
         if self.fail_extend:
             raise AllProvidersExhausted("extension down")
-        names = self.extensions[len(self.extend_calls) - 1] if self.extensions else []
-        if len(self.extend_calls) > len(self.extensions or []):
-            names = []
+        call = len(self.extend_calls) - 1
+        scripted = self.extensions or []
+        names = scripted[call] if call < len(scripted) else []
         return self._out([ConceptDraft(name=n, description=f"About {n}.") for n in names])
 
     def generate_questions(self, concept: Concept, avoid: list[str]) -> Generated[list[Question]]:
