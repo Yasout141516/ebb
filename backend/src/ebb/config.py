@@ -29,7 +29,7 @@ def resolve_timezone(name: str | None) -> ZoneInfo:
     if not name:
         try:
             return ZoneInfo(tzlocal.get_localzone_name())
-        except ZoneInfoNotFoundError, ValueError, LookupError, OSError, RuntimeError:
+        except ZoneInfoNotFoundError, ValueError, OSError, RuntimeError, TypeError:
             return ZoneInfo("UTC")
     try:
         return ZoneInfo(name)

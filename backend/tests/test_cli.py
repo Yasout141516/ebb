@@ -15,7 +15,7 @@ _real_tutor = cli._tutor
 
 @pytest.fixture
 def fakes(monkeypatch):
-    settings = Settings(_env_file=None)
+    settings = Settings(_env_file=None, ebb_timezone="UTC")
     store, tutor = MemoryStore(), FakeTutor()
     store.ensure_profile(settings.ebb_dev_user_id)
     monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
@@ -165,3 +165,15 @@ def test_study_exits_2_on_a_rejected_key(fakes, monkeypatch):
 
     assert result.exit_code == 2
     assert "Gemini rejected GOOGLE_API_KEY" in result.output
+
+
+@pytest.mark.parametrize("command", ["status", "study"])
+def test_a_bad_timezone_exits_2_with_the_message(fakes, monkeypatch, command):
+    store, _ = fakes
+    settings = Settings(_env_file=None, ebb_timezone="Mars/Olympus")
+    monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
+
+    result = runner.invoke(cli.app, [command])
+
+    assert result.exit_code == 2
+    assert "EBB_TIMEZONE 'Mars/Olympus' is not a known time zone" in result.output

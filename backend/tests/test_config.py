@@ -31,3 +31,8 @@ def test_resolve_timezone_falls_back_to_utc(monkeypatch):
 
     monkeypatch.setattr(config.tzlocal, "get_localzone_name", boom)
     assert resolve_timezone(None) == ZoneInfo("UTC")
+
+
+def test_resolve_timezone_falls_back_to_utc_when_the_computer_gives_none(monkeypatch):
+    monkeypatch.setattr(config.tzlocal, "get_localzone_name", lambda: None)
+    assert resolve_timezone(None) == ZoneInfo("UTC")
