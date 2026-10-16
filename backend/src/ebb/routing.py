@@ -1,33 +1,34 @@
 """Every routing decision in the quiz loop, as pure functions over graph state."""
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal
 
 from ebb.domain import Concept
-from ebb.mastery import is_due
+from ebb.mastery import is_due, tide
 
 STREAK_TO_FINISH = 2
 MAX_QUESTIONS_PER_CONCEPT = 4
-CONCEPTS_PER_SESSION = 3
 MAX_GENERATIONS_PER_CONCEPT = 2
 
 NextStep = Literal["ask_question", "generate_questions", "next_concept", "summarize"]
-
-_NEVER = datetime.min.replace(tzinfo=UTC)
 
 
 def pick_next_concept(
     concepts: Sequence[Concept], studied_ids: Sequence[str], now: datetime
 ) -> Concept | None:
-    """Due first, then lowest stage, then least recently reviewed (never-reviewed first)."""
+    """Due reviews by lowest tide, then new concepts in list order; never a learned, not-due one."""
     candidates = [c for c in concepts if str(c.id) not in studied_ids]
-    if not candidates:
-        return None
-    return min(
-        candidates,
-        key=lambda c: (not is_due(c, now), c.stage, c.last_reviewed_at or _NEVER),
-    )
+    due = [c for c in candidates if c.stage >= 1 and is_due(c, now)]
+    if due:
+        # min() keeps the first of equal keys, so ties stay in list order.
+        return min(due, key=lambda c: _tide_or_zero(c, now))
+    return next((c for c in candidates if c.stage == 0), None)
+
+
+def _tide_or_zero(concept: Concept, now: datetime) -> float:
+    value = tide(concept, now)
+    return 0.0 if value is None else value
 
 
 def choose_question(
@@ -56,20 +57,14 @@ def concept_done(state: Mapping[str, Any]) -> bool:
     )
 
 
-def _finish_concept(state: Mapping[str, Any]) -> NextStep:
-    last_allowed = state["concepts_done"] + 1 >= CONCEPTS_PER_SESSION
-    none_left = len(state["studied_concept_ids"]) >= state["concept_count"]
-    return "summarize" if last_allowed or none_left else "next_concept"
-
-
 def decide_next(state: Mapping[str, Any]) -> NextStep:
     if concept_done(state):
-        return _finish_concept(state)
+        return "next_concept"
     if state["batch"]:
         return "ask_question"
     if state["generation_calls_on_concept"] < MAX_GENERATIONS_PER_CONCEPT:
         return "generate_questions"
-    return _finish_concept(state)
+    return "next_concept"
 
 
 def after_ask(state: Mapping[str, Any]) -> Literal["grade_answer", "summarize"]:
@@ -82,6 +77,8 @@ def after_grade(state: Mapping[str, Any]) -> Literal["update_mastery", "ask_ques
 
 
 def after_mastery(state: Mapping[str, Any]) -> NextStep | Literal["teach"]:
+    if state["grade"] is None:
+        return decide_next(state)
     if state["grade"]["value"] == "incorrect":
         return "teach"
     return decide_next(state)
@@ -91,5 +88,13 @@ def after_generate(state: Mapping[str, Any]) -> Literal["ask_question", "summari
     return "summarize" if state["fatal"] else "ask_question"
 
 
-def after_pick(state: Mapping[str, Any]) -> Literal["generate_questions", "summarize"]:
-    return "summarize" if state["concept"] is None else "generate_questions"
+def after_pick(
+    state: Mapping[str, Any],
+) -> Literal["generate_questions", "extend_subject", "summarize"]:
+    if state["concept"] is not None:
+        return "generate_questions"
+    return "summarize" if state["caught_up"] else "extend_subject"
+
+
+def after_extend(state: Mapping[str, Any]) -> Literal["pick_concept", "summarize"]:
+    return "summarize" if state["caught_up"] or state["fatal"] else "pick_concept"

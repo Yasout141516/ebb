@@ -5,7 +5,9 @@ import pytest
 
 from ebb.domain import Concept
 from ebb.routing import (
+    after_extend,
     after_mastery,
+    after_pick,
     choose_question,
     decide_next,
     pick_next_concept,
@@ -28,25 +30,36 @@ def make(name, stage=0, due_in_days=None, reviewed_days_ago=None):
     )
 
 
-def test_due_concepts_come_first():
-    fresh = make("fresh", stage=1, due_in_days=2, reviewed_days_ago=1)
-    due = make("due", stage=3, due_in_days=-1, reviewed_days_ago=8)
-    assert pick_next_concept([fresh, due], [], NOW) is due
+def test_due_reviews_come_before_new_concepts():
+    new = make("new")
+    due = make("due", stage=2, due_in_days=-1, reviewed_days_ago=4)
+    assert pick_next_concept([new, due], [], NOW) is due
 
 
-def test_then_lowest_stage_then_oldest_review():
+def test_most_faded_review_first():
+    recent = make("recent", stage=2, due_in_days=-1, reviewed_days_ago=4)  # tide ~0.62
+    faded = make("faded", stage=2, due_in_days=-7, reviewed_days_ago=10)  # tide ~0.30
+    assert pick_next_concept([recent, faded], [], NOW) is faded
+
+
+def test_equal_tide_keeps_list_order():
     a = make("a", stage=2, due_in_days=-1, reviewed_days_ago=4)
-    b = make("b", stage=1, due_in_days=-1, reviewed_days_ago=2)
-    c = make("c", stage=1, due_in_days=-1, reviewed_days_ago=9)
-    assert pick_next_concept([a, b, c], [], NOW) is c
+    b = make("b", stage=2, due_in_days=-1, reviewed_days_ago=4)
+    assert pick_next_concept([a, b], [], NOW) is a
+    assert pick_next_concept([b, a], [], NOW) is b
 
 
-def test_new_concepts_keep_list_order():
+def test_new_concepts_in_list_order_when_nothing_is_due():
     first, second = make("first"), make("second")
     assert pick_next_concept([first, second], [], NOW) is first
 
 
-def test_studied_concepts_are_skipped_and_none_when_exhausted():
+def test_learned_concepts_that_are_not_due_are_never_picked():
+    not_due = make("later", stage=2, due_in_days=2, reviewed_days_ago=1)
+    assert pick_next_concept([not_due], [], NOW) is None
+
+
+def test_studied_concepts_are_skipped():
     a, b = make("a"), make("b")
     assert pick_next_concept([a, b], [str(a.id)], NOW) is b
     assert pick_next_concept([a, b], [str(a.id), str(b.id)], NOW) is None
@@ -78,9 +91,7 @@ def state(**overrides):
     base = {
         "correct_streak": 0,
         "asked_on_concept": 1,
-        "concepts_done": 0,
         "studied_concept_ids": ["a"],
-        "concept_count": 5,
         "batch": [{"difficulty": 1}],
         "generation_calls_on_concept": 1,
         "grade": {"value": "correct"},
@@ -100,12 +111,10 @@ def test_four_questions_finish_the_concept():
     assert decide_next(state(asked_on_concept=4)) == "next_concept"
 
 
-def test_third_finished_concept_ends_the_session():
-    assert decide_next(state(correct_streak=2, concepts_done=2)) == "summarize"
-
-
-def test_running_out_of_concepts_ends_the_session():
-    assert decide_next(state(correct_streak=2, concept_count=1)) == "summarize"
+def test_finished_concept_always_moves_on():
+    assert decide_next(state(correct_streak=2, studied_concept_ids=list("abcdefgh"))) == (
+        "next_concept"
+    )
 
 
 def test_empty_batch_regenerates_until_the_cap():
@@ -116,3 +125,26 @@ def test_empty_batch_regenerates_until_the_cap():
 def test_incorrect_answers_go_to_teach_first():
     assert after_mastery(state(grade={"value": "incorrect"})) == "teach"
     assert after_mastery(state(grade={"value": "partial"})) == "ask_question"
+
+
+def test_duplicate_answer_routes_like_an_uncounted_answer():
+    assert after_mastery(state(grade=None)) == "ask_question"
+    assert after_mastery(state(grade=None, correct_streak=2)) == "next_concept"
+
+
+def test_after_pick_generates_when_a_concept_was_picked():
+    assert after_pick({"concept": {"id": "a"}, "caught_up": False}) == "generate_questions"
+
+
+def test_after_pick_extends_when_nothing_is_left():
+    assert after_pick({"concept": None, "caught_up": False}) == "extend_subject"
+
+
+def test_after_pick_summarizes_when_caught_up():
+    assert after_pick({"concept": None, "caught_up": True}) == "summarize"
+
+
+def test_after_extend():
+    assert after_extend({"caught_up": False, "fatal": False}) == "pick_concept"
+    assert after_extend({"caught_up": True, "fatal": False}) == "summarize"
+    assert after_extend({"caught_up": False, "fatal": True}) == "summarize"
