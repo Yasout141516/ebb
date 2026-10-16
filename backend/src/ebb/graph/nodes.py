@@ -1,5 +1,5 @@
-"""The nine quiz-loop nodes. Only generate_questions, grade_answer (short answers) and
-teach call the LLM; everything else is plain code."""
+"""The ten quiz-loop nodes. Only generate_questions, extend_subject, grade_answer (short
+answers) and teach call the LLM; everything else is plain code."""
 
 from collections.abc import Callable
 from datetime import datetime
@@ -8,7 +8,7 @@ from uuid import UUID
 
 from langgraph.types import interrupt
 
-from ebb.domain import Attempt, GradeValue
+from ebb.domain import Answer, GradeValue
 from ebb.grading import grade_mcq
 from ebb.graph.state import (
     QuizState,
@@ -20,7 +20,7 @@ from ebb.graph.state import (
     question_to_dict,
 )
 from ebb.llm.tutor import AllProvidersExhausted, Generated, Tutor
-from ebb.mastery import apply_grade, tide
+from ebb.mastery import tide
 from ebb.routing import choose_question, pick_next_concept
 from ebb.store import Store
 
@@ -66,15 +66,13 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
 
     def load_learner(state: QuizState) -> dict[str, Any]:
         user_id, subject_id = ids(state)
-        concepts = store.list_concepts(user_id, subject_id)
         session_id = store.create_session(user_id, subject_id, state["thread_id"])
         return {
             "session_id": str(session_id),
-            "concept_count": len(concepts),
             "studied_concept_ids": [],
-            "concepts_done": 0,
             "results": [],
             "quit": False,
+            "caught_up": False,
             "fatal": None,
             "notices": [],
             "concept": None,
@@ -106,13 +104,34 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
             "retry_question": False,
         }
 
+    def extend_subject(state: QuizState) -> dict[str, Any]:
+        user_id, subject_id = ids(state)
+        subject = store.get_subject(user_id, subject_id)
+        if subject is None:
+            raise LookupError(f"subject {subject_id} not found")
+        try:
+            generated = tutor.extend_concepts(
+                subject.name, store.list_concepts(user_id, subject_id)
+            )
+        except AllProvidersExhausted:
+            return {"fatal": EXHAUSTED_NOTICE, "notices": _with_notice(state, EXHAUSTED_NOTICE)}
+        added = store.add_concepts(
+            user_id, subject_id, [(d.name, d.description) for d in generated.value]
+        )
+        return {"caught_up": added == 0, "notices": _notices(state, generated)}
+
     def generate_questions(state: QuizState) -> dict[str, Any]:
         user_id, _ = ids(state)
+        concept = concept_from_dict(state["concept"])
         calls = state["generation_calls_on_concept"] + 1
-        try:
-            generated = tutor.generate_questions(
-                concept_from_dict(state["concept"]), state["asked_prompts"]
+        # Earlier sessions' questions first, then this session's, without repeats.
+        avoid = list(
+            dict.fromkeys(
+                [*store.answered_prompts(user_id, concept.id, 40), *state["asked_prompts"]]
             )
+        )
+        try:
+            generated = tutor.generate_questions(concept, avoid)
         except AllProvidersExhausted:
             return {
                 "fatal": EXHAUSTED_NOTICE,
@@ -196,22 +215,19 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
         user_id, _ = ids(state)
         concept = concept_from_dict(state["concept"])
         grade = grade_from_dict(state["grade"])
-        moment = now()
-        after = apply_grade(concept, grade.value, moment)
-        attempt = Attempt(
+        answer = Answer(
             id=UUID(state["attempt_id"]),
             question_id=UUID(state["question"]["id"]),
             concept_id=concept.id,
             answer_text=state["answer"],
             grade=grade.value,
             feedback=grade.explanation,
-            stage_before=concept.stage,
-            stage_after=after.stage,
             model_used=state["model_used"],
-            graded_at=moment,
+            graded_at=now(),
         )
-        if not store.record_attempt(user_id, attempt, after):
-            return {}  # duplicate resume: already recorded, change nothing
+        after = store.record_answer(user_id, answer)
+        if after is None:  # duplicate resume: already recorded, and nothing stale to show
+            return {"grade": None, "lesson": None}
         correct = grade.value is GradeValue.CORRECT
         return {
             "concept": concept_to_dict(after),
@@ -232,7 +248,7 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
         return {"lesson": generated.value, "notices": _notices(state, generated)}
 
     def next_concept(state: QuizState) -> dict[str, Any]:
-        return {"results": record_result(state), "concepts_done": state["concepts_done"] + 1}
+        return {"results": record_result(state)}
 
     def summarize(state: QuizState) -> dict[str, Any]:
         user_id, _ = ids(state)
@@ -242,6 +258,7 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
     return {
         "load_learner": load_learner,
         "pick_concept": pick_concept,
+        "extend_subject": extend_subject,
         "generate_questions": generate_questions,
         "ask_question": ask_question,
         "grade_answer": grade_answer,

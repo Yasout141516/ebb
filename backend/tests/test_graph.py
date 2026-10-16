@@ -9,7 +9,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from ebb.domain import Attempt, Concept
+from ebb.domain import Answer, Concept
 from ebb.graph.build import build_graph
 from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE
 from tests.fakes import FakeTutor, MemoryStore, make_subject, seed_concept
@@ -49,25 +49,111 @@ def always_wrong(payload: dict[str, Any]) -> dict[str, Any]:
     return reply("2" if payload["question"]["options"] else "no idea")
 
 
-def test_all_correct_session_covers_three_concepts_two_questions_each():
+def test_all_correct_session_learns_every_concept_two_questions_each():
     store, tutor = MemoryStore(), FakeTutor()
     subject_id = make_subject(store, USER, concepts=4)
 
     final, payloads = run(tutor, store, subject_id, always_right)
 
-    assert len(payloads) == 6
-    assert [p["concept"] for p in payloads] == ["Concept 1"] * 2 + ["Concept 2"] * 2 + [
-        "Concept 3"
-    ] * 2
+    assert len(payloads) == 8
+    assert [p["concept"] for p in payloads] == [f"Concept {n}" for n in (1, 1, 2, 2, 3, 3, 4, 4)]
     assert [p["question"]["difficulty"] for p in payloads[:2]] == [1, 2]  # easiest, then harder
-    assert [r["concept"] for r in final["results"]] == ["Concept 1", "Concept 2", "Concept 3"]
+    assert [r["concept"] for r in final["results"]] == [f"Concept {n}" for n in range(1, 5)]
     assert all(r["tally"] == {"correct": 2, "partial": 0, "incorrect": 0} for r in final["results"])
     # first answer moves a new concept to stage 1; the second is early, so no promotion
-    assert [r["stage_after"] for r in final["results"]] == [1, 1, 1]
-    assert len(store.attempts) == 6
+    assert [r["stage_after"] for r in final["results"]] == [1, 1, 1, 1]
+    assert len(store.attempts) == 8
+    assert final["caught_up"] is True  # nothing left, and the default tutor extends with nothing
     session = next(iter(store.sessions.values()))
     assert session["ended_at"] == NOW
     assert final["grade"]["value"] == "correct"  # feedback for the last answer is shown
+
+
+def test_session_runs_past_three_concepts_until_quit():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=5)
+    seen = []
+
+    def answer(payload):
+        seen.append(payload)
+        return {"quit": True} if len(seen) == 9 else always_right(payload)
+
+    final, payloads = run(tutor, store, subject_id, answer)
+
+    assert len(payloads) == 9
+    assert payloads[8]["concept"] == "Concept 5"
+    assert len(final["results"]) == 4
+
+
+def test_due_review_comes_first():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=4)
+    concept = store.list_concepts(USER, subject_id)[2]
+    seed_concept(
+        store,
+        concept.id,
+        stage=2,
+        last_reviewed_at=NOW - timedelta(days=4),
+        next_review_at=NOW - timedelta(days=1),
+    )
+
+    _, payloads = run(tutor, store, subject_id, lambda p: {"quit": True})
+
+    assert payloads[0]["concept"] == "Concept 3"
+
+
+def test_learning_everything_extends_the_subject():
+    store = MemoryStore()
+    tutor = FakeTutor(extensions=[["Advanced 1", "Advanced 2", "Advanced 3"]])
+    subject_id = make_subject(store, USER, concepts=1)
+    seen = []
+
+    def answer(payload):
+        seen.append(payload)
+        return {"quit": True} if len(seen) == 3 else always_right(payload)
+
+    _, payloads = run(tutor, store, subject_id, answer)
+
+    assert [p["concept"] for p in payloads] == ["Concept 1", "Concept 1", "Advanced 1"]
+    assert tutor.extend_calls == [("Networks", ["Concept 1"])]
+
+
+def test_extension_with_nothing_new_ends_caught_up():
+    store, tutor = MemoryStore(), FakeTutor(extensions=[["Concept 1"]])
+    subject_id = make_subject(store, USER, concepts=1)
+
+    final, payloads = run(tutor, store, subject_id, always_right)
+
+    assert len(payloads) == 2
+    assert final["caught_up"] is True
+    assert final["fatal"] is None
+    assert len(tutor.extend_calls) == 1
+
+
+def test_extension_failure_ends_with_the_exhausted_notice():
+    store, tutor = MemoryStore(), FakeTutor(fail_extend=True)
+    subject_id = make_subject(store, USER, concepts=1)
+
+    final, payloads = run(tutor, store, subject_id, always_right)
+
+    assert len(payloads) == 2
+    assert final["fatal"] == EXHAUSTED_NOTICE
+    assert EXHAUSTED_NOTICE in final["notices"]
+    assert next(iter(store.sessions.values()))["ended_at"] == NOW
+
+
+def test_avoid_list_includes_earlier_sessions():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=1)
+    answers = iter([reply("right"), {"quit": True}])
+    _, first = run(tutor, store, subject_id, lambda p: next(answers))
+    concept = store.list_concepts(USER, subject_id)[0]
+    seed_concept(store, concept.id, stage=1, next_review_at=NOW - timedelta(days=1))
+
+    run(tutor, store, subject_id, lambda p: {"quit": True})
+
+    assert tutor.avoid_calls[0] == []
+    assert first[0]["question"]["prompt"] in tutor.avoid_calls[1]
 
 
 def test_wrong_answer_is_taught_then_asked_again_at_same_difficulty():
@@ -177,19 +263,21 @@ def test_mcq_attempts_are_graded_in_code():
 
 
 class AlreadyRecordedStore(MemoryStore):
-    """Simulates a duplicate resume: the attempt id was already stored, so nothing changes."""
+    """Simulates a duplicate resume: the answer id was already stored, so nothing changes."""
 
-    def record_attempt(self, user_id: UUID, attempt: Attempt, concept_after: Concept) -> bool:
-        return False
+    def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
+        return None
 
 
-def test_duplicate_attempt_changes_nothing():
+def test_duplicate_answer_leaves_no_stale_feedback():
     store, tutor = AlreadyRecordedStore(), FakeTutor()
     subject_id = make_subject(store, USER, concepts=1)
-    answers = iter([reply("right"), {"quit": True}])
+    answers = iter([reply("no idea"), {"quit": True}])
 
-    final, _ = run(tutor, store, subject_id, lambda p: next(answers))
+    final, payloads = run(tutor, store, subject_id, lambda p: next(answers))
 
+    assert payloads[1]["feedback"] is None
+    assert payloads[1]["lesson"] is None
     assert store.attempts == {}
     assert store.list_concepts(USER, subject_id)[0].stage == 0
     assert final["results"] == []  # the tally never moved, so no result line

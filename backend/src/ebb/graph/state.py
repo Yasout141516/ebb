@@ -20,11 +20,10 @@ class QuizState(TypedDict, total=False):
     thread_id: str
     # session
     session_id: str
-    concept_count: int
     studied_concept_ids: list[str]
-    concepts_done: int
     results: list[dict[str, Any]]
     quit: bool
+    caught_up: bool  # everything learned and the tutor had nothing more to add
     fatal: str | None
     notices: list[str]
     # current concept

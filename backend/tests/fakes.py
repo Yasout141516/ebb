@@ -246,6 +246,7 @@ class FakeTutor:
         self.extend_calls: list[tuple[str, list[str]]] = []
         self.generate_attempts = 0
         self.generate_calls: list[str] = []
+        self.avoid_calls: list[list[str]] = []
         self.counter = 0
 
     def _out[T](self, value: T) -> Generated[T]:
@@ -271,6 +272,7 @@ class FakeTutor:
 
     def generate_questions(self, concept: Concept, avoid: list[str]) -> Generated[list[Question]]:
         self.generate_attempts += 1
+        self.avoid_calls.append(list(avoid))
         if self.fail_generate or self.generate_attempts == self.fail_generate_on_call:
             raise AllProvidersExhausted("generation down")
         self.generate_calls.append(concept.name)

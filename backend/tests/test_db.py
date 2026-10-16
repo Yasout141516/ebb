@@ -4,10 +4,13 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from ebb.db.migrate import migrate
 from ebb.db.repo import PgStore
 from ebb.domain import Answer, GradeValue, Option, Question
+from ebb.graph.build import build_graph
 from tests.fakes import FakeTutor
 
 pytestmark = pytest.mark.db
@@ -236,12 +239,6 @@ def test_other_users_cannot_change_alices_rows(store, pg_pool):
 
 
 def test_a_session_persists_progress_in_postgres(store):
-    # Imported here: the graph still imports removed names until it is rewired.
-    from langgraph.checkpoint.memory import InMemorySaver
-    from langgraph.types import Command
-
-    from ebb.graph.build import build_graph
-
     subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d"), ("TCP", "d")])
     graph = build_graph(FakeTutor(), store, InMemorySaver(), now=lambda: NOW)
     config = {"configurable": {"thread_id": "pg-run"}}

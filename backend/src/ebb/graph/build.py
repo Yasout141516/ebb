@@ -1,4 +1,8 @@
-"""Wire the quiz-loop nodes into a LangGraph graph."""
+"""Wire the ten quiz-loop nodes into a LangGraph graph.
+
+pick_concept -> generate_questions | extend_subject | summarize
+extend_subject -> pick_concept | summarize
+"""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -12,6 +16,7 @@ from ebb.graph.state import QuizState
 from ebb.llm.tutor import Tutor
 from ebb.routing import (
     after_ask,
+    after_extend,
     after_generate,
     after_grade,
     after_mastery,
@@ -39,7 +44,10 @@ def build_graph(
 
     graph.add_edge(START, "load_learner")
     graph.add_edge("load_learner", "pick_concept")
-    graph.add_conditional_edges("pick_concept", after_pick, ["generate_questions", "summarize"])
+    graph.add_conditional_edges(
+        "pick_concept", after_pick, ["generate_questions", "extend_subject", "summarize"]
+    )
+    graph.add_conditional_edges("extend_subject", after_extend, ["pick_concept", "summarize"])
     graph.add_conditional_edges("generate_questions", after_generate, ["ask_question", "summarize"])
     graph.add_conditional_edges("ask_question", after_ask, ["grade_answer", "summarize"])
     graph.add_conditional_edges("grade_answer", after_grade, ["update_mastery", "ask_question"])
