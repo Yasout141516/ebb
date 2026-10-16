@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from ebb.llm.schemas import ConceptList, QuestionBatch
+from ebb.llm.schemas import ConceptExtension, ConceptList, QuestionBatch
 
 
 def mcq(difficulty=1, correct=1, count=4):
@@ -65,3 +65,11 @@ def test_concept_names_are_short_and_non_empty():
     for bad in ("", "x" * 61):
         with pytest.raises(ValidationError):
             ConceptList.model_validate(concepts(6, name=bad))
+
+
+def test_concept_extension_needs_three_to_five():
+    for good in (3, 5):
+        assert len(ConceptExtension.model_validate(concepts(good)).concepts) == good
+    for bad in (2, 6):
+        with pytest.raises(ValidationError):
+            ConceptExtension.model_validate(concepts(bad))

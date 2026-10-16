@@ -232,6 +232,8 @@ class FakeTutor:
         fail_teach: bool = False,
         fell_back: bool = False,
         fail_generate_on_call: int | None = None,
+        extensions: list[list[str]] | None = None,
+        fail_extend: bool = False,
     ) -> None:
         self.batch_size = batch_size
         self.fail_grade_times = fail_grade_times
@@ -239,6 +241,9 @@ class FakeTutor:
         self.fail_teach = fail_teach
         self.fell_back = fell_back
         self.fail_generate_on_call = fail_generate_on_call  # 1-based call number that fails
+        self.extensions = extensions  # concept names returned per extend call, in order
+        self.fail_extend = fail_extend
+        self.extend_calls: list[tuple[str, list[str]]] = []
         self.generate_attempts = 0
         self.generate_calls: list[str] = []
         self.counter = 0
@@ -252,6 +257,17 @@ class FakeTutor:
             for n in range(1, 7)
         ]
         return self._out(drafts)
+
+    def extend_concepts(
+        self, subject: str, existing: Sequence[Concept]
+    ) -> Generated[list[ConceptDraft]]:
+        self.extend_calls.append((subject, [c.name for c in existing]))
+        if self.fail_extend:
+            raise AllProvidersExhausted("extension down")
+        names = self.extensions[len(self.extend_calls) - 1] if self.extensions else []
+        if len(self.extend_calls) > len(self.extensions or []):
+            names = []
+        return self._out([ConceptDraft(name=n, description=f"About {n}.") for n in names])
 
     def generate_questions(self, concept: Concept, avoid: list[str]) -> Generated[list[Question]]:
         self.generate_attempts += 1

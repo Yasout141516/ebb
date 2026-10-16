@@ -19,7 +19,7 @@ from langchain_google_genai.chat_models import (
 
 from ebb.config import ConfigError, Settings
 from ebb.domain import Concept, Grade, GradeValue, Option, Question
-from ebb.llm.schemas import ConceptDraft, ConceptList, GradeResult, QuestionBatch
+from ebb.llm.schemas import ConceptDraft, ConceptExtension, ConceptList, GradeResult, QuestionBatch
 from ebb.llm.tutor import (
     REQUEST_TIMEOUT_SECONDS,
     AllProvidersExhausted,
@@ -126,6 +126,7 @@ def test_raises_when_every_provider_fails():
     ("name", "values"),
     [
         ("extract_concepts", {"topic": "Networks"}),
+        ("extend_concepts", {"subject": "Networks", "existing": "- DNS: Names to addresses."}),
         ("generate_questions", {"name": "DNS", "description": "d", "avoid": "(none)"}),
         ("grade", {"prompt": "p", "reference": "r", "answer": "costs $5 {x}"}),
         ("teach", {"prompt": "p", "reference": "r", "answer": "a", "explanation": "e"}),
@@ -199,6 +200,22 @@ def test_extract_concepts_unwraps_the_list_and_uses_the_creative_model():
     [(schema, prompt)] = creative.calls
     assert schema is ConceptList
     assert "Networks" in prompt
+
+
+def test_extend_concepts_uses_structured_output_and_the_prompt():
+    drafts = [ConceptDraft(name=n, description="d") for n in ("BGP", "QUIC", "SDN")]
+    precise, creative = Structured(None), Structured(ConceptExtension(concepts=drafts))
+    tutor = LangChainTutor([Provider("primary", precise, creative)], attempts=1)
+    existing = [Concept(uuid4(), uuid4(), "DNS", "Names to addresses.")]
+
+    out = tutor.extend_concepts("Networks", existing)
+
+    assert [c.name for c in out.value] == ["BGP", "QUIC", "SDN"]
+    assert (out.model, out.fell_back) == ("primary", False)
+    assert precise.calls == []
+    [(schema, prompt)] = creative.calls
+    assert schema is ConceptExtension
+    assert "Networks" in prompt and "- DNS: Names to addresses." in prompt
 
 
 def test_generate_questions_maps_drafts_to_domain_questions():

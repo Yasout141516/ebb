@@ -33,6 +33,17 @@ class ConceptList(BaseModel):
         return value
 
 
+class ConceptExtension(BaseModel):
+    concepts: list[ConceptDraft]
+
+    @field_validator("concepts")
+    @classmethod
+    def three_to_five(cls, value: list[ConceptDraft]) -> list[ConceptDraft]:
+        if not 3 <= len(value) <= 5:
+            raise ValueError(f"expected 3-5 concepts, got {len(value)}")
+        return value
+
+
 class OptionDraft(BaseModel):
     text: str
     is_correct: bool

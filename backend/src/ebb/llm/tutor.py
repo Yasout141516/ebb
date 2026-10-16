@@ -1,6 +1,6 @@
 """The only place that talks to an LLM. Graph nodes see the `Tutor` protocol."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from importlib.resources import files
 from string import Template
@@ -24,7 +24,7 @@ from pydantic import ValidationError
 
 from ebb.config import ConfigError, Settings
 from ebb.domain import Concept, Grade, GradeValue, Option, Question
-from ebb.llm.schemas import ConceptDraft, ConceptList, GradeResult, QuestionBatch
+from ebb.llm.schemas import ConceptDraft, ConceptExtension, ConceptList, GradeResult, QuestionBatch
 
 try:  # google-genai uses httpx2 when it is installed (it arrives via langsmith today)
     import httpx2
@@ -93,6 +93,10 @@ class Generated[T]:
 
 class Tutor(Protocol):
     def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]: ...
+
+    def extend_concepts(
+        self, subject: str, existing: Sequence[Concept]
+    ) -> Generated[list[ConceptDraft]]: ...
 
     def generate_questions(
         self, concept: Concept, avoid: list[str]
@@ -206,6 +210,17 @@ class LangChainTutor:
         return self._run(
             lambda m: m.with_structured_output(ConceptList),
             _prompt("extract_concepts", topic=topic),
+            creative=True,
+            parse=lambda out: out.concepts,
+        )
+
+    def extend_concepts(
+        self, subject: str, existing: Sequence[Concept]
+    ) -> Generated[list[ConceptDraft]]:
+        listing = "\n".join(f"- {c.name}: {c.description}" for c in existing)
+        return self._run(
+            lambda m: m.with_structured_output(ConceptExtension),
+            _prompt("extend_concepts", subject=subject, existing=listing),
             creative=True,
             parse=lambda out: out.concepts,
         )
