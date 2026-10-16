@@ -42,10 +42,17 @@ def pg_session_pool() -> Iterator[ConnectionPool]:
 
 
 @pytest.fixture
-def pg_pool(pg_session_pool: ConnectionPool) -> ConnectionPool:
-    """The session pool, on an empty and freshly migrated schema."""
+def pg_empty_pool(pg_session_pool: ConnectionPool) -> ConnectionPool:
+    """The session pool, on an empty schema with nothing migrated."""
     with pg_session_pool.connection() as conn:
         conn.execute("drop schema public cascade")
         conn.execute("create schema public")
-        migrate(conn)
     return pg_session_pool
+
+
+@pytest.fixture
+def pg_pool(pg_empty_pool: ConnectionPool) -> ConnectionPool:
+    """The session pool, on an empty and freshly migrated schema."""
+    with pg_empty_pool.connection() as conn:
+        migrate(conn)
+    return pg_empty_pool

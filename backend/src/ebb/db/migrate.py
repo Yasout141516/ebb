@@ -7,8 +7,11 @@ from psycopg import Connection
 MIGRATION_LOCK = 7_231_001  # arbitrary constant for pg_advisory_xact_lock
 
 
-def migrate(conn: Connection) -> list[str]:
-    """Apply pending migrations and return the names applied. Safe to run concurrently."""
+def migrate(conn: Connection, until: str | None = None) -> list[str]:
+    """Apply pending migrations (up to file name `until`, if given); return the names applied.
+
+    Safe to run concurrently.
+    """
     folder = files("ebb.db").joinpath("migrations")
     scripts = sorted(
         (entry for entry in folder.iterdir() if entry.name.endswith(".sql")),
@@ -26,6 +29,8 @@ def migrate(conn: Connection) -> list[str]:
         for script in scripts:
             if script.name in done:
                 continue
+            if until is not None and script.name > until:
+                break
             conn.execute(script.read_text(encoding="utf-8"))
             conn.execute("insert into schema_migrations (version) values (%s)", (script.name,))
             applied.append(script.name)
