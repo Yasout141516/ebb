@@ -105,35 +105,54 @@ def test_resume_twice_counts_each_answer_once(store, subject_id, pg_pool):
     assert tallies["TCP"] == {"correct": 0, "partial": 0, "incorrect": 1}
 
 
-def test_state_without_a_pending_question_is_not_resumable(store, subject_id, monkeypatch):
+@pytest.fixture
+def cli_on_postgres(store, monkeypatch) -> None:
+    """`ebb study` on the real store and the real `_checkpointer`, with a fake tutor."""
     settings = Settings(_env_file=None, ebb_timezone="UTC", ebb_dev_user_id=ALICE)
+    monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
+    monkeypatch.setattr(cli, "_tutor", lambda s: FakeTutor())
+
+
+def ended_at(store: PgStore, session_id: UUID) -> datetime | None:
+    with store.pool.connection() as conn:
+        return conn.execute(
+            "select ended_at from study_sessions where id = %s", (session_id,)
+        ).fetchone()["ended_at"]
+
+
+def test_crash_while_grading_resumes_and_grades_once(
+    store, subject_id, pg_pool, cli_on_postgres, monkeypatch
+):
     crashing = FakeTutor()
 
     def killed_while_grading(question, answer):
         raise RuntimeError("killed while grading")
 
     monkeypatch.setattr(crashing, "grade", killed_while_grading)
-    monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
     monkeypatch.setattr(cli, "_tutor", lambda s: crashing)
     crashed = runner.invoke(cli.app, ["study"], input="right\n")  # Q1 is a short answer
     assert isinstance(crashed.exception, RuntimeError), crashed.output
     found = store.resumable_session(ALICE, subject_id, datetime.now(UTC))
-    assert found is not None
-    assert (
-        not new_process(store)
-        .get_state({"configurable": {"thread_id": found.thread_id}})
-        .interrupts
-    )
+    saved = new_process(store).get_state({"configurable": {"thread_id": found.thread_id}})
+    assert not saved.interrupts and saved.next  # mid-step: the answer is in, not graded
 
     monkeypatch.setattr(cli, "_tutor", lambda s: FakeTutor())
+    result = runner.invoke(cli.app, ["study"], input="y\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert "You stopped on DNS, question 1, a moment ago. Resume? [Y/n]" in result.output
+    assert "● Correct" in result.output.split("Resume? [Y/n]", 1)[1]
+    assert attempt_count(pg_pool) == 1
+    assert ended_at(store, found.session_id) is not None  # finished by q, same session
+
+
+def test_state_with_nothing_pending_is_closed(store, subject_id, cli_on_postgres):
+    # A session whose process died before its first checkpoint was written.
+    session_id = store.create_session(ALICE, subject_id, "never-checkpointed")
+
     result = runner.invoke(cli.app, ["study"], input="q\n")
 
     assert result.exit_code == 0, result.output
     assert "Resume?" not in result.output
     assert "Nothing is due. Let's learn something new." in result.output
-    assert store.resumable_session(ALICE, subject_id, datetime.now(UTC)) is None
-    with store.pool.connection() as conn:
-        ended = conn.execute(
-            "select ended_at from study_sessions where id = %s", (found.session_id,)
-        ).fetchone()["ended_at"]
-    assert ended is not None
+    assert ended_at(store, session_id) is not None

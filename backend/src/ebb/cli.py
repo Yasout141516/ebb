@@ -6,6 +6,7 @@ the commands that use them; `ebb --help` and `ebb status` never load them.
 
 import atexit
 from contextlib import ExitStack
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
@@ -166,14 +167,20 @@ def _pending(result: dict[str, Any]) -> dict[str, Any] | None:
     return result["__interrupt__"][0].value if "__interrupt__" in result else None
 
 
+@dataclass(frozen=True)
+class _Resume:
+    thread_id: str
+    payload: dict[str, Any] | None  # the pending question, or None to finish the cut-off step
+
+
 def _offer_resume(
     store: Store,
     graph: CompiledStateGraph,
     user_id: UUID,
     found: ResumableSession,
     held: ExitStack,
-) -> dict[str, Any] | None:
-    """The pending question if the learner resumes `found`, else None (start fresh).
+) -> _Resume | None:
+    """How to carry on with `found` if the learner resumes it, else None (start fresh).
 
     On resume the session's lock moves into `held`, so it lasts until the command exits.
     """
@@ -181,21 +188,31 @@ def _offer_resume(
         if not trying.enter_context(store.session_lock(user_id, found.thread_id)):
             console.print("That session is open in another terminal.")
             return None
-        interrupts = graph.get_state(_config(found.thread_id)).interrupts
-        if not interrupts:
-            # It stopped mid-step (e.g. while grading): every recorded answer is kept.
+        saved = graph.get_state(_config(found.thread_id))
+        if saved.interrupts:
+            payload = saved.interrupts[0].value
+            stopped_on = payload
+        elif saved.next and saved.values.get("concept"):
+            # Stopped mid-step, e.g. while grading: the answer is in the state but its
+            # step never finished. The stored attempt_id makes re-running it count once.
+            payload = None
+            stopped_on = {
+                "concept": saved.values["concept"]["name"],
+                "number": saved.values["asked_on_concept"] + 1,
+            }
+        else:
+            # Nothing to carry on with; every answer already recorded stays.
             store.end_session(user_id, found.session_id, datetime.now(UTC))
             return None
-        payload = interrupts[0].value
         ago = format_ago(datetime.now(UTC) - found.last_active_at)
-        answer = _confirm(resume_question(payload, ago))
+        answer = _confirm(resume_question(stopped_on, ago))
         if answer is None:
             raise typer.Exit(0)  # leaves the session as it was, still resumable
         if not answer:
             store.end_session(user_id, found.session_id, datetime.now(UTC))
             return None
         held.enter_context(trying.pop_all())
-        return payload
+        return _Resume(found.thread_id, payload)
 
 
 @app.command()
@@ -230,20 +247,26 @@ def study(
     graph = build_graph(tutor, store, saver)
     with ExitStack() as held:
         found = store.resumable_session(user_id, chosen.id, now)
-        payload = None if found is None else _offer_resume(store, graph, user_id, found, held)
-        if payload is not None:
-            config = _config(found.thread_id)
+        resume = None if found is None else _offer_resume(store, graph, user_id, found, held)
+        if resume is not None:
+            config = _config(resume.thread_id)
+            payload = resume.payload
         else:
             thread_id = str(uuid4())
             config = _config(thread_id)
             held.enter_context(store.session_lock(user_id, thread_id))  # a new id: always ours
             due = store.count_due(user_id, chosen.id, now)
             console.print(escape(greeting(due, store.count_new(user_id, chosen.id))))
+            payload = None
         console.print(
             f"Studying [bold]{escape(chosen.name)}[/bold]. Type q at any question to stop.\n"
         )
         try:
-            if payload is None:
+            if resume is not None and payload is None:
+                with console.status("Thinking…"):
+                    result = graph.invoke(None, config)  # finish the step that was cut off
+                payload = _pending(result)
+            elif resume is None:
                 start = {
                     "user_id": str(user_id),
                     "subject_id": str(chosen.id),

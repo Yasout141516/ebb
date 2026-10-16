@@ -388,3 +388,82 @@ def test_startup_closes_stale_sessions_and_prunes_old_checkpoints(fakes, monkeyp
     assert ended["pruned_at"] is not None
     assert saver.get_tuple(old_thread) is None
     assert store.timezones[ended["user_id"]] == "UTC"
+
+
+def crash_once(monkeypatch, owner, name: str, after: bool = False) -> None:
+    """Make owner.name raise RuntimeError on its first call (after doing its work if `after`)."""
+    real = getattr(owner, name)
+    calls = []
+
+    def flaky(*args, **kwargs):
+        calls.append(args)
+        if len(calls) > 1:
+            return real(*args, **kwargs)
+        if after:
+            real(*args, **kwargs)
+        raise RuntimeError("killed while thinking")
+
+    monkeypatch.setattr(owner, name, flaky)
+
+
+def test_resume_after_a_crash_while_grading_grades_the_answer_once(fakes, monkeypatch):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    crash_once(monkeypatch, tutor, "grade")
+    crashed = runner.invoke(cli.app, ["study"], input="right\n")  # Q1 is a short answer
+    assert isinstance(crashed.exception, RuntimeError), crashed.output
+
+    result = runner.invoke(cli.app, ["study"], input="y\nq\n")
+
+    assert result.exit_code == 0, result.output
+    question = "You stopped on Networks 1, question 1, a moment ago. Resume? [Y/n]"
+    assert question in result.output
+    assert "● Correct" in result.output.split(question, 1)[1]
+    assert len(store.sessions) == 1 and len(store.attempts) == 1
+    [row] = [r for r in store.attempts.values()]
+    assert row.answer_text == "right"
+
+
+def test_resume_after_a_crash_once_recorded_does_not_count_twice(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    crash_once(monkeypatch, store, "record_answer", after=True)  # saved, then the process died
+    crashed = runner.invoke(cli.app, ["study"], input="right\n")
+    assert isinstance(crashed.exception, RuntimeError), crashed.output
+    assert len(store.attempts) == 1
+
+    result = runner.invoke(cli.app, ["study"], input="y\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Resume? [Y/n]" in result.output
+    assert len(store.sessions) == 1 and len(store.attempts) == 1
+
+
+def test_declining_a_resume_after_a_crash_starts_fresh(fakes, monkeypatch):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    crash_once(monkeypatch, tutor, "grade")
+    runner.invoke(cli.app, ["study"], input="right\n")
+    old_id, old = only_session(store)
+
+    result = runner.invoke(cli.app, ["study"], input="n\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert old["ended_at"] is not None and len(store.sessions) == 2
+    assert len(store.attempts) == 0  # declined: the ungraded answer is dropped
+    assert "Nothing is due. Let's learn something new." in result.output
+
+
+def test_session_with_nothing_pending_is_closed_and_greeted(fakes):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    [subject] = store.list_subjects(next(iter(store.profiles)))
+    # A session whose process died before its first checkpoint was written.
+    session_id = store.create_session(next(iter(store.profiles)), subject.id, "never-saved")
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Resume?" not in result.output
+    assert store.sessions[session_id]["ended_at"] is not None
+    assert "Nothing is due. Let's learn something new." in result.output

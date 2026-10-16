@@ -144,8 +144,15 @@ there without ending the session).
   render it as the next question, and continue the normal loop. No answer is
   re-graded and nothing is double-counted.
 - **No:** close that session (`ended_at = now`) and start a new one.
-- If the saved state has no pending question (e.g. it crashed while grading), treat it
-  as not resumable: close it and start fresh. Any answer that was fully recorded stays.
+- If the saved state has no pending question but a step still to run (e.g. it was
+  stopped while grading an answer), it is still resumable: the same prompt names the
+  question whose answer was being processed (the concept in the state, question
+  `asked_on_concept + 1`). **Yes** finishes that step (`graph.invoke(None, config)`)
+  and continues the normal loop; the stored `attempt_id` keeps a re-run of grading
+  from counting the answer twice. **No** closes it as above.
+- If the saved state has neither a pending question nor a step to run (e.g. the process
+  died before the first checkpoint), treat it as not resumable: close it and start
+  fresh. Any answer that was fully recorded stays.
 
 ### Sessions and checkpoints
 
@@ -249,7 +256,8 @@ Milestone 1's classes and messages are unchanged. New cases:
 | Invalid `EBB_TIMEZONE` | `ConfigError` at startup | one line naming the variable, exit 2 |
 | Extending fails (`AllProvidersExhausted`) | end via `summarize` | the exhausted notice, then the summary |
 | Extending finds nothing new | end via `summarize` | "You're all caught up — next review …" |
-| Saved session has no pending question | close it, start fresh | the normal greeting |
+| Saved session stopped mid-step (e.g. while grading) | offer to resume; yes finishes that step | the resume prompt |
+| Saved session has nothing pending | close it, start fresh | the normal greeting |
 | Session locked by another terminal | offer a new session | "That session is open in another terminal." |
 
 ## Testing
@@ -259,7 +267,7 @@ Milestone 1's classes and messages are unchanged. New cases:
 | Pure | the new pick order (due by lowest tide, then new by position, then none); routing without the session cap |
 | Graph (offline) | a session that runs past three concepts until quit; due reviews before new concepts; nothing due → new; all learned → `extend_subject` → new concepts taught; extend returns only duplicates → ends with the all-caught-up notice; extend fails → exhausted notice; cross-session avoid list passed to `generate_questions`; the duplicate-answer path clears stale feedback |
 | Database | `002` applies to a database holding milestone 1 data and keeps it; composite FKs reject a cross-user row; `record_attempt` applies grades to the current row (two stale snapshots in sequence both count); stale-session closing; 24-hour window boundary; checkpoint pruning |
-| Resume (database) | run to a question, drop the graph, rebuild it with a new `PostgresSaver` on the same thread, read the pending question, resume, and finish; no attempt double-counted; a crashed state with no pending question is closed |
+| Resume (database) | run to a question, drop the graph, rebuild it with a new `PostgresSaver` on the same thread, read the pending question, resume, and finish; no attempt double-counted; a state stopped while grading resumes and grades the answer once; a state with nothing pending is closed |
 | Concurrency | a second advisory-lock holder on the same thread is refused |
 | Time zone | valid name, invalid name (exit 2), unset → local; dates rendered in the resolved zone |
 | CLI | greeting variants; resume prompt yes / no; "open in another terminal" |
