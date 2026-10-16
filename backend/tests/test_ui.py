@@ -7,12 +7,17 @@ from rich.console import Console
 
 from ebb.domain import Concept
 from ebb.ui import (
+    caught_up_line,
     due_label,
+    format_ago,
     format_day,
     format_tide,
+    greeting,
     read_reply,
+    read_yes_no,
     render_summary,
     render_turn,
+    resume_question,
     stage_dots,
     status_table,
 )
@@ -125,3 +130,45 @@ def test_due_label_and_summary_use_the_time_zone():
     }
     render_summary(console, final, DHAKA)
     assert "Sat 17 Oct" in console.export_text()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("", True), ("y", True), ("YES", True), (" n ", False), ("No", False), ("maybe", None)],
+)
+def test_read_yes_no(raw, expected):
+    assert read_yes_no(raw) is expected
+
+
+@pytest.mark.parametrize(
+    ("delta", "text"),
+    [
+        (timedelta(seconds=20), "a moment ago"),
+        (timedelta(minutes=1), "1 minute ago"),
+        (timedelta(minutes=12), "12 minutes ago"),
+        (timedelta(hours=1), "1 hour ago"),
+        (timedelta(hours=3, minutes=50), "3 hours ago"),
+    ],
+)
+def test_format_ago(delta, text):
+    assert format_ago(delta) == text
+
+
+def test_greeting_variants():
+    assert greeting(3, 2) == "Welcome back — 3 ideas are ebbing. Reviewing those first."
+    assert greeting(1, 0) == "Welcome back — 1 idea is ebbing. Reviewing those first."
+    assert greeting(0, 4) == "Nothing is due. Let's learn something new."
+    assert greeting(0, 0) == "You've learned every concept here. Finding more advanced ones…"
+
+
+def test_resume_question():
+    assert (
+        resume_question({"concept": "DNS resolution", "number": 2}, "3 hours ago")
+        == "You stopped on DNS resolution, question 2, 3 hours ago. Resume? [Y/n]"
+    )
+
+
+def test_caught_up_line_in_the_time_zone():
+    due = datetime(2026, 10, 16, 20, tzinfo=UTC)
+    assert caught_up_line(due, DHAKA) == "You're all caught up — next review Sat 17 Oct."
+    assert caught_up_line(None, DHAKA) == "You're all caught up."

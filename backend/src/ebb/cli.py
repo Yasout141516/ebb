@@ -5,6 +5,7 @@ the commands that use them; `ebb --help` and `ebb status` never load them.
 """
 
 import atexit
+from contextlib import ExitStack
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
@@ -17,10 +18,24 @@ from ebb.config import ConfigError, Settings, resolve_timezone
 from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
-from ebb.domain import Subject
-from ebb.ui import read_reply, render_summary, render_turn, status_table
+from ebb.domain import ResumableSession, Subject
+from ebb.store import Store
+from ebb.ui import (
+    caught_up_line,
+    format_ago,
+    greeting,
+    read_reply,
+    read_yes_no,
+    render_summary,
+    render_turn,
+    resume_question,
+    status_table,
+)
 
 if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+    from langgraph.graph.state import CompiledStateGraph
+
     from ebb.llm.tutor import LangChainTutor
 
 app = typer.Typer(
@@ -122,43 +137,135 @@ def new(topic: Annotated[str, typer.Argument(help="What you are studying.")]) ->
     console.print("\nStart with: [bold]ebb study[/bold]")
 
 
+def _checkpointer(store: PgStore) -> BaseCheckpointSaver:
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    saver = PostgresSaver(store.pool)
+    saver.setup()  # creates or upgrades its own tables; idempotent
+    return saver
+
+
+def _confirm(question: str) -> bool | None:
+    """Ask until the answer is yes or no; None on end of input or Ctrl+C."""
+    while True:
+        try:
+            raw = console.input(f"{escape(question)} ")
+        except KeyboardInterrupt, EOFError:
+            console.print()
+            return None
+        answer = read_yes_no(raw)
+        if answer is not None:
+            return answer
+
+
+def _config(thread_id: str) -> dict[str, Any]:
+    return {"configurable": {"thread_id": thread_id}}
+
+
+def _pending(result: dict[str, Any]) -> dict[str, Any] | None:
+    return result["__interrupt__"][0].value if "__interrupt__" in result else None
+
+
+def _offer_resume(
+    store: Store,
+    graph: CompiledStateGraph,
+    user_id: UUID,
+    found: ResumableSession,
+    held: ExitStack,
+) -> dict[str, Any] | None:
+    """The pending question if the learner resumes `found`, else None (start fresh).
+
+    On resume the session's lock moves into `held`, so it lasts until the command exits.
+    """
+    with ExitStack() as trying:
+        if not trying.enter_context(store.session_lock(user_id, found.thread_id)):
+            console.print("That session is open in another terminal.")
+            return None
+        interrupts = graph.get_state(_config(found.thread_id)).interrupts
+        if not interrupts:
+            # It stopped mid-step (e.g. while grading): every recorded answer is kept.
+            store.end_session(user_id, found.session_id, datetime.now(UTC))
+            return None
+        payload = interrupts[0].value
+        ago = format_ago(datetime.now(UTC) - found.last_active_at)
+        answer = _confirm(resume_question(payload, ago))
+        if answer is None:
+            raise typer.Exit(0)  # leaves the session as it was, still resumable
+        if not answer:
+            store.end_session(user_id, found.session_id, datetime.now(UTC))
+            return None
+        held.enter_context(trying.pop_all())
+        return payload
+
+
 @app.command()
 def study(
     subject: Annotated[str | None, typer.Argument(help="Subject name (default: newest).")] = None,
 ) -> None:
     """Run a quiz session."""
-    from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.types import Command
 
     from ebb.graph.build import build_graph
 
     settings, store = _open_store()
-    tutor = _tutor(settings)
     user_id = settings.ebb_dev_user_id
     try:
         tz = resolve_timezone(settings.ebb_timezone)
     except ConfigError as error:
         _fail(str(error), code=2)
+    tutor = _tutor(settings)
+
+    store.set_timezone(user_id, tz.key)
+    now = datetime.now(UTC)
+    store.close_stale_sessions(user_id, now)
+    saver = _checkpointer(store)
+    # Learning state lives in Ebb's own tables; old checkpoints are only resume data.
+    old_threads = store.threads_to_prune(user_id, now)
+    for old_thread in old_threads:
+        saver.delete_thread(old_thread)
+    if old_threads:
+        store.mark_pruned(user_id, old_threads, now)
+
     chosen = _subject(store, user_id, subject)
-    graph = build_graph(tutor, store, InMemorySaver())
-    thread_id = str(uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
-    console.print(f"Studying [bold]{escape(chosen.name)}[/bold]. Type q at any question to stop.\n")
-    start = {"user_id": str(user_id), "subject_id": str(chosen.id), "thread_id": thread_id}
-    try:
-        with console.status("Preparing questions…"):
-            result = graph.invoke(start, config)
-        while "__interrupt__" in result:
-            payload = result["__interrupt__"][0].value
-            render_turn(console, payload)
-            reply = _ask(payload)
-            with console.status("Thinking…"):
-                result = graph.invoke(Command(resume=reply), config)
-    except ConfigError as error:
-        _fail(str(error), code=2)
-    except KeyboardInterrupt:
-        _fail("Stopped. Every answer you finished is saved.", code=130)
-    render_summary(console, result, tz)
+    graph = build_graph(tutor, store, saver)
+    with ExitStack() as held:
+        found = store.resumable_session(user_id, chosen.id, now)
+        payload = None if found is None else _offer_resume(store, graph, user_id, found, held)
+        if payload is not None:
+            config = _config(found.thread_id)
+        else:
+            thread_id = str(uuid4())
+            config = _config(thread_id)
+            held.enter_context(store.session_lock(user_id, thread_id))  # a new id: always ours
+            due = store.count_due(user_id, chosen.id, now)
+            console.print(escape(greeting(due, store.count_new(user_id, chosen.id))))
+        console.print(
+            f"Studying [bold]{escape(chosen.name)}[/bold]. Type q at any question to stop.\n"
+        )
+        try:
+            if payload is None:
+                start = {
+                    "user_id": str(user_id),
+                    "subject_id": str(chosen.id),
+                    "thread_id": thread_id,
+                }
+                with console.status("Preparing questions…"):
+                    result = graph.invoke(start, config)
+                payload = _pending(result)
+            while payload is not None:
+                render_turn(console, payload)
+                reply = _ask(payload)
+                with console.status("Thinking…"):
+                    result = graph.invoke(Command(resume=reply), config)
+                payload = _pending(result)
+        except ConfigError as error:
+            _fail(str(error), code=2)
+        except KeyboardInterrupt:
+            _fail("Stopped. Every answer you finished is saved.", code=130)
+        render_summary(console, result, tz)
+        if result.get("caught_up"):
+            soonest = store.next_review_at(user_id, chosen.id)
+            console.print(escape(caught_up_line(soonest, tz)))
 
 
 @app.command()

@@ -31,7 +31,9 @@ def migrate(conn: Connection, until: str | None = None) -> list[str]:
                 continue
             if until is not None and script.name > until:
                 break
-            conn.execute(script.read_text(encoding="utf-8"))
+            # A script holds many statements, which a prepared statement cannot; the pool
+            # prepares everything (prepare_threshold 0), so opt out here.
+            conn.execute(script.read_text(encoding="utf-8"), prepare=False)
             conn.execute("insert into schema_migrations (version) values (%s)", (script.name,))
             applied.append(script.name)
     return applied

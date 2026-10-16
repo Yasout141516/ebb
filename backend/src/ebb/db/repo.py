@@ -1,12 +1,13 @@
 """Postgres implementation of `Store`. Every query filters on user_id (review decision E1)."""
 
 from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
@@ -325,5 +326,9 @@ class PgStore:
             try:
                 yield got
             finally:
+                # A dead connection holds no lock; don't let it hide the error that got here.
                 if got:
-                    conn.execute("select pg_advisory_unlock(hashtextextended(%s, 0))", (thread_id,))
+                    with suppress(psycopg.OperationalError):
+                        conn.execute(
+                            "select pg_advisory_unlock(hashtextextended(%s, 0))", (thread_id,)
+                        )

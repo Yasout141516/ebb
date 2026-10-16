@@ -1,16 +1,22 @@
 """The CLI end to end with typed input, using the fakes instead of Postgres and Gemini."""
 
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
+
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 from typer.testing import CliRunner
 
 from ebb import cli
 from ebb.config import ConfigError, Settings
 from ebb.llm.tutor import AllProvidersExhausted
-from tests.fakes import FakeTutor, MemoryStore
+from ebb.ui import format_day
+from tests.fakes import FakeTutor, MemoryStore, seed_concept
 
 runner = CliRunner()
-# Captured at import time, before any test patches cli._tutor.
+# Captured at import time, before any test patches cli._tutor or cli._ask.
 _real_tutor = cli._tutor
+_real_ask = cli._ask
 
 
 @pytest.fixture
@@ -20,6 +26,9 @@ def fakes(monkeypatch):
     store.ensure_profile(settings.ebb_dev_user_id)
     monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
     monkeypatch.setattr(cli, "_tutor", lambda s: tutor)
+    # One saver for every run in a test, as the Postgres one outlives a process.
+    saver = InMemorySaver()
+    monkeypatch.setattr(cli, "_checkpointer", lambda s: saver)
     return store, tutor
 
 
@@ -177,3 +186,205 @@ def test_a_bad_timezone_exits_2_with_the_message(fakes, monkeypatch, command):
 
     assert result.exit_code == 2
     assert "EBB_TIMEZONE 'Mars/Olympus' is not a known time zone" in result.output
+
+
+def interrupted_study(monkeypatch, typed: str = "right\n", at: int = 2, subject: str | None = None):
+    """Run `ebb study` and close the terminal at the `at`-th question; returns that question."""
+    asked = []
+
+    def ask(payload):
+        asked.append(payload)
+        if len(asked) == at:
+            raise RuntimeError("terminal closed")
+        return _real_ask(payload)
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    args = ["study"] if subject is None else ["study", subject]
+    result = runner.invoke(cli.app, args, input=typed)
+    monkeypatch.setattr(cli, "_ask", _real_ask)
+    assert isinstance(result.exception, RuntimeError), result.output
+    return asked[-1]
+
+
+def only_session(store: MemoryStore) -> tuple:
+    [(session_id, session)] = store.sessions.items()
+    return session_id, session
+
+
+def resumable(store: MemoryStore, session: dict):
+    return store.resumable_session(session["user_id"], session["subject_id"], datetime.now(UTC))
+
+
+def test_resume_yes_continues_at_the_same_question(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    pending = interrupted_study(monkeypatch)
+    assert pending["concept"] == "Networks 1" and pending["number"] == 2
+
+    result = runner.invoke(cli.app, ["study"], input="y\n1\nq\n")
+
+    assert result.exit_code == 0, result.output
+    question = "You stopped on Networks 1, question 2, a moment ago. Resume? [Y/n]"
+    assert question in result.output
+    assert pending["question"]["prompt"] in result.output.split(question, 1)[1]
+    assert "Welcome back" not in result.output and "Nothing is due" not in result.output
+    assert len(store.sessions) == 1  # the same session carried on
+    assert len(store.attempts) == 2  # one answer before the terminal closed, one after
+    assert "Session summary" in result.output
+
+
+def test_resume_no_starts_fresh(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    old_id, old = only_session(store)
+
+    # "maybe" is not an answer, so the question is asked again.
+    result = runner.invoke(cli.app, ["study"], input="maybe\nn\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert result.output.count("Resume? [Y/n]") == 2
+    assert old["ended_at"] is not None
+    assert len(store.sessions) == 2
+    assert "Nothing is due. Let's learn something new." in result.output
+
+
+def test_eof_at_resume_prompt_leaves_session_resumable(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    old_id, old = only_session(store)
+
+    result = runner.invoke(cli.app, ["study"], input="")
+
+    assert result.exit_code == 0, result.output
+    assert "Resume? [Y/n]" in result.output
+    assert resumable(store, old).session_id == old_id
+    assert len(store.sessions) == 1
+
+
+def test_ctrl_c_at_resume_prompt_leaves_session_resumable(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    old_id, old = only_session(store)
+
+    def interrupted(prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.console, "input", interrupted)
+    result = runner.invoke(cli.app, ["study"])
+
+    assert result.exit_code == 0, result.output
+    assert resumable(store, old).session_id == old_id
+    assert len(store.sessions) == 1
+
+
+def test_locked_session_starts_fresh(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    old_id, old = only_session(store)
+
+    with store.session_lock(old["user_id"], old["thread_id"]) as held:
+        assert held is True
+        result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "That session is open in another terminal." in result.output
+    assert "Resume?" not in result.output
+    assert "Nothing is due. Let's learn something new." in result.output
+    assert old["ended_at"] is None  # still the other terminal's
+    assert len(store.sessions) == 2
+
+
+def test_other_subjects_session_is_not_offered(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch, subject="Networks")
+    old_id, old = only_session(store)
+    runner.invoke(cli.app, ["new", "Biology"])
+
+    result = runner.invoke(cli.app, ["study", "Biology"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Resume?" not in result.output
+    assert "Nothing is due. Let's learn something new." in result.output
+    assert resumable(store, old).session_id == old_id
+
+
+def test_q_ends_the_session_and_is_not_offered_again(fakes):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    runner.invoke(cli.app, ["study"], input="right\nq\n")
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Resume?" not in result.output
+    assert len(store.sessions) == 2
+    assert all(s["ended_at"] is not None for s in store.sessions.values())
+
+
+def test_greeting_shows_due_count(fakes):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    now = datetime.now(UTC)
+    seed_concept(
+        store,
+        next(iter(store.concepts)),
+        stage=1,
+        next_review_at=now - timedelta(hours=1),
+        last_reviewed_at=now - timedelta(days=1, hours=1),
+        review_count=1,
+    )
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Welcome back — 1 idea is ebbing. Reviewing those first." in result.output
+
+
+def test_caught_up_line_uses_the_next_review_date(fakes):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    now = datetime.now(UTC)
+    for days, concept_id in enumerate(list(store.concepts), start=3):
+        seed_concept(
+            store,
+            concept_id,
+            stage=2,
+            next_review_at=now + timedelta(days=days),
+            last_reviewed_at=now - timedelta(days=1),
+            review_count=2,
+        )
+
+    result = runner.invoke(cli.app, ["study"], input="")
+
+    assert result.exit_code == 0, result.output
+    assert "You've learned every concept here. Finding more advanced ones…" in result.output
+    day = format_day(now + timedelta(days=3), ZoneInfo("UTC"))
+    assert f"You're all caught up — next review {day}." in result.output
+
+
+def test_startup_closes_stale_sessions_and_prunes_old_checkpoints(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    runner.invoke(cli.app, ["study"], input="q\n")
+    interrupted_study(monkeypatch)
+    (_, ended), (_, stale) = store.sessions.items()
+    now = datetime.now(UTC)
+    ended["ended_at"] = now - timedelta(days=8)
+    stale["last_active_at"] = stale_at = now - timedelta(hours=30)
+    saver = cli._checkpointer(store)
+    old_thread = {"configurable": {"thread_id": ended["thread_id"]}}
+    assert saver.get_tuple(old_thread) is not None
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Resume?" not in result.output
+    assert stale["ended_at"] == stale_at
+    assert ended["pruned_at"] is not None
+    assert saver.get_tuple(old_thread) is None
+    assert store.timezones[ended["user_id"]] == "UTC"

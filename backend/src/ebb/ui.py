@@ -1,7 +1,7 @@
 """Terminal rendering and input parsing. Formatting helpers are pure and tested."""
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -48,6 +48,48 @@ def read_reply(raw: str, options: Sequence[str]) -> dict[str, Any] | None:
     if options and parse_choice(options, text) is None:
         return None
     return {"answer": text}
+
+
+def read_yes_no(raw: str) -> bool | None:
+    """Blank or y/yes is yes, n/no is no (any case); None means ask again."""
+    text = raw.strip().casefold()
+    if text in ("", "y", "yes"):
+        return True
+    if text in ("n", "no"):
+        return False
+    return None
+
+
+def format_ago(delta: timedelta) -> str:
+    minutes = int(delta.total_seconds() // 60)
+    if minutes < 1:
+        return "a moment ago"
+    if minutes < 60:
+        return "1 minute ago" if minutes == 1 else f"{minutes} minutes ago"
+    hours = minutes // 60
+    return "1 hour ago" if hours == 1 else f"{hours} hours ago"
+
+
+def greeting(due: int, new: int) -> str:
+    if due == 1:
+        return "Welcome back — 1 idea is ebbing. Reviewing those first."
+    if due > 1:
+        return f"Welcome back — {due} ideas are ebbing. Reviewing those first."
+    if new > 0:
+        return "Nothing is due. Let's learn something new."
+    return "You've learned every concept here. Finding more advanced ones…"
+
+
+def resume_question(payload: dict[str, Any], ago: str) -> str:
+    return (
+        f"You stopped on {payload['concept']}, question {payload['number']}, {ago}. Resume? [Y/n]"
+    )
+
+
+def caught_up_line(next_review: datetime | None, tz: ZoneInfo) -> str:
+    if next_review is None:
+        return "You're all caught up."
+    return f"You're all caught up — next review {format_day(next_review, tz)}."
 
 
 def status_table(concepts: Sequence[Concept], now: datetime, tz: ZoneInfo) -> Table:

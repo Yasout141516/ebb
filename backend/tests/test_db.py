@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
+import psycopg
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -346,3 +347,30 @@ def test_session_lock_leaves_a_connection_for_queries_and_other_threads(store):
         assert store.list_subjects(ALICE) == []  # the second pooled connection still serves
     with store.session_lock(ALICE, "t-1") as a, store.session_lock(ALICE, "t-2") as b:
         assert a is True and b is True
+
+
+def lock_is_free(pg_pool, thread_id: str) -> bool:
+    """Ask from a connection outside the pool, which holds no locks of its own."""
+    with psycopg.connect(pg_pool.conninfo, autocommit=True) as other:
+        got = other.execute(
+            "select pg_try_advisory_lock(hashtextextended(%s, 0))", (thread_id,)
+        ).fetchone()[0]
+    return got
+
+
+def test_session_lock_is_released_when_the_body_raises(store, pg_pool):
+    with pytest.raises(RuntimeError), store.session_lock(ALICE, "t-1") as got:
+        assert got is True
+        raise RuntimeError("crash mid-session")
+    assert lock_is_free(pg_pool, "t-1")
+
+
+def test_session_lock_on_a_dead_connection_keeps_the_original_error(store, pg_pool):
+    with pytest.raises(RuntimeError, match="crash"), store.session_lock(ALICE, "t-1"):
+        with pg_pool.connection() as conn:
+            conn.execute(
+                "select pg_terminate_backend(pid) from pg_locks where locktype = 'advisory'"
+                " and database = (select oid from pg_database where datname = current_database())"
+            )
+        raise RuntimeError("crash")
+    assert lock_is_free(pg_pool, "t-1")
