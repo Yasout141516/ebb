@@ -5,18 +5,19 @@ the commands that use them; `ebb --help` and `ebb status` never load them.
 """
 
 import atexit
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
 
+import psycopg
 import typer
 from rich.console import Console
 from rich.markup import escape
 
 from ebb.config import ConfigError, Settings, resolve_timezone
-from ebb.db.migrate import migrate
+from ebb.db.migrate import MIGRATION_LOCK, migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
 from ebb.domain import ResumableSession, Subject
@@ -142,7 +143,17 @@ def _checkpointer(store: PgStore) -> BaseCheckpointSaver:
     from langgraph.checkpoint.postgres import PostgresSaver
 
     saver = PostgresSaver(store.pool)
-    saver.setup()  # creates or upgrades its own tables; idempotent
+    # setup() creates or upgrades its own tables. Two first runs at once must not race, but
+    # it runs CREATE INDEX CONCURRENTLY, which no transaction may hold, so take the
+    # migrations' key as a session-level lock on a connection of its own.
+    with store.pool.connection() as conn:
+        conn.execute("select pg_advisory_lock(%s)", (MIGRATION_LOCK,))
+        try:
+            saver.setup()
+        finally:
+            # A dead connection holds no lock; don't let it hide the error that got here.
+            with suppress(psycopg.OperationalError):
+                conn.execute("select pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
     return saver
 
 

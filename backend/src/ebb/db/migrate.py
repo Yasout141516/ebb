@@ -4,7 +4,7 @@ from importlib.resources import files
 
 from psycopg import Connection
 
-MIGRATION_LOCK = 7_231_001  # arbitrary constant for pg_advisory_xact_lock
+MIGRATION_LOCK = 7_231_001  # arbitrary advisory-lock key; cli._checkpointer uses it too
 
 
 def migrate(conn: Connection, until: str | None = None) -> list[str]:

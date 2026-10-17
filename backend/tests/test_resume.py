@@ -1,9 +1,12 @@
 """Resuming a session from a new process: real Postgres, real PostgresSaver, fake tutor."""
 
+import threading
+import time
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+import psycopg
 import pytest
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph.state import CompiledStateGraph
@@ -12,6 +15,7 @@ from typer.testing import CliRunner
 
 from ebb import cli
 from ebb.config import Settings
+from ebb.db.migrate import MIGRATION_LOCK
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
 from tests.fakes import FakeTutor
@@ -156,3 +160,39 @@ def test_state_with_nothing_pending_is_closed(store, subject_id, cli_on_postgres
     assert "Resume?" not in result.output
     assert "Nothing is due. Let's learn something new." in result.output
     assert ended_at(store, session_id) is not None
+
+
+def waiting_for_the_migration_lock(conn: psycopg.Connection) -> bool:
+    # A bigint advisory key shows in pg_locks as classid (high half) and objid (low half).
+    row = conn.execute(
+        "select count(*) from pg_locks"
+        " where locktype = 'advisory' and not granted and classid = 0 and objid::bigint = %s"
+        " and database = (select oid from pg_database where datname = current_database())",
+        (MIGRATION_LOCK,),
+    ).fetchone()
+    return row[0] > 0
+
+
+def saver_tables_exist(conn: psycopg.Connection) -> bool:
+    return conn.execute("select to_regclass('checkpoints') is not null").fetchone()[0]
+
+
+def test_checkpointer_setup_waits_for_the_migration_lock(pg_pool):
+    # pg_pool's fresh schema has no saver tables yet, as on a first run.
+    store = PgStore(pg_pool)
+    savers = []
+    with psycopg.connect(pg_pool.conninfo, autocommit=True) as other_start:
+        other_start.execute("select pg_advisory_lock(%s)", (MIGRATION_LOCK,))
+        worker = threading.Thread(target=lambda: savers.append(cli._checkpointer(store)))
+        worker.start()
+        try:
+            deadline = time.monotonic() + 5
+            while not waiting_for_the_migration_lock(other_start):
+                assert time.monotonic() < deadline, "setup() did not wait for the lock"
+                time.sleep(0.02)
+            assert savers == [] and not saver_tables_exist(other_start)
+        finally:
+            other_start.execute("select pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
+            worker.join(timeout=10)
+        assert not worker.is_alive() and len(savers) == 1
+        assert saver_tables_exist(other_start)
