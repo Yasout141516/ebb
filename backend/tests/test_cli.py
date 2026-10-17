@@ -472,3 +472,46 @@ def test_session_with_nothing_pending_is_closed_and_greeted(fakes):
     assert store.sessions[session_id]["ended_at"] is not None
     assert "Nothing is due. Let's learn something new." in result.output
 
+
+def held_elsewhere(store: MemoryStore) -> bool:
+    """Whether the open session's lock is taken, so another terminal would be refused it."""
+    [session] = [s for s in store.sessions.values() if s["ended_at"] is None]
+    with store.session_lock(session["user_id"], session["thread_id"]) as got:
+        return not got
+
+
+def test_a_fresh_session_holds_its_lock_while_it_runs(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    seen = []
+
+    def ask(payload):
+        seen.append(held_elsewhere(store))
+        return {"quit": True}
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    result = runner.invoke(cli.app, ["study"])
+
+    assert result.exit_code == 0, result.output
+    assert seen == [True]
+    assert store.locks == set()  # released when the command ends
+
+
+def test_a_resumed_session_holds_its_lock_while_it_runs(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    seen = []
+
+    def ask(payload):
+        seen.append(held_elsewhere(store))
+        return {"quit": True}
+
+    monkeypatch.setattr(cli, "_ask", ask)
+    result = runner.invoke(cli.app, ["study"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Resume? [Y/n]" in result.output
+    assert len(store.sessions) == 1  # the resumed session, not a fresh one
+    assert seen == [True]
+    assert store.locks == set()
