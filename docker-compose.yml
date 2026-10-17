@@ -28,6 +28,9 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql://ebb:ebb@db:5432/ebb
+    # tini as PID 1: a closed terminal or `docker stop` then reaches ebb with the default
+    # signal actions, as natively, so the session stays resumable.
+    init: true
     stdin_open: true
     tty: true
 

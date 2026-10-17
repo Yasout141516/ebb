@@ -27,7 +27,8 @@ docker compose run --rm ebb status
 ```
 
 Dates show in `EBB_TIMEZONE`, an IANA name such as `Asia/Dhaka` (set it in `.env`).
-Inside Docker the default is UTC.
+Without it, Ebb run natively uses the computer's time zone, or UTC if it can't tell;
+inside Docker the default is UTC.
 
 For development, with [uv](https://docs.astral.sh/uv/):
 
@@ -39,10 +40,11 @@ uv run pytest                     # database tests need the compose db
 uv run ebb study
 ```
 
-**Try spaced review now:** pretend a week has passed, so every learned concept becomes due:
+**Try spaced review now:** pretend a week has passed, so every concept whose next review
+was within the next 7 days becomes due:
 
 ```bash
-# Pretend a week has passed: every learned concept becomes due
+# Pretend a week has passed: reviews due within the next 7 days become due now
 docker compose exec db psql -U ebb -d ebb -c \
   "update concepts set last_reviewed_at = last_reviewed_at - interval '7 days', next_review_at = next_review_at - interval '7 days' where stage > 0"
 ```
@@ -61,6 +63,10 @@ Spaced review comes first: `ebb study` greets with how many concepts are due and
 reviews the most faded first, then teaches new ones. If the terminal closes or Ebb
 crashes mid-session, the next `ebb study` within 24 hours offers to resume at the
 same question.
+
+A session runs until you type q. When every concept is learned and nothing is due,
+Ebb asks the tutor for more advanced concepts and carries on with those. It never
+repeats a question you have already answered.
 
 ## What's here
 
