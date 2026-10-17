@@ -12,6 +12,21 @@ RESUME_WINDOW = timedelta(hours=24)
 PRUNE_AFTER = timedelta(days=7)
 
 
+def new_concepts(
+    existing_names: Sequence[str], concepts: Sequence[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """The concepts whose names match neither an existing name nor an earlier one in the
+    batch, compared stripped and case-insensitively; shared by every Store's add_concepts."""
+    seen = {name.strip().casefold() for name in existing_names}
+    fresh = []
+    for name, description in concepts:
+        key = name.strip().casefold()
+        if key not in seen:
+            seen.add(key)
+            fresh.append((name, description))
+    return fresh
+
+
 class Store(Protocol):
     def ensure_profile(self, user_id: UUID) -> None: ...
 
@@ -33,10 +48,11 @@ class Store(Protocol):
         """Raises LookupError if the session or a question's concept is not the user's."""
         ...
 
-    def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
+    def record_answer(self, user_id: UUID, answer: Answer) -> Concept:
         """Grade `answer` against the concept's current row, under a row lock.
 
-        Returns the concept after the grade, or None if answer.id was already recorded.
+        Returns the concept after the grade. If answer.id was already recorded, nothing is
+        written and the stored row (which already holds that grade) is returned.
         Raises LookupError if the referenced question/concept is not the user's.
         """
         ...

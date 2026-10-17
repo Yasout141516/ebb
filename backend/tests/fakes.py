@@ -19,7 +19,7 @@ from ebb.domain import (
 )
 from ebb.llm.schemas import ConceptDraft
 from ebb.llm.tutor import AllProvidersExhausted, Generated
-from ebb.store import PRUNE_AFTER, RESUME_WINDOW
+from ebb.store import PRUNE_AFTER, RESUME_WINDOW, new_concepts
 
 # (type, difficulty) of each question in a fake batch, in order.
 BATCH_PATTERN = [("short", 1), ("mcq", 1), ("mcq", 2), ("short", 3), ("mcq", 3)]
@@ -34,7 +34,7 @@ class MemoryStore:
         self.questions: dict[UUID, Question] = {}
         self.attempts: dict[UUID, Answer] = {}
         self.stages: dict[UUID, tuple[int, int]] = {}  # answer id -> (stage before, after)
-        self.question_sessions: dict[UUID, tuple[UUID, UUID]] = {}  # question -> (user, session)
+        self.question_sessions: dict[UUID, UUID] = {}  # question id -> session id
         self.timezones: dict[UUID, str] = {}
         self.locks: set[str] = set()
 
@@ -88,25 +88,26 @@ class MemoryStore:
                 raise LookupError("concept not found")
         for question in questions:
             self.questions[question.id] = question
-            self.question_sessions[question.id] = (user_id, session_id)
+            self.question_sessions[question.id] = session_id
 
-    def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
+    def record_answer(self, user_id: UUID, answer: Answer) -> Concept:
         question = self.questions.get(answer.question_id)
         owner, concept = self.concepts.get(answer.concept_id, (None, None))
+        session = self.sessions[self.question_sessions[question.id]] if question else None
         if (
             question is None
             or question.concept_id != answer.concept_id
-            or self.question_sessions[question.id][0] != user_id
+            or session["user_id"] != user_id
             or owner != user_id
         ):
             raise LookupError(f"question {answer.question_id} not found")
         if answer.id in self.attempts:
-            return None
+            return concept  # already recorded: the stored concept holds this grade
         after = mastery.apply_grade(concept, answer.grade, answer.graded_at)
         self.attempts[answer.id] = answer
         self.stages[answer.id] = (concept.stage, after.stage)
         self.concepts[concept.id] = (owner, after)
-        self.sessions[self.question_sessions[question.id][1]]["last_active_at"] = answer.graded_at
+        session["last_active_at"] = answer.graded_at
         return after
 
     def answered_prompts(self, user_id: UUID, concept_id: UUID, limit: int = 40) -> list[str]:
@@ -129,23 +130,18 @@ class MemoryStore:
     ) -> int:
         if self.subjects.get(subject_id, (None,))[0] != user_id:
             raise LookupError(f"subject {subject_id} not found")
-        seen = {c.name.strip().casefold() for c in self.list_concepts(user_id, subject_id)}
-        added = 0
-        for name, description in concepts:
-            key = name.strip().casefold()
-            if key in seen:
-                continue
-            seen.add(key)
+        existing = [c.name for c in self.list_concepts(user_id, subject_id)]
+        fresh = new_concepts(existing, concepts)
+        for name, description in fresh:
             concept = Concept(uuid4(), subject_id, name, description)
             self.concepts[concept.id] = (user_id, concept)
-            added += 1
-        return added
+        return len(fresh)
 
     def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
         return sum(
             1
             for c in self.list_concepts(user_id, subject_id)
-            if c.stage >= 1 and c.next_review_at is not None and c.next_review_at <= now
+            if c.stage >= 1 and mastery.is_due(c, now)
         )
 
     def count_new(self, user_id: UUID, subject_id: UUID) -> int:

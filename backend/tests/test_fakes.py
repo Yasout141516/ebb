@@ -43,8 +43,9 @@ def test_record_answer_grades_the_current_row_and_touches_the_session():
 def test_duplicate_answer_and_other_users():
     store, _, _, question = setup()
     answer = answer_for(question, GradeValue.CORRECT)
-    assert store.record_answer(ALICE, answer).stage == 1
-    assert store.record_answer(ALICE, answer) is None
+    first = store.record_answer(ALICE, answer)
+    assert first.stage == 1
+    assert store.record_answer(ALICE, answer) == first
     assert store.concept(question.concept_id).review_count == 1
     with pytest.raises(LookupError):
         store.record_answer(BOB, answer_for(question, GradeValue.CORRECT))

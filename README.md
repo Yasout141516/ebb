@@ -27,7 +27,7 @@ docker compose run --rm ebb status
 ```
 
 Dates show in `EBB_TIMEZONE`, an IANA name such as `Asia/Dhaka` (set it in `.env`).
-Without it, Ebb run natively uses the computer's time zone, or UTC if it can't tell;
+Without it, Ebb running outside Docker uses the computer's time zone, or UTC if it can't tell;
 inside Docker the default is UTC.
 
 For development, with [uv](https://docs.astral.sh/uv/):

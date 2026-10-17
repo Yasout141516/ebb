@@ -1,10 +1,20 @@
 """Apply db/migrations/*.sql in filename order, once each."""
 
+from contextlib import AbstractContextManager
 from importlib.resources import files
 
 from psycopg import Connection
+from psycopg_pool import ConnectionPool
 
-MIGRATION_LOCK = 7_231_001  # arbitrary advisory-lock key; cli._checkpointer uses it too
+from ebb.db.locks import advisory_lock
+
+MIGRATION_LOCK = 7_231_001  # arbitrary advisory-lock key
+
+
+def migration_lock(pool: ConnectionPool) -> AbstractContextManager[bool]:
+    """MIGRATION_LOCK held at session level, for schema work that cannot run inside a
+    transaction (LangGraph's checkpointer setup uses CREATE INDEX CONCURRENTLY)."""
+    return advisory_lock(pool, MIGRATION_LOCK, wait=True)
 
 
 def migrate(conn: Connection, until: str | None = None) -> list[str]:

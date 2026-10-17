@@ -1,19 +1,19 @@
 """Postgres implementation of `Store`. Every query filters on user_id (review decision E1)."""
 
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager, suppress
+from collections.abc import Sequence
+from contextlib import AbstractContextManager
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from ebb import mastery
+from ebb.db.locks import advisory_lock
 from ebb.domain import Answer, Concept, Question, ResumableSession, Subject
-from ebb.store import PRUNE_AFTER, RESUME_WINDOW
+from ebb.store import PRUNE_AFTER, RESUME_WINDOW, new_concepts
 
 _CONCEPT_COLUMNS = (
     "id, subject_id, name, description, stage, next_review_at, last_reviewed_at, review_count"
@@ -127,7 +127,7 @@ class PgStore:
                     ],
                 )
 
-    def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
+    def record_answer(self, user_id: UUID, answer: Answer) -> Concept:
         with self.pool.connection() as conn, conn.transaction():
             owned_question = conn.execute(
                 "select session_id from questions"
@@ -164,7 +164,7 @@ class PgStore:
                 ),
             ).fetchone()
             if inserted is None:
-                return None
+                return before  # already recorded: the row already holds this answer's grade
             conn.execute(
                 "update concepts set stage = %s, next_review_at = %s, last_reviewed_at = %s,"
                 " review_count = %s where id = %s and user_id = %s",
@@ -219,13 +219,7 @@ class PgStore:
                 "select name from concepts where user_id = %s and subject_id = %s",
                 (user_id, subject_id),
             ).fetchall()
-            seen = {row["name"].strip().casefold() for row in existing}
-            fresh = []
-            for name, description in concepts:
-                key = name.strip().casefold()
-                if key not in seen:
-                    seen.add(key)
-                    fresh.append((name, description))
+            fresh = new_concepts([row["name"] for row in existing], concepts)
             if not fresh:
                 return 0
             top = conn.execute(
@@ -315,20 +309,6 @@ class PgStore:
                 (now, user_id, list(thread_ids)),
             )
 
-    @contextmanager
-    def session_lock(self, user_id: UUID, thread_id: str) -> Iterator[bool]:
-        # A session-level advisory lock belongs to one connection, so hold one for the
-        # whole block. hashtextextended gives a stable signed 64-bit key from the thread id.
-        with self.pool.connection() as conn:
-            got = conn.execute(
-                "select pg_try_advisory_lock(hashtextextended(%s, 0)) as got", (thread_id,)
-            ).fetchone()["got"]
-            try:
-                yield got
-            finally:
-                # A dead connection holds no lock; don't let it hide the error that got here.
-                if got:
-                    with suppress(psycopg.OperationalError):
-                        conn.execute(
-                            "select pg_advisory_unlock(hashtextextended(%s, 0))", (thread_id,)
-                        )
+    def session_lock(self, user_id: UUID, thread_id: str) -> AbstractContextManager[bool]:
+        # Thread ids are uuid4s, so the key is already unique without the user id.
+        return advisory_lock(self.pool, thread_id, wait=False)

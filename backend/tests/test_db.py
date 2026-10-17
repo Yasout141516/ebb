@@ -121,12 +121,13 @@ def test_record_answer_grades_the_current_row_not_a_snapshot(store, pg_pool):
     assert store.list_concepts(ALICE, subject_id)[0].review_count == 2
 
 
-def test_duplicate_answer_returns_none_and_changes_nothing(store):
+def test_duplicate_answer_returns_the_stored_row_and_changes_nothing(store):
     subject_id, _, question = subject_with_question(store)
     answer = answer_for(question, GradeValue.CORRECT)
 
-    assert store.record_answer(ALICE, answer).stage == 1
-    assert store.record_answer(ALICE, answer) is None
+    first = store.record_answer(ALICE, answer)
+    assert first.stage == 1
+    assert store.record_answer(ALICE, answer) == first
 
     concept = store.list_concepts(ALICE, subject_id)[0]
     assert concept.stage == 1 and concept.review_count == 1

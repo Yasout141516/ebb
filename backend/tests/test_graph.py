@@ -282,11 +282,11 @@ def test_mcq_attempts_are_graded_in_code():
 
 class AlreadyRecordedStore(MemoryStore):
     """Simulates a resume after a crash between the answer's commit and its checkpoint:
-    the answer is stored and graded, but record_answer reports it as a duplicate."""
+    the answer was committed once before, so the re-run is a duplicate."""
 
-    def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
-        super().record_answer(user_id, answer)
-        return None
+    def record_answer(self, user_id: UUID, answer: Answer) -> Concept:
+        super().record_answer(user_id, answer)  # the commit that happened before the crash
+        return super().record_answer(user_id, answer)  # the re-run after resuming
 
 
 def test_duplicate_answer_still_counts_in_the_session():

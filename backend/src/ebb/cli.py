@@ -5,19 +5,19 @@ the commands that use them; `ebb --help` and `ebb status` never load them.
 """
 
 import atexit
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
-import psycopg
 import typer
 from rich.console import Console
 from rich.markup import escape
 
 from ebb.config import ConfigError, Settings, resolve_timezone
-from ebb.db.migrate import MIGRATION_LOCK, migrate
+from ebb.db.migrate import migrate, migration_lock
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
 from ebb.domain import ResumableSession, Subject
@@ -73,6 +73,13 @@ def _tutor(settings: Settings) -> LangChainTutor:
 
     try:
         return LangChainTutor.from_settings(settings)
+    except ConfigError as error:
+        _fail(str(error), code=2)
+
+
+def _timezone(settings: Settings) -> ZoneInfo:
+    try:
+        return resolve_timezone(settings.ebb_timezone)
     except ConfigError as error:
         _fail(str(error), code=2)
 
@@ -143,17 +150,9 @@ def _checkpointer(store: PgStore) -> BaseCheckpointSaver:
     from langgraph.checkpoint.postgres import PostgresSaver
 
     saver = PostgresSaver(store.pool)
-    # setup() creates or upgrades its own tables. Two first runs at once must not race, but
-    # it runs CREATE INDEX CONCURRENTLY, which no transaction may hold, so take the
-    # migrations' key as a session-level lock on a connection of its own.
-    with store.pool.connection() as conn:
-        conn.execute("select pg_advisory_lock(%s)", (MIGRATION_LOCK,))
-        try:
-            saver.setup()
-        finally:
-            # A dead connection holds no lock; don't let it hide the error that got here.
-            with suppress(psycopg.OperationalError):
-                conn.execute("select pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
+    # setup() creates or upgrades its own tables; two first runs at once must not race.
+    with migration_lock(store.pool):
+        saver.setup()
     return saver
 
 
@@ -190,6 +189,7 @@ def _offer_resume(
     user_id: UUID,
     found: ResumableSession,
     held: ExitStack,
+    now: datetime,
 ) -> _Resume | None:
     """How to carry on with `found` if the learner resumes it, else None (start fresh).
 
@@ -200,30 +200,28 @@ def _offer_resume(
             console.print("That session is open in another terminal.")
             return None
         saved = graph.get_state(_config(found.thread_id))
-        if saved.interrupts:
-            payload = saved.interrupts[0].value
+        payload = saved.interrupts[0].value if saved.interrupts else None
+        if payload is not None:
             stopped_on = payload
         elif saved.next and saved.values.get("concept"):
             # Stopped mid-step, e.g. while grading: the answer is in the state but its
             # step never finished. The stored attempt_id makes re-running it count once.
-            payload = None
             stopped_on = {
                 "concept": saved.values["concept"]["name"],
                 "number": saved.values["asked_on_concept"] + 1,
             }
         else:
-            # Nothing to carry on with; every answer already recorded stays.
-            store.end_session(user_id, found.session_id, datetime.now(UTC))
-            return None
-        ago = format_ago(datetime.now(UTC) - found.last_active_at)
-        answer = _confirm(resume_question(stopped_on, ago))
-        if answer is None:
-            raise typer.Exit(0)  # leaves the session as it was, still resumable
-        if not answer:
-            store.end_session(user_id, found.session_id, datetime.now(UTC))
-            return None
-        held.enter_context(trying.pop_all())
-        return _Resume(found.thread_id, payload)
+            stopped_on = None  # nothing to carry on with; recorded answers stay
+        if stopped_on is not None:
+            ago = format_ago(now - found.last_active_at)
+            answer = _confirm(resume_question(stopped_on, ago))
+            if answer is None:
+                raise typer.Exit(0)  # leaves the session as it was, still resumable
+            if answer:
+                held.enter_context(trying.pop_all())
+                return _Resume(found.thread_id, payload)
+        store.end_session(user_id, found.session_id, now)
+        return None
 
 
 @app.command()
@@ -237,10 +235,7 @@ def study(
 
     settings, store = _open_store()
     user_id = settings.ebb_dev_user_id
-    try:
-        tz = resolve_timezone(settings.ebb_timezone)
-    except ConfigError as error:
-        _fail(str(error), code=2)
+    tz = _timezone(settings)
     tutor = _tutor(settings)
 
     store.set_timezone(user_id, tz.key)
@@ -258,7 +253,7 @@ def study(
     graph = build_graph(tutor, store, saver)
     with ExitStack() as held:
         found = store.resumable_session(user_id, chosen.id, now)
-        resume = None if found is None else _offer_resume(store, graph, user_id, found, held)
+        resume = None if found is None else _offer_resume(store, graph, user_id, found, held, now)
         if resume is not None:
             config = _config(resume.thread_id)
             payload = resume.payload
@@ -308,10 +303,7 @@ def status(
 ) -> None:
     """Show tide, stage and next review for each concept."""
     settings, store = _open_store()
-    try:
-        tz = resolve_timezone(settings.ebb_timezone)
-    except ConfigError as error:
-        _fail(str(error), code=2)
+    tz = _timezone(settings)
     chosen = _subject(store, settings.ebb_dev_user_id, subject)
     concepts = store.list_concepts(settings.ebb_dev_user_id, chosen.id)
     console.print(f"[bold]{escape(chosen.name)}[/bold]")

@@ -201,7 +201,7 @@ there without ending the session).
 - **No lost updates:** grading applies to the concept's **current database row**,
   not the graph's snapshot. `record_attempt` locks the row (`select … for update`),
   applies `mastery.apply_grade` to it, writes the attempt and the update in one
-  transaction, and returns the updated concept (or `None` for a duplicate).
+  transaction, and returns the updated concept (for a duplicate, the stored row).
   `record_attempt` therefore takes the grade and fills in the attempt's
   `stage_before` / `stage_after` from the locked row, so the attempt history is the
   database's truth. `update_mastery` stores what the database returns, and the
@@ -213,10 +213,10 @@ there without ending the session).
 
 A duplicate can only mean the process died after `record_attempt` committed but
 before `update_mastery`'s checkpoint, so the database has the answer and the
-session state does not. When `record_attempt` reports a duplicate, `update_mastery`
-re-reads the concept's current row and applies the same state update as for a new
-answer (concept, tally, streak, questions asked on the concept) and keeps the
-grade. The learner sees that answer's feedback, the summary counts it, and routing
+session state does not. For a duplicate `record_attempt` writes nothing and returns
+the concept's stored row, which already holds that grade, and `update_mastery`
+applies the same state update as for a new answer (concept, tally, streak,
+questions asked on the concept) and keeps the grade. The learner sees that answer's feedback, the summary counts it, and routing
 continues as after any answer. The stage is not changed a second time.
 
 ### Schema — `002_spaced_review.sql`
