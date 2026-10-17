@@ -33,7 +33,7 @@ quiz into a study habit.
 6. **Your time zone.** Dates are shown in the time zone from `EBB_TIMEZONE`, falling
    back to the computer's.
 7. **Hardening.** The database itself refuses cross-user rows; two terminals cannot
-   overwrite each other's progress; a duplicate answer leaves no stale feedback.
+   overwrite each other's progress; an answer re-run after a crash counts once.
 
 ## Non-goals (later milestones or out of scope)
 
@@ -211,10 +211,13 @@ there without ending the session).
 
 ### Duplicate answers (the stale grade)
 
-When `record_attempt` reports a duplicate, `update_mastery` clears `grade` and
-`lesson`, leaves the tally and stage untouched, and routing continues as after a
-partial answer that did not count. The next question shows no feedback from the
-earlier answer.
+A duplicate can only mean the process died after `record_attempt` committed but
+before `update_mastery`'s checkpoint, so the database has the answer and the
+session state does not. When `record_attempt` reports a duplicate, `update_mastery`
+re-reads the concept's current row and applies the same state update as for a new
+answer (concept, tally, streak, questions asked on the concept) and keeps the
+grade. The learner sees that answer's feedback, the summary counts it, and routing
+continues as after any answer. The stage is not changed a second time.
 
 ### Schema — `002_spaced_review.sql`
 
@@ -265,7 +268,7 @@ Milestone 1's classes and messages are unchanged. New cases:
 | Layer | What |
 |---|---|
 | Pure | the new pick order (due by lowest tide, then new by position, then none); routing without the session cap |
-| Graph (offline) | a session that runs past three concepts until quit; due reviews before new concepts; nothing due → new; all learned → `extend_subject` → new concepts taught; extend returns only duplicates → ends with the all-caught-up notice; extend fails → exhausted notice; cross-session avoid list passed to `generate_questions`; the duplicate-answer path clears stale feedback |
+| Graph (offline) | a session that runs past three concepts until quit; due reviews before new concepts; nothing due → new; all learned → `extend_subject` → new concepts taught; extend returns only duplicates → ends with the all-caught-up notice; extend fails → exhausted notice; cross-session avoid list passed to `generate_questions`; the duplicate-answer path still counts the answer and shows its feedback |
 | Database | `002` applies to a database holding milestone 1 data and keeps it; composite FKs reject a cross-user row; `record_attempt` applies grades to the current row (two stale snapshots in sequence both count); stale-session closing; 24-hour window boundary; checkpoint pruning |
 | Resume (database) | run to a question, drop the graph, rebuild it with a new `PostgresSaver` on the same thread, read the pending question, resume, and finish; no attempt double-counted; a state stopped while grading resumes and grades the answer once; a state with nothing pending is closed |
 | Concurrency | a second advisory-lock holder on the same thread is refused |

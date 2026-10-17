@@ -263,24 +263,28 @@ def test_mcq_attempts_are_graded_in_code():
 
 
 class AlreadyRecordedStore(MemoryStore):
-    """Simulates a duplicate resume: the answer id was already stored, so nothing changes."""
+    """Simulates a resume after a crash between the answer's commit and its checkpoint:
+    the answer is stored and graded, but record_answer reports it as a duplicate."""
 
     def record_answer(self, user_id: UUID, answer: Answer) -> Concept | None:
+        super().record_answer(user_id, answer)
         return None
 
 
-def test_duplicate_answer_leaves_no_stale_feedback():
+def test_duplicate_answer_still_counts_in_the_session():
     store, tutor = AlreadyRecordedStore(), FakeTutor()
     subject_id = make_subject(store, USER, concepts=1)
-    answers = iter([reply("no idea"), {"quit": True}])
+    answers = iter([reply("right"), {"quit": True}])
 
     final, payloads = run(tutor, store, subject_id, lambda p: next(answers))
 
-    assert payloads[1]["feedback"] is None
-    assert payloads[1]["lesson"] is None
-    assert store.attempts == {}
-    assert store.list_concepts(USER, subject_id)[0].stage == 0
-    assert final["results"] == []  # the tally never moved, so no result line
+    assert payloads[1]["number"] == 2
+    assert payloads[1]["feedback"]["value"] == "correct"  # the stored answer's feedback
+    assert len(store.attempts) == 1
+    assert store.list_concepts(USER, subject_id)[0].stage == 1
+    [result] = final["results"]
+    assert result["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}
+    assert (result["stage_before"], result["stage_after"]) == (0, 1)
 
 
 def test_summary_reports_tide_and_next_review_for_a_new_concept():

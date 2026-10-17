@@ -435,7 +435,11 @@ def test_resume_after_a_crash_once_recorded_does_not_count_twice(fakes, monkeypa
     result = runner.invoke(cli.app, ["study"], input="y\nq\n")
 
     assert result.exit_code == 0, result.output
-    assert "Resume? [Y/n]" in result.output
+    question = "You stopped on Networks 1, question 1, a moment ago. Resume? [Y/n]"
+    assert question in result.output
+    after = result.output.split(question, 1)[1]
+    assert "● Correct" in after and "Q2" in after  # the stored answer counts; Q2 is next
+    assert "Session summary" in after and "1✓ 0◐ 0✗" in after
     assert len(store.sessions) == 1 and len(store.attempts) == 1
 
 
@@ -467,3 +471,4 @@ def test_session_with_nothing_pending_is_closed_and_greeted(fakes):
     assert "Resume?" not in result.output
     assert store.sessions[session_id]["ended_at"] is not None
     assert "Nothing is due. Let's learn something new." in result.output
+

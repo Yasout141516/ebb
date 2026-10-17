@@ -212,7 +212,7 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
         }
 
     def update_mastery(state: QuizState) -> dict[str, Any]:
-        user_id, _ = ids(state)
+        user_id, subject_id = ids(state)
         concept = concept_from_dict(state["concept"])
         grade = grade_from_dict(state["grade"])
         answer = Answer(
@@ -226,8 +226,11 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
             graded_at=now(),
         )
         after = store.record_answer(user_id, answer)
-        if after is None:  # duplicate resume: already recorded, and nothing stale to show
-            return {"grade": None, "lesson": None}
+        if after is None:
+            # Already recorded: the process died after the commit but before this step's
+            # checkpoint. The answer still counts here, against the concept's stored row.
+            current = {c.id: c for c in store.list_concepts(user_id, subject_id)}
+            after = current[concept.id]
         correct = grade.value is GradeValue.CORRECT
         return {
             "concept": concept_to_dict(after),
