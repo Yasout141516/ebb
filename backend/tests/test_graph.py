@@ -116,6 +116,24 @@ def test_learning_everything_extends_the_subject():
 
     assert [p["concept"] for p in payloads] == ["Concept 1", "Concept 1", "Advanced 1"]
     assert tutor.extend_calls == [("Networks", ["Concept 1"])]
+    assert "Added 3 more advanced concepts." not in payloads[1]["notices"]
+    assert payloads[2]["notices"] == ["Added 3 more advanced concepts."]
+
+
+def test_one_added_concept_is_announced_in_the_singular():
+    # "Concept 1" already exists, so only one of the two names is new.
+    store, tutor = MemoryStore(), FakeTutor(extensions=[["Concept 1", "Advanced 1"]])
+    subject_id = make_subject(store, USER, concepts=1)
+    seen = []
+
+    def answer(payload):
+        seen.append(payload)
+        return {"quit": True} if len(seen) == 3 else always_right(payload)
+
+    _, payloads = run(tutor, store, subject_id, answer)
+
+    assert payloads[2]["concept"] == "Advanced 1"
+    assert payloads[2]["notices"] == ["Added 1 more advanced concept."]
 
 
 def test_extension_with_nothing_new_ends_caught_up():

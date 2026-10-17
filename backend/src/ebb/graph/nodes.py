@@ -118,7 +118,11 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
         added = store.add_concepts(
             user_id, subject_id, [(d.name, d.description) for d in generated.value]
         )
-        return {"caught_up": added == 0, "notices": _notices(state, generated)}
+        notices = _notices(state, generated)
+        if added > 0:
+            noun = "concept" if added == 1 else "concepts"
+            notices.append(f"Added {added} more advanced {noun}.")
+        return {"caught_up": added == 0, "notices": notices}
 
     def generate_questions(state: QuizState) -> dict[str, Any]:
         user_id, _ = ids(state)
