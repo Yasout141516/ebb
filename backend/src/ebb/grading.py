@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from ebb.domain import Grade, GradeValue, Question
+from ebb.domain import DisputeOutcome, DisputeReason, Grade, GradeValue, Question
 
 
 def parse_choice(options: Sequence[str], answer: str) -> int | None:
@@ -35,3 +35,17 @@ def grade_mcq(question: Question, answer: str) -> Grade:
         f"{picked.why} The answer is “{correct.text}”: {correct.why}",
         misconception=picked.why,
     )
+
+
+def dispute_outcome(
+    reason: DisputeReason,
+    original: GradeValue,
+    regraded: GradeValue,
+    question_ambiguous: bool,
+) -> DisputeOutcome:
+    """The spec's outcome table: voided only for an ambiguous question the model agrees is."""
+    if reason is DisputeReason.AMBIGUOUS and question_ambiguous:
+        return DisputeOutcome.VOIDED
+    if regraded != original:
+        return DisputeOutcome.CHANGED
+    return DisputeOutcome.UPHELD

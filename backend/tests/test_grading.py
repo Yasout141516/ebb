@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from ebb.domain import GradeValue, Option, Question
-from ebb.grading import grade_mcq, parse_choice
+from ebb.domain import DisputeOutcome, DisputeReason, GradeValue, Option, Question
+from ebb.grading import dispute_outcome, grade_mcq, parse_choice
 
 OPTIONS = ["64", "62", "30", "126"]
 QUESTION = Question(
@@ -61,3 +61,20 @@ def test_wrong_choice_explains_and_names_the_right_answer():
 def test_invalid_choice_raises():
     with pytest.raises(ValueError):
         grade_mcq(QUESTION, "7")
+
+
+_R, _G, _O = DisputeReason, GradeValue, DisputeOutcome
+
+
+@pytest.mark.parametrize(
+    ("reason", "orig", "new", "amb", "outcome"),
+    [
+        (_R.AMBIGUOUS, _G.INCORRECT, _G.INCORRECT, True, _O.VOIDED),
+        (_R.AMBIGUOUS, _G.INCORRECT, _G.INCORRECT, False, _O.UPHELD),
+        (_R.CORRECT, _G.PARTIAL, _G.CORRECT, False, _O.CHANGED),
+        (_R.OTHER, _G.CORRECT, _G.PARTIAL, False, _O.CHANGED),
+        (_R.NOTES_DIFFER, _G.PARTIAL, _G.PARTIAL, True, _O.UPHELD),
+    ],
+)
+def test_dispute_outcome(reason, orig, new, amb, outcome):
+    assert dispute_outcome(reason, orig, new, amb) == outcome
