@@ -89,7 +89,7 @@ def test_002_keeps_milestone_1_data(pg_empty_pool):
     with pg_empty_pool.connection() as conn:
         assert migrate(conn, until="001_init.sql") == ["001_init.sql"]
         seed_milestone_1(conn)
-        assert migrate(conn) == ["002_spaced_review.sql"]
+        assert migrate(conn, until="002_spaced_review.sql") == ["002_spaced_review.sql"]
         counts = row_counts(conn)
         session = conn.execute("select last_active_at, pruned_at from study_sessions").fetchone()
     assert counts == {
@@ -162,3 +162,84 @@ def test_deleting_a_subject_still_cascades(pg_pool):
         "questions": 0,
         "attempts": 0,
     }
+
+
+def seed_document(conn, user_id, subject_id) -> UUID:
+    doc_id = uuid4()
+    conn.execute(
+        "insert into documents (id, user_id, subject_id, filename, kind, size_bytes, sha256)"
+        " values (%s, %s, %s, 'n.md', 'md', 10, %s)",
+        (doc_id, user_id, subject_id, uuid4().hex),
+    )
+    return doc_id
+
+
+def insert_chunk(conn, user_id, document_id, subject_id, heading="Subnet masks") -> None:
+    conn.execute(
+        "insert into document_chunks (id, user_id, document_id, subject_id, ordinal, heading,"
+        " content) values (%s, %s, %s, %s, 0, %s, 'A mask splits an address.')",
+        (uuid4(), user_id, document_id, subject_id, heading),
+    )
+
+
+def insert_dispute(conn, user_id, attempt_id) -> None:
+    conn.execute(
+        "insert into grade_disputes (id, user_id, attempt_id, reason, explanation,"
+        " original_grade, new_grade, outcome, regrade_explanation, model_used)"
+        " values (%s, %s, %s, 'correct', 'e', 'incorrect', 'correct', 'changed', 'r', 'm')",
+        (uuid4(), user_id, attempt_id),
+    )
+
+
+def test_003_keeps_milestone_2_data(pg_empty_pool):
+    with pg_empty_pool.connection() as conn:
+        migrate(conn, until="002_spaced_review.sql")
+        seed_milestone_1(conn)
+        assert migrate(conn) == ["003_notes_citations_disputes.sql"]
+        counts = row_counts(conn)
+        question = conn.execute("select source, citations from questions").fetchone()
+        attempt = conn.execute(
+            "select concept_before, voided_at, citations from attempts"
+        ).fetchone()
+    assert counts["questions"] == 1 and counts["attempts"] == 1 and counts["concepts"] == 2
+    assert question == {"source": "general", "citations": []}
+    assert attempt == {"concept_before": None, "voided_at": None, "citations": []}
+
+
+def test_new_tables_reject_cross_user_rows(pg_pool):
+    with pg_pool.connection() as conn:
+        ids = seed_alice_tree(conn)
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            seed_document(conn, BOB, ids["subject"])
+        doc_id = seed_document(conn, ALICE, ids["subject"])
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            insert_chunk(conn, BOB, doc_id, ids["subject"])
+        insert_attempt(conn, ALICE, ids["question"], ids["concept"])
+        attempt_id = conn.execute("select id from attempts").fetchone()["id"]
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            insert_dispute(conn, BOB, attempt_id)
+
+
+def test_search_vector_is_generated_and_indexed(pg_pool):
+    with pg_pool.connection() as conn:
+        ids = seed_alice_tree(conn)
+        doc_id = seed_document(conn, ALICE, ids["subject"])
+        insert_chunk(conn, ALICE, doc_id, ids["subject"])
+        hit = conn.execute(
+            "select search_vector @@ to_tsquery('english', 'subnet') as hit from document_chunks"
+        ).fetchone()
+        index = conn.execute(
+            "select indexdef from pg_indexes where indexname = 'document_chunks_search_idx'"
+        ).fetchone()
+    assert hit["hit"] is True
+    assert "gin" in index["indexdef"].lower()
+
+
+def test_one_dispute_per_attempt(pg_pool):
+    with pg_pool.connection() as conn:
+        ids = seed_alice_tree(conn)
+        insert_attempt(conn, ALICE, ids["question"], ids["concept"])
+        attempt_id = conn.execute("select id from attempts").fetchone()["id"]
+        insert_dispute(conn, ALICE, attempt_id)
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            insert_dispute(conn, ALICE, attempt_id)

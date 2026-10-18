@@ -42,7 +42,11 @@ def test_migrations_apply_once(pg_pool):
     with pg_pool.connection() as conn:
         assert migrate(conn) == []  # the fixture already applied them
         versions = [r["version"] for r in conn.execute("select version from schema_migrations")]
-    assert versions == ["001_init.sql", "002_spaced_review.sql"]
+    assert versions == [
+        "001_init.sql",
+        "002_spaced_review.sql",
+        "003_notes_citations_disputes.sql",
+    ]
 
 
 def test_concepts_keep_their_order(store):
