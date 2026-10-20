@@ -380,8 +380,8 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
             }
         return {
             "lesson": generated.value.text,
-            # A lesson with no citations of its own shows the question's.
-            "lesson_citations": [to_dict(c) for c in citations or question.citations],
+            # Only the lesson's own citations; the grade card already shows the question's.
+            "lesson_citations": [to_dict(c) for c in citations],
             "notices": _notices(state, generated),
         }
 

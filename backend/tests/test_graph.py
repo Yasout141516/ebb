@@ -624,6 +624,19 @@ def test_lesson_citations_are_in_the_payload():
     assert payloads[1]["feedback"]["general_knowledge"] is False
 
 
+def test_lesson_without_valid_citations_shows_none_of_its_own():
+    store = MemoryStore()
+    tutor = FakeTutor(cite=[[("N1", QUOTE)]], teach_cites=[[("N9", "x")]] * 3)
+    subject_id = notes_subject(store)
+
+    _, payloads = run(tutor, store, subject_id, quit_after(1, always_wrong))
+
+    assert tutor.teach_attempts == 1 + MAX_RETRIES
+    assert payloads[1]["lesson"] == "Here is the idea, with an example."
+    assert payloads[1]["lesson_citations"] == []
+    assert [c["quote"] for c in payloads[1]["feedback"]["citations"]] == [QUOTE]  # the question's
+
+
 class CountingStore(MemoryStore):
     def __init__(self) -> None:
         super().__init__()
