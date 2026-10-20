@@ -12,19 +12,33 @@ from psycopg import Connection
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from ebb import mastery
+from ebb import citations, mastery
 from ebb.db.locks import advisory_lock
 from ebb.domain import (
     Answer,
     Chunk,
+    Citation,
     Concept,
+    Dispute,
+    DisputeOutcome,
+    DisputeReason,
     Document,
+    GradeValue,
     NewDocument,
     Question,
     ResumableSession,
     Subject,
 )
-from ebb.store import MAX_DOCUMENTS, PRUNE_AFTER, RESUME_WINDOW, DocumentRefused, new_concepts
+from ebb.store import (
+    MAX_DOCUMENTS,
+    PRUNE_AFTER,
+    RESUME_WINDOW,
+    DocumentRefused,
+    concept_after_dispute,
+    new_concepts,
+    restore,
+    snapshot,
+)
 
 # Chunks ranking below this (ts_rank_cd) are not about the searched concept.
 MIN_RANK = 0.05
@@ -36,6 +50,40 @@ _CONCEPT_COLUMNS = (
 
 def _concept(row: dict[str, Any]) -> Concept:
     return Concept(**row)
+
+
+def _citations_json(cited: Sequence[Citation]) -> Jsonb:
+    return Jsonb([citations.to_dict(c) for c in cited])
+
+
+def _dispute(row: dict[str, Any]) -> Dispute:
+    return Dispute(
+        row["id"],
+        row["attempt_id"],
+        DisputeReason(row["reason"]),
+        row["explanation"],
+        GradeValue(row["original_grade"]),
+        None if row["new_grade"] is None else GradeValue(row["new_grade"]),
+        DisputeOutcome(row["outcome"]),
+        row["regrade_explanation"],
+        tuple(citations.from_dict(c) for c in row["citations"]),
+        row["model_used"],
+    )
+
+
+def _update_concept(conn: Connection, user_id: UUID, concept: Concept) -> None:
+    conn.execute(
+        "update concepts set stage = %s, next_review_at = %s, last_reviewed_at = %s,"
+        " review_count = %s where id = %s and user_id = %s",
+        (
+            concept.stage,
+            concept.next_review_at,
+            concept.last_reviewed_at,
+            concept.review_count,
+            concept.id,
+            user_id,
+        ),
+    )
 
 
 def _insert_concepts(
@@ -196,8 +244,8 @@ class PgStore:
             with conn.cursor() as cur:
                 cur.executemany(
                     "insert into questions (id, user_id, session_id, concept_id, type, difficulty,"
-                    " prompt, options, reference_answer)"
-                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    " prompt, options, reference_answer, source, citations)"
+                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     [
                         (
                             q.id,
@@ -209,6 +257,8 @@ class PgStore:
                             q.prompt,
                             Jsonb([asdict(o) for o in q.options]) if q.options else None,
                             q.reference_answer,
+                            q.source,
+                            _citations_json(q.citations),
                         )
                         for q in questions
                     ],
@@ -233,8 +283,9 @@ class PgStore:
             after = mastery.apply_grade(before, answer.grade, answer.graded_at)
             inserted = conn.execute(
                 "insert into attempts (id, user_id, question_id, concept_id, answer_text, grade,"
-                " feedback, stage_before, stage_after, model_used, graded_at)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " feedback, stage_before, stage_after, model_used, graded_at, citations,"
+                " concept_before)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
                 " on conflict (id) do nothing returning id",
                 (
                     answer.id,
@@ -248,22 +299,13 @@ class PgStore:
                     after.stage,
                     answer.model_used,
                     answer.graded_at,
+                    _citations_json(answer.citations),
+                    Jsonb(snapshot(before)),
                 ),
             ).fetchone()
             if inserted is None:
                 return before  # already recorded: the row already holds this answer's grade
-            conn.execute(
-                "update concepts set stage = %s, next_review_at = %s, last_reviewed_at = %s,"
-                " review_count = %s where id = %s and user_id = %s",
-                (
-                    after.stage,
-                    after.next_review_at,
-                    after.last_reviewed_at,
-                    after.review_count,
-                    after.id,
-                    user_id,
-                ),
-            )
+            _update_concept(conn, user_id, after)
             conn.execute(
                 "update study_sessions set last_active_at = %s where id = %s and user_id = %s",
                 (answer.graded_at, owned_question["session_id"], user_id),
@@ -282,6 +324,94 @@ class PgStore:
                 (user_id, user_id, concept_id, limit),
             ).fetchall()
         return [row["prompt"] for row in rows]
+
+    def resolve_dispute(
+        self, user_id: UUID, dispute: Dispute, now: datetime
+    ) -> tuple[Dispute, Concept]:
+        with self.pool.connection() as conn, conn.transaction():
+            # Every write to a concept's attempts holds this row lock, so the checks below
+            # read a history nothing else is changing.
+            row = conn.execute(
+                f"select {_CONCEPT_COLUMNS} from concepts where user_id = %s and id ="
+                " (select concept_id from attempts where id = %s and user_id = %s) for update",
+                (user_id, dispute.attempt_id, user_id),
+            ).fetchone()
+            if row is None:
+                raise LookupError(f"attempt {dispute.attempt_id} not found")
+            current = _concept(row)
+            stored = conn.execute(
+                "select * from grade_disputes where id = %s and user_id = %s",
+                (dispute.id, user_id),
+            ).fetchone()
+            if stored is not None:
+                if stored["attempt_id"] != dispute.attempt_id:
+                    raise ValueError(f"dispute {dispute.id} is about another attempt")
+                return _dispute(stored), current  # a re-run: already applied
+            attempt = conn.execute(
+                "select a.grade, a.graded_at, a.concept_before, a.voided_at,"
+                " exists (select 1 from grade_disputes d"
+                " where d.attempt_id = a.id and d.user_id = a.user_id) as disputed,"
+                " (select l.id from attempts l"
+                " where l.user_id = a.user_id and l.concept_id = a.concept_id"
+                " and l.voided_at is null order by l.graded_at desc, l.id desc limit 1) as latest"
+                " from attempts a where a.id = %s and a.user_id = %s",
+                (dispute.attempt_id, user_id),
+            ).fetchone()
+            if attempt["disputed"]:
+                raise ValueError(f"attempt {dispute.attempt_id} was already disputed")
+            if attempt["voided_at"] is not None:
+                raise ValueError(f"attempt {dispute.attempt_id} is voided")
+            if attempt["concept_before"] is None:
+                raise ValueError(f"attempt {dispute.attempt_id} has no concept snapshot")
+            if attempt["latest"] != dispute.attempt_id:
+                raise ValueError(f"attempt {dispute.attempt_id} is not the concept's latest")
+            before = restore(current, attempt["concept_before"])
+            after = concept_after_dispute(
+                current, before, dispute, GradeValue(attempt["grade"]), attempt["graded_at"]
+            )
+            if dispute.outcome is DisputeOutcome.VOIDED:
+                conn.execute(
+                    "update attempts set voided_at = %s where id = %s and user_id = %s",
+                    (now, dispute.attempt_id, user_id),
+                )
+            elif dispute.outcome is DisputeOutcome.CHANGED:
+                conn.execute(
+                    "update attempts set grade = %s, stage_after = %s"
+                    " where id = %s and user_id = %s",
+                    (dispute.new_grade.value, after.stage, dispute.attempt_id, user_id),
+                )
+            _update_concept(conn, user_id, after)
+            conn.execute(
+                "insert into grade_disputes (id, user_id, attempt_id, reason, explanation,"
+                " original_grade, new_grade, outcome, regrade_explanation, citations,"
+                " model_used) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    dispute.id,
+                    user_id,
+                    dispute.attempt_id,
+                    dispute.reason.value,
+                    dispute.explanation,
+                    dispute.original_grade.value,
+                    None if dispute.new_grade is None else dispute.new_grade.value,
+                    dispute.outcome.value,
+                    dispute.regrade_explanation,
+                    _citations_json(dispute.citations),
+                    dispute.model_used,
+                ),
+            )
+        return dispute, after
+
+    def dispute_counts(self, user_id: UUID) -> dict[str, int]:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select count(*) as raised,"
+                " count(*) filter (where outcome = 'changed') as changed,"
+                " count(*) filter (where outcome = 'voided') as voided,"
+                " count(*) filter (where outcome = 'upheld') as upheld"
+                " from grade_disputes where user_id = %s",
+                (user_id,),
+            ).fetchone()
+        return dict(row)
 
     def get_subject(self, user_id: UUID, subject_id: UUID) -> Subject | None:
         with self.pool.connection() as conn:
@@ -367,6 +497,14 @@ class PgStore:
                 (user_id, subject_id, sha256),
             ).fetchone()
         return row is not None
+
+    def count_documents(self, user_id: UUID, subject_id: UUID) -> int:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select count(*) as n from documents where user_id = %s and subject_id = %s",
+                (user_id, subject_id),
+            ).fetchone()
+        return row["n"]
 
     def search_chunks(
         self, user_id: UUID, subject_id: UUID, text: str, limit: int = 4

@@ -1,6 +1,7 @@
 """Postgres tests: migrations, the repository, idempotency and per-user isolation."""
 
 import threading
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -9,9 +10,23 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from ebb import citations
 from ebb.db.migrate import migrate
 from ebb.db.repo import PgStore
-from ebb.domain import Answer, ChunkDraft, GradeValue, NewDocument, Option, Question
+from ebb.domain import (
+    Answer,
+    ChunkDraft,
+    Citation,
+    Claim,
+    Concept,
+    Dispute,
+    DisputeOutcome,
+    DisputeReason,
+    GradeValue,
+    NewDocument,
+    Option,
+    Question,
+)
 from ebb.graph.build import build_graph
 from ebb.store import DocumentRefused
 from tests.fakes import FakeTutor
@@ -515,3 +530,301 @@ def test_documents_are_scoped_to_the_user(store):
     assert store.list_documents(BOB, subject_id) == []
     assert store.search_chunks(BOB, subject_id, "subnet masks broadcast") == []
     assert store.search_chunks(ALICE, subject_id, "subnet masks broadcast") != []
+
+
+def test_count_documents(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    assert store.count_documents(ALICE, subject_id) == 0
+    store.add_document(ALICE, subject_id, doc("a.txt", "x"), [])
+    store.add_document(ALICE, subject_id, doc("b.txt", "y"), [])
+
+    assert store.count_documents(ALICE, subject_id) == 2
+    assert store.count_documents(BOB, subject_id) == 0
+
+
+CITE = Citation("chunk", "3f0c2a5e-0000-0000-0000-000000000001", "N1", 3, "masks split a network")
+DUE = NOW - timedelta(hours=1)
+
+
+def dispute_for(
+    answer: Answer,
+    outcome: DisputeOutcome,
+    new_grade: GradeValue | None = None,
+    dispute_id: UUID | None = None,
+) -> Dispute:
+    return Dispute(
+        dispute_id or uuid4(),
+        answer.id,
+        DisputeReason.CORRECT,
+        "I said the same thing.",
+        answer.grade,
+        new_grade,
+        outcome,
+        "Re-checked against the notes.",
+        (CITE,),
+        "strict-model",
+    )
+
+
+def stage_3_then_incorrect(store, pg_pool) -> tuple[UUID, Question, Concept, Answer]:
+    """A due stage-3 concept answered incorrectly at NOW; returns the concept before it."""
+    subject_id, _, question = subject_with_question(store)
+    seed_stage(pg_pool, question.concept_id, 3, DUE)
+    [before] = store.list_concepts(ALICE, subject_id)
+    answer = answer_for(question, GradeValue.INCORRECT)
+    assert store.record_answer(ALICE, answer).stage == 1
+    return subject_id, question, before, answer
+
+
+def test_citations_round_trip_on_questions_and_attempts(store, pg_pool):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "Names.")])
+    concept = store.list_concepts(ALICE, subject_id)[0]
+    session_id = store.create_session(ALICE, subject_id, "t")
+    question = Question(
+        uuid4(),
+        concept.id,
+        "short",
+        1,
+        "Why split networks?",
+        "Smaller broadcast domains.",
+        source="notes",
+        claims=(Claim("N1", "masks split a network"),),
+        citations=(CITE,),
+    )
+    store.save_questions(ALICE, session_id, [question])
+    answer = replace(answer_for(question, GradeValue.CORRECT), citations=(CITE,))
+    store.record_answer(ALICE, answer)
+
+    with pg_pool.connection() as conn:
+        saved = conn.execute(
+            "select source, citations from questions where id = %s", (question.id,)
+        ).fetchone()
+    assert saved["source"] == "notes"
+    assert [citations.from_dict(c) for c in saved["citations"]] == [CITE]
+    assert [citations.from_dict(c) for c in attempt_row(pg_pool, answer)["citations"]] == [CITE]
+
+
+def test_record_answer_snapshots_the_concept_before(store, pg_pool):
+    _, _, before, answer = stage_3_then_incorrect(store, pg_pool)
+
+    snapshot = attempt_row(pg_pool, answer)["concept_before"]
+
+    assert snapshot["stage"] == 3 and snapshot["review_count"] == 1
+    assert datetime.fromisoformat(snapshot["next_review_at"]) == before.next_review_at
+    assert datetime.fromisoformat(snapshot["last_reviewed_at"]) == before.last_reviewed_at
+
+
+def test_record_answer_snapshots_a_new_concept_with_nulls(store, pg_pool):
+    _, _, question = subject_with_question(store)
+    answer = answer_for(question, GradeValue.CORRECT)
+    store.record_answer(ALICE, answer)
+
+    assert attempt_row(pg_pool, answer)["concept_before"] == {
+        "stage": 0,
+        "next_review_at": None,
+        "last_reviewed_at": None,
+        "review_count": 0,
+    }
+
+
+def test_changed_dispute_recomputes_from_the_snapshot(store, pg_pool):
+    subject_id, _, before, answer = stage_3_then_incorrect(store, pg_pool)
+    dispute = dispute_for(answer, DisputeOutcome.CHANGED, GradeValue.CORRECT)
+
+    stored, concept = store.resolve_dispute(ALICE, dispute, NOW + timedelta(minutes=5))
+
+    assert stored == dispute
+    assert concept == store.list_concepts(ALICE, subject_id)[0]
+    assert concept.stage == 4
+    assert concept.next_review_at == answer.graded_at + timedelta(days=16)
+    assert concept.last_reviewed_at == answer.graded_at
+    assert concept.review_count == before.review_count + 1
+    row = attempt_row(pg_pool, answer)
+    assert (row["grade"], row["stage_before"], row["stage_after"]) == ("correct", 3, 4)
+    assert row["feedback"] == "ok" and row["voided_at"] is None
+
+
+def test_changed_dispute_can_lower_the_grade(store, pg_pool):
+    _, _, question = subject_with_question(store)
+    seed_stage(pg_pool, question.concept_id, 3, DUE)
+    answer = answer_for(question, GradeValue.CORRECT)
+    assert store.record_answer(ALICE, answer).stage == 4
+
+    _, concept = store.resolve_dispute(
+        ALICE, dispute_for(answer, DisputeOutcome.CHANGED, GradeValue.INCORRECT), NOW
+    )
+
+    assert concept.stage == 1 and concept.next_review_at == NOW + timedelta(days=1)
+    assert attempt_row(pg_pool, answer)["stage_after"] == 1
+
+
+def test_voided_dispute_restores_the_concept_exactly(store, pg_pool):
+    subject_id, _, before, answer = stage_3_then_incorrect(store, pg_pool)
+    voided_at = NOW + timedelta(minutes=5)
+
+    stored, concept = store.resolve_dispute(
+        ALICE, dispute_for(answer, DisputeOutcome.VOIDED), voided_at
+    )
+
+    assert stored.outcome is DisputeOutcome.VOIDED and stored.new_grade is None
+    assert concept == before == store.list_concepts(ALICE, subject_id)[0]
+    row = attempt_row(pg_pool, answer)
+    assert row["voided_at"] == voided_at and row["grade"] == "incorrect"
+
+
+def test_voided_question_stays_in_answered_prompts(store, pg_pool):
+    _, question, _, answer = stage_3_then_incorrect(store, pg_pool)
+    store.resolve_dispute(ALICE, dispute_for(answer, DisputeOutcome.VOIDED), NOW)
+
+    assert store.answered_prompts(ALICE, question.concept_id) == [question.prompt]
+
+
+def test_upheld_dispute_changes_nothing_but_is_recorded(store, pg_pool):
+    subject_id, _, _, answer = stage_3_then_incorrect(store, pg_pool)
+    [graded] = store.list_concepts(ALICE, subject_id)
+    row_before = attempt_row(pg_pool, answer)
+    dispute = dispute_for(answer, DisputeOutcome.UPHELD, GradeValue.INCORRECT)
+
+    stored, concept = store.resolve_dispute(ALICE, dispute, NOW)
+
+    assert stored == dispute
+    assert concept == graded == store.list_concepts(ALICE, subject_id)[0]
+    assert attempt_row(pg_pool, answer) == row_before
+    with pg_pool.connection() as conn:
+        row = conn.execute("select * from grade_disputes where id = %s", (dispute.id,)).fetchone()
+    assert (row["user_id"], row["attempt_id"], row["outcome"]) == (ALICE, answer.id, "upheld")
+    assert [citations.from_dict(c) for c in row["citations"]] == [CITE]
+
+
+def test_same_dispute_id_twice_returns_the_stored_result(store, pg_pool):
+    subject_id, _, _, answer = stage_3_then_incorrect(store, pg_pool)
+    first = dispute_for(answer, DisputeOutcome.CHANGED, GradeValue.CORRECT)
+    _, concept = store.resolve_dispute(ALICE, first, NOW)
+    # A re-run after a crash may carry a different re-check; the stored one wins.
+    rerun = replace(first, outcome=DisputeOutcome.VOIDED, new_grade=None)
+
+    assert store.resolve_dispute(ALICE, rerun, NOW + timedelta(minutes=1)) == (first, concept)
+    assert store.list_concepts(ALICE, subject_id)[0] == concept
+    assert store.dispute_counts(ALICE)["raised"] == 1
+
+
+def test_second_dispute_on_an_attempt_is_refused(store, pg_pool):
+    subject_id, _, _, answer = stage_3_then_incorrect(store, pg_pool)
+    upheld = dispute_for(answer, DisputeOutcome.UPHELD, GradeValue.INCORRECT)
+    store.resolve_dispute(ALICE, upheld, NOW)
+    [graded] = store.list_concepts(ALICE, subject_id)
+
+    with pytest.raises(ValueError):
+        store.resolve_dispute(
+            ALICE, dispute_for(answer, DisputeOutcome.CHANGED, GradeValue.CORRECT), NOW
+        )
+
+    assert store.list_concepts(ALICE, subject_id)[0] == graded
+    assert store.dispute_counts(ALICE)["raised"] == 1
+
+
+def test_only_the_latest_attempt_can_be_disputed(store, pg_pool):
+    _, question, _, first = stage_3_then_incorrect(store, pg_pool)
+    second = answer_for(question, GradeValue.CORRECT, NOW + timedelta(days=2))
+    store.record_answer(ALICE, second)
+
+    with pytest.raises(ValueError):
+        store.resolve_dispute(
+            ALICE, dispute_for(first, DisputeOutcome.CHANGED, GradeValue.CORRECT), NOW
+        )
+
+    # Once the later answer is voided, the first is the latest that counts again.
+    store.resolve_dispute(ALICE, dispute_for(second, DisputeOutcome.VOIDED), NOW)
+    _, concept = store.resolve_dispute(
+        ALICE, dispute_for(first, DisputeOutcome.CHANGED, GradeValue.CORRECT), NOW
+    )
+    assert concept.stage == 4
+
+
+def test_attempts_from_before_003_cannot_be_disputed(store, pg_pool):
+    _, _, _, answer = stage_3_then_incorrect(store, pg_pool)
+    with pg_pool.connection() as conn:
+        conn.execute("update attempts set concept_before = null where id = %s", (answer.id,))
+
+    with pytest.raises(ValueError):
+        store.resolve_dispute(ALICE, dispute_for(answer, DisputeOutcome.VOIDED), NOW)
+
+    assert store.dispute_counts(ALICE)["raised"] == 0
+
+
+def test_voided_attempts_cannot_be_disputed(store, pg_pool):
+    _, _, _, answer = stage_3_then_incorrect(store, pg_pool)
+    with pg_pool.connection() as conn:
+        conn.execute("update attempts set voided_at = %s where id = %s", (NOW, answer.id))
+
+    with pytest.raises(ValueError):
+        store.resolve_dispute(ALICE, dispute_for(answer, DisputeOutcome.VOIDED), NOW)
+
+
+def test_dispute_must_match_the_attempt(store, pg_pool):
+    _, _, _, answer = stage_3_then_incorrect(store, pg_pool)
+    claims_correct = replace(
+        dispute_for(answer, DisputeOutcome.UPHELD), original_grade=GradeValue.CORRECT
+    )
+
+    with pytest.raises(ValueError):  # the attempt was graded incorrect, not correct
+        store.resolve_dispute(ALICE, claims_correct, NOW)
+    with pytest.raises(ValueError):  # changed needs a new grade
+        store.resolve_dispute(ALICE, dispute_for(answer, DisputeOutcome.CHANGED), NOW)
+
+
+def test_concurrent_disputes_apply_once(store, pg_pool):
+    subject_id, _, before, answer = stage_3_then_incorrect(store, pg_pool)
+    outcomes: list[str] = []
+
+    def resolve() -> None:
+        dispute = dispute_for(answer, DisputeOutcome.CHANGED, GradeValue.CORRECT)
+        try:
+            store.resolve_dispute(ALICE, dispute, NOW)
+            outcomes.append("ok")
+        except ValueError:
+            outcomes.append("refused")
+
+    threads = [threading.Thread(target=resolve) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert sorted(outcomes) == ["ok", "refused"]
+    concept = store.list_concepts(ALICE, subject_id)[0]
+    assert (concept.stage, concept.review_count) == (4, before.review_count + 1)
+
+
+def test_other_users_cannot_dispute_alices_attempts(store, pg_pool):
+    subject_id, _, _, answer = stage_3_then_incorrect(store, pg_pool)
+    [graded] = store.list_concepts(ALICE, subject_id)
+
+    with pytest.raises(LookupError):
+        store.resolve_dispute(BOB, dispute_for(answer, DisputeOutcome.VOIDED), NOW)
+
+    assert store.list_concepts(ALICE, subject_id)[0] == graded
+    assert attempt_row(pg_pool, answer)["voided_at"] is None
+
+
+def test_dispute_counts(store):
+    assert store.dispute_counts(ALICE) == {"raised": 0, "changed": 0, "voided": 0, "upheld": 0}
+    subject_id = store.create_subject(ALICE, "Networks", [("A", "a"), ("B", "b"), ("C", "c")])
+    session_id = store.create_session(ALICE, subject_id, "t")
+    outcomes = [
+        (DisputeOutcome.CHANGED, GradeValue.CORRECT),
+        (DisputeOutcome.VOIDED, None),
+        (DisputeOutcome.UPHELD, GradeValue.INCORRECT),
+    ]
+    for concept, (outcome, new_grade) in zip(
+        store.list_concepts(ALICE, subject_id), outcomes, strict=True
+    ):
+        question = Question(uuid4(), concept.id, "short", 1, f"About {concept.name}?", "-")
+        store.save_questions(ALICE, session_id, [question])
+        answer = answer_for(question, GradeValue.INCORRECT)
+        store.record_answer(ALICE, answer)
+        store.resolve_dispute(ALICE, dispute_for(answer, outcome, new_grade), NOW)
+
+    assert store.dispute_counts(ALICE) == {"raised": 3, "changed": 1, "voided": 1, "upheld": 1}
+    assert store.dispute_counts(BOB) == {"raised": 0, "changed": 0, "voided": 0, "upheld": 0}

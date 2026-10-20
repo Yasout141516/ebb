@@ -12,6 +12,8 @@ from ebb.domain import (
     Answer,
     Chunk,
     Concept,
+    Dispute,
+    DisputeOutcome,
     Document,
     Grade,
     GradeValue,
@@ -23,7 +25,16 @@ from ebb.domain import (
 )
 from ebb.llm.schemas import ConceptDraft
 from ebb.llm.tutor import AllProvidersExhausted, Generated
-from ebb.store import MAX_DOCUMENTS, PRUNE_AFTER, RESUME_WINDOW, DocumentRefused, new_concepts
+from ebb.store import (
+    MAX_DOCUMENTS,
+    PRUNE_AFTER,
+    RESUME_WINDOW,
+    DocumentRefused,
+    concept_after_dispute,
+    new_concepts,
+    restore,
+    snapshot,
+)
 
 # (type, difficulty) of each question in a fake batch, in order.
 BATCH_PATTERN = [("short", 1), ("mcq", 1), ("mcq", 2), ("short", 3), ("mcq", 3)]
@@ -44,6 +55,9 @@ class MemoryStore:
         self.questions: dict[UUID, Question] = {}
         self.attempts: dict[UUID, Answer] = {}
         self.stages: dict[UUID, tuple[int, int]] = {}  # answer id -> (stage before, after)
+        self.snapshots: dict[UUID, dict] = {}  # answer id -> concept_before
+        self.voided: dict[UUID, datetime] = {}  # answer id -> voided at
+        self.disputes: dict[UUID, tuple[UUID, Dispute]] = {}  # dispute id -> (user id, dispute)
         self.question_sessions: dict[UUID, UUID] = {}  # question id -> session id
         self.timezones: dict[UUID, str] = {}
         self.locks: set[str] = set()
@@ -97,7 +111,7 @@ class MemoryStore:
             if self.concepts.get(question.concept_id, (None,))[0] != user_id:
                 raise LookupError("concept not found")
         for question in questions:
-            self.questions[question.id] = question
+            self.questions[question.id] = replace(question, claims=())  # claims aren't stored
             self.question_sessions[question.id] = session_id
 
     def record_answer(self, user_id: UUID, answer: Answer) -> Concept:
@@ -116,6 +130,7 @@ class MemoryStore:
         after = mastery.apply_grade(concept, answer.grade, answer.graded_at)
         self.attempts[answer.id] = answer
         self.stages[answer.id] = (concept.stage, after.stage)
+        self.snapshots[answer.id] = snapshot(concept)
         self.concepts[concept.id] = (owner, after)
         session["last_active_at"] = answer.graded_at
         return after
@@ -130,6 +145,47 @@ class MemoryStore:
                 newest.get(question.prompt, answer.graded_at), answer.graded_at
             )
         return sorted(newest, key=newest.__getitem__, reverse=True)[:limit]
+
+    def resolve_dispute(
+        self, user_id: UUID, dispute: Dispute, now: datetime
+    ) -> tuple[Dispute, Concept]:
+        answer = self.attempts.get(dispute.attempt_id)
+        owner, current = self.concepts[answer.concept_id] if answer else (None, None)
+        if owner != user_id:
+            raise LookupError(f"attempt {dispute.attempt_id} not found")
+        stored_owner, stored = self.disputes.get(dispute.id, (None, None))
+        if stored_owner == user_id:
+            if stored.attempt_id != dispute.attempt_id:
+                raise ValueError(f"dispute {dispute.id} is about another attempt")
+            return stored, current
+        counted = [
+            a
+            for a in self.attempts.values()
+            if a.concept_id == answer.concept_id and a.id not in self.voided
+        ]
+        latest = max(counted, key=lambda a: (a.graded_at, a.id), default=None)
+        if (
+            any(d.attempt_id == answer.id for _, d in self.disputes.values())
+            or answer.id in self.voided
+            or answer.id not in self.snapshots
+            or latest is not answer
+        ):
+            raise ValueError(f"attempt {answer.id} can't be disputed")
+        before = restore(current, self.snapshots[answer.id])
+        after = concept_after_dispute(current, before, dispute, answer.grade, answer.graded_at)
+        if dispute.outcome is DisputeOutcome.VOIDED:
+            self.voided[answer.id] = now
+        elif dispute.outcome is DisputeOutcome.CHANGED:
+            self.attempts[answer.id] = replace(answer, grade=dispute.new_grade)
+            self.stages[answer.id] = (self.stages[answer.id][0], after.stage)
+        self.concepts[current.id] = (owner, after)
+        self.disputes[dispute.id] = (user_id, dispute)
+        return dispute, after
+
+    def dispute_counts(self, user_id: UUID) -> dict[str, int]:
+        outcomes = [d.outcome for owner, d in self.disputes.values() if owner == user_id]
+        counts = {"raised": len(outcomes)}
+        return counts | {o.value: outcomes.count(o) for o in DisputeOutcome}
 
     def get_subject(self, user_id: UUID, subject_id: UUID) -> Subject | None:
         owner, subject = self.subjects.get(subject_id, (None, None))
@@ -199,6 +255,9 @@ class MemoryStore:
             owner == user_id and subject == subject_id and document.sha256 == sha256
             for owner, subject, document, _ in self.documents.values()
         )
+
+    def count_documents(self, user_id: UUID, subject_id: UUID) -> int:
+        return len(self.list_documents(user_id, subject_id))
 
     def search_chunks(
         self, user_id: UUID, subject_id: UUID, text: str, limit: int = 4

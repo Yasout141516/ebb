@@ -1,11 +1,23 @@
 """MemoryStore must keep the Store contract the Postgres tests pin down."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
 
-from ebb.domain import Answer, ChunkDraft, GradeValue, NewDocument, Question
+from ebb.domain import (
+    Answer,
+    ChunkDraft,
+    Citation,
+    Claim,
+    Dispute,
+    DisputeOutcome,
+    DisputeReason,
+    GradeValue,
+    NewDocument,
+    Question,
+)
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.store import DocumentRefused, merge_note_concepts
 from tests.fakes import FakeTutor, MemoryStore, make_subject, seed_concept
@@ -226,3 +238,128 @@ def test_merge_note_concepts():
 
     assert matched == ["Subnetting"]
     assert fresh == [("ARP", "Maps.")]
+
+
+def test_memory_store_count_documents():
+    store = MemoryStore()
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    store.add_document(ALICE, subject_id, doc("a.txt", "x"), [])
+    store.add_document(ALICE, subject_id, doc("b.txt", "y"), [])
+
+    assert store.count_documents(ALICE, subject_id) == 2
+    assert store.count_documents(BOB, subject_id) == 0
+
+
+CITE = Citation("chunk", "3f0c2a5e-0000-0000-0000-000000000001", "N1", 3, "masks split a network")
+
+
+def dispute_for(
+    answer: Answer, outcome: DisputeOutcome, new_grade: GradeValue | None = None
+) -> Dispute:
+    return Dispute(
+        uuid4(),
+        answer.id,
+        DisputeReason.CORRECT,
+        "I said the same thing.",
+        answer.grade,
+        new_grade,
+        outcome,
+        "Re-checked.",
+        (CITE,),
+        "strict-model",
+    )
+
+
+def stage_3_then_incorrect():
+    """A due stage-3 concept answered incorrectly at NOW, with the concept before it."""
+    store, _, _, question = setup()
+    seed_concept(
+        store,
+        question.concept_id,
+        stage=3,
+        next_review_at=NOW - timedelta(hours=1),
+        last_reviewed_at=NOW - timedelta(days=7),
+        review_count=1,
+    )
+    before = store.concept(question.concept_id)
+    answer = answer_for(question, GradeValue.INCORRECT)
+    assert store.record_answer(ALICE, answer).stage == 1
+    return store, question, before, answer
+
+
+def test_memory_store_keeps_citations_but_not_claims():
+    store, _, session_id, _ = setup()
+    concept_id = next(iter(store.concepts))
+    question = Question(
+        uuid4(),
+        concept_id,
+        "short",
+        1,
+        "Why split?",
+        "-",
+        source="notes",
+        claims=(Claim("N1", "q"),),
+        citations=(CITE,),
+    )
+    store.save_questions(ALICE, session_id, [question])
+    answer = replace(answer_for(question, GradeValue.CORRECT), citations=(CITE,))
+    store.record_answer(ALICE, answer)
+
+    saved = store.questions[question.id]
+    assert (saved.source, saved.citations, saved.claims) == ("notes", (CITE,), ())
+    assert store.attempts[answer.id].citations == (CITE,)
+
+
+def test_memory_store_changed_dispute_recomputes_from_the_snapshot():
+    store, question, before, answer = stage_3_then_incorrect()
+    dispute = dispute_for(answer, DisputeOutcome.CHANGED, GradeValue.CORRECT)
+
+    stored, concept = store.resolve_dispute(ALICE, dispute, NOW + timedelta(minutes=5))
+
+    assert stored == dispute and concept == store.concept(question.concept_id)
+    assert concept.stage == 4 and concept.next_review_at == NOW + timedelta(days=16)
+    assert concept.review_count == before.review_count + 1
+    assert store.attempts[answer.id].grade is GradeValue.CORRECT
+    assert store.stages[answer.id] == (3, 4)
+
+
+def test_memory_store_voided_dispute_restores_the_concept_and_keeps_the_prompt():
+    store, question, before, answer = stage_3_then_incorrect()
+
+    _, concept = store.resolve_dispute(ALICE, dispute_for(answer, DisputeOutcome.VOIDED), NOW)
+
+    assert concept == before == store.concept(question.concept_id)
+    assert store.voided[answer.id] == NOW
+    assert store.answered_prompts(ALICE, question.concept_id) == [question.prompt]
+
+
+def test_memory_store_upheld_dispute_and_idempotent_rerun():
+    store, question, _, answer = stage_3_then_incorrect()
+    graded = store.concept(question.concept_id)
+    dispute = dispute_for(answer, DisputeOutcome.UPHELD, GradeValue.INCORRECT)
+
+    assert store.resolve_dispute(ALICE, dispute, NOW) == (dispute, graded)
+    rerun = replace(dispute, outcome=DisputeOutcome.VOIDED, new_grade=None)
+    assert store.resolve_dispute(ALICE, rerun, NOW) == (dispute, graded)
+    assert store.dispute_counts(ALICE) == {"raised": 1, "changed": 0, "voided": 0, "upheld": 1}
+    assert store.dispute_counts(BOB)["raised"] == 0
+
+
+def test_memory_store_refuses_disputes_it_cannot_apply():
+    store, question, _, first = stage_3_then_incorrect()
+    second = answer_for(question, GradeValue.CORRECT, NOW + timedelta(days=2))
+    store.record_answer(ALICE, second)
+
+    with pytest.raises(LookupError):
+        store.resolve_dispute(BOB, dispute_for(second, DisputeOutcome.VOIDED), NOW)
+    with pytest.raises(ValueError):  # not the latest
+        store.resolve_dispute(ALICE, dispute_for(first, DisputeOutcome.VOIDED), NOW)
+    with pytest.raises(ValueError):  # changed needs a new grade
+        store.resolve_dispute(ALICE, dispute_for(second, DisputeOutcome.CHANGED), NOW)
+    store.resolve_dispute(ALICE, dispute_for(second, DisputeOutcome.VOIDED), NOW)
+    with pytest.raises(ValueError):  # already disputed
+        store.resolve_dispute(ALICE, dispute_for(second, DisputeOutcome.UPHELD), NOW)
+    del store.snapshots[first.id]  # as if recorded before migration 003
+    with pytest.raises(ValueError):
+        store.resolve_dispute(ALICE, dispute_for(first, DisputeOutcome.VOIDED), NOW)
+    assert store.dispute_counts(ALICE)["raised"] == 1
