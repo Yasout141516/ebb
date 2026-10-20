@@ -1,5 +1,6 @@
 """Postgres implementation of `Store`. Every query filters on user_id (review decision E1)."""
 
+import re
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import asdict
@@ -7,13 +8,26 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from psycopg import Connection
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from ebb import mastery
 from ebb.db.locks import advisory_lock
-from ebb.domain import Answer, Concept, Question, ResumableSession, Subject
-from ebb.store import PRUNE_AFTER, RESUME_WINDOW, new_concepts
+from ebb.domain import (
+    Answer,
+    Chunk,
+    Concept,
+    Document,
+    NewDocument,
+    Question,
+    ResumableSession,
+    Subject,
+)
+from ebb.store import MAX_DOCUMENTS, PRUNE_AFTER, RESUME_WINDOW, DocumentRefused, new_concepts
+
+# Chunks ranking below this (ts_rank_cd) are not about the searched concept.
+MIN_RANK = 0.05
 
 _CONCEPT_COLUMNS = (
     "id, subject_id, name, description, stage, next_review_at, last_reviewed_at, review_count"
@@ -22,6 +36,79 @@ _CONCEPT_COLUMNS = (
 
 def _concept(row: dict[str, Any]) -> Concept:
     return Concept(**row)
+
+
+def _insert_concepts(
+    conn: Connection, user_id: UUID, subject_id: UUID, concepts: Sequence[tuple[str, str]]
+) -> int:
+    """Add the concepts the subject lacks after its last position, on an open connection that
+    holds the subject row lock. Returns how many were added."""
+    existing = conn.execute(
+        "select name from concepts where user_id = %s and subject_id = %s",
+        (user_id, subject_id),
+    ).fetchall()
+    fresh = new_concepts([row["name"] for row in existing], concepts)
+    if not fresh:
+        return 0
+    top = conn.execute(
+        "select coalesce(max(position), -1) as top from concepts"
+        " where user_id = %s and subject_id = %s",
+        (user_id, subject_id),
+    ).fetchone()["top"]
+    with conn.cursor() as cur:
+        cur.executemany(
+            "insert into concepts (user_id, subject_id, name, description, position)"
+            " values (%s, %s, %s, %s, %s)",
+            [
+                (user_id, subject_id, name, description, top + 1 + offset)
+                for offset, (name, description) in enumerate(fresh)
+            ],
+        )
+    return len(fresh)
+
+
+def _insert_document(
+    conn: Connection, user_id: UUID, subject_id: UUID, document: NewDocument
+) -> None:
+    row = conn.execute(
+        "insert into documents (user_id, subject_id, filename, kind, size_bytes, page_count,"
+        " sha256) values (%s, %s, %s, %s, %s, %s, %s) returning id",
+        (
+            user_id,
+            subject_id,
+            document.filename,
+            document.kind,
+            document.size_bytes,
+            document.page_count,
+            document.sha256,
+        ),
+    ).fetchone()
+    with conn.cursor() as cur:
+        cur.executemany(
+            "insert into document_chunks (user_id, document_id, subject_id, ordinal, page_start,"
+            " page_end, page_offsets, heading, content)"
+            " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            [
+                (
+                    user_id,
+                    row["id"],
+                    subject_id,
+                    chunk.ordinal,
+                    chunk.page_start,
+                    chunk.page_end,
+                    Jsonb(list(chunk.page_offsets)),
+                    chunk.heading,
+                    chunk.content,
+                )
+                for chunk in document.chunks
+            ],
+        )
+
+
+def _search_words(text: str) -> list[str]:
+    """Distinct lowercase words of letters and digits, three characters or longer."""
+    words = (word.lower() for word in re.findall(r"[^\W_]+", text))
+    return list(dict.fromkeys(word for word in words if len(word) >= 3))
 
 
 class PgStore:
@@ -215,28 +302,91 @@ class PgStore:
             ).fetchone()
             if owned is None:
                 raise LookupError(f"subject {subject_id} not found")
-            existing = conn.execute(
-                "select name from concepts where user_id = %s and subject_id = %s",
+            return _insert_concepts(conn, user_id, subject_id, concepts)
+
+    def create_subject_with_notes(
+        self,
+        user_id: UUID,
+        name: str,
+        documents: Sequence[NewDocument],
+        concepts: Sequence[tuple[str, str]],
+    ) -> UUID:
+        with self.pool.connection() as conn, conn.transaction():
+            subject_id = conn.execute(
+                "insert into subjects (user_id, name) values (%s, %s) returning id",
+                (user_id, name),
+            ).fetchone()["id"]
+            for document in documents:
+                _insert_document(conn, user_id, subject_id, document)
+            _insert_concepts(conn, user_id, subject_id, concepts)
+        return subject_id
+
+    def add_document(
+        self,
+        user_id: UUID,
+        subject_id: UUID,
+        document: NewDocument,
+        concepts: Sequence[tuple[str, str]],
+    ) -> int:
+        with self.pool.connection() as conn, conn.transaction():
+            # The subject row lock makes concurrent uploads count and insert one after the other.
+            owned = conn.execute(
+                "select 1 from subjects where id = %s and user_id = %s for update",
+                (subject_id, user_id),
+            ).fetchone()
+            if owned is None:
+                raise LookupError(f"subject {subject_id} not found")
+            stored = conn.execute(
+                "select count(*) as n, coalesce(bool_or(sha256 = %s), false) as same"
+                " from documents where user_id = %s and subject_id = %s",
+                (document.sha256, user_id, subject_id),
+            ).fetchone()
+            if stored["same"]:
+                raise DocumentRefused("duplicate")
+            if stored["n"] >= MAX_DOCUMENTS:
+                raise DocumentRefused("full")
+            _insert_document(conn, user_id, subject_id, document)
+            return _insert_concepts(conn, user_id, subject_id, concepts)
+
+    def list_documents(self, user_id: UUID, subject_id: UUID) -> list[Document]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select d.id, d.filename, d.kind, d.size_bytes, d.page_count, d.created_at,"
+                " (select count(*) from document_chunks c where c.document_id = d.id"
+                " and c.user_id = d.user_id)::int as chunk_count"
+                " from documents d where d.user_id = %s and d.subject_id = %s"
+                " order by d.created_at, d.id",
                 (user_id, subject_id),
             ).fetchall()
-            fresh = new_concepts([row["name"] for row in existing], concepts)
-            if not fresh:
-                return 0
-            top = conn.execute(
-                "select coalesce(max(position), -1) as top from concepts"
-                " where user_id = %s and subject_id = %s",
-                (user_id, subject_id),
-            ).fetchone()["top"]
-            with conn.cursor() as cur:
-                cur.executemany(
-                    "insert into concepts (user_id, subject_id, name, description, position)"
-                    " values (%s, %s, %s, %s, %s)",
-                    [
-                        (user_id, subject_id, name, description, top + 1 + offset)
-                        for offset, (name, description) in enumerate(fresh)
-                    ],
-                )
-        return len(fresh)
+        return [Document(**row) for row in rows]
+
+    def has_document(self, user_id: UUID, subject_id: UUID, sha256: str) -> bool:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select 1 from documents where user_id = %s and subject_id = %s and sha256 = %s",
+                (user_id, subject_id, sha256),
+            ).fetchone()
+        return row is not None
+
+    def search_chunks(
+        self, user_id: UUID, subject_id: UUID, text: str, limit: int = 4
+    ) -> list[Chunk]:
+        words = _search_words(text)
+        if not words:
+            return []
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select c.id, d.filename, c.content, c.heading, c.page_start, c.page_offsets"
+                " from document_chunks c join documents d"
+                " on d.id = c.document_id and d.user_id = c.user_id"
+                " cross join websearch_to_tsquery('english', %s) q"
+                " where c.user_id = %s and c.subject_id = %s and c.search_vector @@ q"
+                " and ts_rank_cd(c.search_vector, q) >= %s"
+                " order by ts_rank_cd(c.search_vector, q) desc, d.created_at, c.ordinal"
+                " limit %s",
+                (" or ".join(words), user_id, subject_id, MIN_RANK, limit),
+            ).fetchall()
+        return [Chunk(**{**row, "page_offsets": tuple(row["page_offsets"])}) for row in rows]
 
     def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
         with self.pool.connection() as conn:

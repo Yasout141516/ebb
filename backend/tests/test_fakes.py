@@ -5,8 +5,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from ebb.domain import Answer, GradeValue, Question
+from ebb.domain import Answer, ChunkDraft, GradeValue, NewDocument, Question
 from ebb.llm.tutor import AllProvidersExhausted
+from ebb.store import DocumentRefused, merge_note_concepts
 from tests.fakes import FakeTutor, MemoryStore, make_subject, seed_concept
 
 ALICE = UUID("00000000-0000-0000-0000-00000000000a")
@@ -142,3 +143,86 @@ def test_fake_tutor_can_fail_to_extend():
     with pytest.raises(AllProvidersExhausted):
         tutor.extend_concepts("Networks", [])
     assert len(tutor.extend_calls) == 1
+
+
+def doc(name: str, *contents: str, sha: str | None = None) -> NewDocument:
+    chunks = tuple(ChunkDraft(i, text, f"Part {i}", 1, 1, (0,)) for i, text in enumerate(contents))
+    return NewDocument(name, "txt", 100, None, sha or f"sha-{name}", chunks)
+
+
+SUBNET = "Subnet masks split a network into subnets; the broadcast address closes each subnet."
+ARP = "ARP maps IP addresses to MAC addresses on a local network."
+TCP = "The TCP three-way handshake opens a connection with SYN, SYN-ACK and ACK."
+
+
+def test_memory_store_add_document_saves_chunks_and_new_concepts():
+    store = MemoryStore()
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "Names.")])
+
+    added = store.add_document(
+        ALICE, subject_id, doc("a.txt", "one", "two"), [("DNS", "dup"), ("ARP", "Maps.")]
+    )
+
+    assert added == 1
+    [saved] = store.list_documents(ALICE, subject_id)
+    assert (saved.filename, saved.chunk_count) == ("a.txt", 2)
+    assert [c.name for c in store.list_concepts(ALICE, subject_id)] == ["DNS", "ARP"]
+    with pytest.raises(LookupError):
+        store.add_document(BOB, subject_id, doc("b.txt", "x"), [])
+
+
+def test_memory_store_refuses_a_sixth_and_a_repeated_document():
+    store = MemoryStore()
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    for n in range(5):
+        store.add_document(ALICE, subject_id, doc(f"{n}.txt", "x"), [])
+
+    with pytest.raises(DocumentRefused) as full:
+        store.add_document(ALICE, subject_id, doc("6.txt", "x"), [])
+    with pytest.raises(DocumentRefused) as same:
+        store.add_document(ALICE, subject_id, doc("7.txt", "x", sha="sha-0.txt"), [])
+
+    assert (full.value.reason, same.value.reason) == ("full", "duplicate")
+    assert store.has_document(ALICE, subject_id, "sha-0.txt")
+    assert not store.has_document(BOB, subject_id, "sha-0.txt")
+
+
+def test_memory_store_create_subject_with_notes():
+    store = MemoryStore()
+
+    subject_id = store.create_subject_with_notes(
+        ALICE, "Networks", [doc("a.txt", "one")], [("DNS", "N."), ("dns", "dup"), ("ARP", "M.")]
+    )
+
+    assert [c.name for c in store.list_concepts(ALICE, subject_id)] == ["DNS", "ARP"]
+    assert [d.filename for d in store.list_documents(ALICE, subject_id)] == ["a.txt"]
+
+
+def test_memory_store_search_needs_two_shared_words_and_is_scoped():
+    store = MemoryStore()
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    store.add_document(ALICE, subject_id, doc("net.txt", SUBNET, ARP, TCP), [])
+
+    found = store.search_chunks(ALICE, subject_id, "Subnetting: a network using subnet masks")
+
+    assert [c.content for c in found] == [SUBNET]
+    assert found[0].filename == "net.txt"
+    assert store.search_chunks(ALICE, subject_id, "Quantum entanglement") == []
+    assert store.search_chunks(BOB, subject_id, "subnet masks network") == []
+    assert store.list_documents(BOB, subject_id) == []
+
+
+def test_merge_note_concepts():
+    matched, fresh = merge_note_concepts(
+        ["Subnetting", "DNS"],
+        [
+            ("Subnet masks", "Masks.", "subnetting "),
+            ("Ghost", "Links nowhere.", "Nonexistent"),
+            ("dns", "Already there.", None),
+            ("ARP", "Maps.", None),
+            ("arp", "Dup.", None),
+        ],
+    )
+
+    assert matched == ["Subnetting"]
+    assert fresh == [("ARP", "Maps.")]

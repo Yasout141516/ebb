@@ -1,5 +1,6 @@
 """Postgres tests: migrations, the repository, idempotency and per-user isolation."""
 
+import threading
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -10,8 +11,9 @@ from langgraph.types import Command
 
 from ebb.db.migrate import migrate
 from ebb.db.repo import PgStore
-from ebb.domain import Answer, GradeValue, Option, Question
+from ebb.domain import Answer, ChunkDraft, GradeValue, NewDocument, Option, Question
 from ebb.graph.build import build_graph
+from ebb.store import DocumentRefused
 from tests.fakes import FakeTutor
 
 pytestmark = pytest.mark.db
@@ -379,3 +381,137 @@ def test_session_lock_on_a_dead_connection_keeps_the_original_error(store, pg_po
             )
         raise RuntimeError("crash")
     assert lock_is_free(pg_pool, "t-1")
+
+
+def doc(name: str, *contents: str, sha: str | None = None) -> NewDocument:
+    chunks = tuple(ChunkDraft(i, text, f"Part {i}", 1, 1, (0,)) for i, text in enumerate(contents))
+    return NewDocument(name, "txt", 100, None, sha or f"sha-{name}", chunks)
+
+
+def test_add_document_saves_chunks_and_new_concepts(store):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "Names.")])
+
+    added = store.add_document(
+        ALICE, subject_id, doc("a.txt", "one", "two"), [("DNS", "dup"), ("ARP", "Maps.")]
+    )
+
+    assert added == 1
+    [saved] = store.list_documents(ALICE, subject_id)
+    assert (saved.filename, saved.kind, saved.chunk_count) == ("a.txt", "txt", 2)
+    assert [c.name for c in store.list_concepts(ALICE, subject_id)] == ["DNS", "ARP"]
+
+
+def test_add_document_to_another_users_subject_is_refused(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    with pytest.raises(LookupError):
+        store.add_document(BOB, subject_id, doc("a.txt", "one"), [])
+    assert store.list_documents(ALICE, subject_id) == []
+
+
+def test_fifth_document_ok_sixth_refused(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    for n in range(5):
+        store.add_document(ALICE, subject_id, doc(f"{n}.txt", "x"), [])
+
+    with pytest.raises(DocumentRefused) as refused:
+        store.add_document(ALICE, subject_id, doc("6.txt", "x"), [])
+
+    assert refused.value.reason == "full"
+    assert len(store.list_documents(ALICE, subject_id)) == 5
+
+
+def test_same_file_twice_refused(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    store.add_document(ALICE, subject_id, doc("a.txt", "x", sha="same"), [])
+
+    with pytest.raises(DocumentRefused) as refused:
+        store.add_document(ALICE, subject_id, doc("b.txt", "y", sha="same"), [])
+
+    assert refused.value.reason == "duplicate"
+    assert store.has_document(ALICE, subject_id, "same")
+    assert not store.has_document(ALICE, subject_id, "other")
+    assert not store.has_document(BOB, subject_id, "same")
+
+
+def test_concurrent_adds_respect_the_limit(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    for n in range(4):
+        store.add_document(ALICE, subject_id, doc(f"{n}.txt", "x"), [])
+    outcomes: list[str] = []
+
+    def add(name: str) -> None:
+        try:
+            store.add_document(ALICE, subject_id, doc(name, "x"), [])
+            outcomes.append("ok")
+        except DocumentRefused as refused:
+            outcomes.append(refused.reason)
+
+    threads = [threading.Thread(target=add, args=(f"c{n}.txt",)) for n in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert sorted(outcomes) == ["full", "ok"]
+    assert len(store.list_documents(ALICE, subject_id)) == 5
+
+
+def test_create_subject_with_notes_stores_everything_in_order(store):
+    subject_id = store.create_subject_with_notes(
+        ALICE,
+        "Networks",
+        [doc("a.txt", "one")],
+        [("DNS", "Names."), ("dns", "dup"), ("ARP", "Maps.")],
+    )
+
+    assert [c.name for c in store.list_concepts(ALICE, subject_id)] == ["DNS", "ARP"]
+    assert [d.filename for d in store.list_documents(ALICE, subject_id)] == ["a.txt"]
+
+
+def test_create_subject_with_notes_is_one_transaction(store):
+    bad = NewDocument("a.txt", "bad-kind", 1, None, "s", (ChunkDraft(0, "x", None, 1, 1, ()),))
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        store.create_subject_with_notes(ALICE, "Networks", [bad], [("DNS", "Names.")])
+
+    assert store.list_subjects(ALICE) == []
+
+
+SUBNET = (
+    "Subnet masks split a network into subnets. The mask decides the network part and "
+    "the host part of an address, and the broadcast address closes each subnet."
+)
+ARP = "ARP maps IP addresses to MAC addresses on a local network."
+TCP = "The TCP three-way handshake opens a connection with SYN, SYN-ACK and ACK."
+
+
+def test_search_finds_the_matching_chunk_and_ignores_others(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    store.add_document(ALICE, subject_id, doc("net.txt", SUBNET, ARP, TCP), [])
+
+    found = store.search_chunks(
+        ALICE, subject_id, "Subnetting: dividing a network using subnet masks"
+    )
+
+    assert found[0].content == SUBNET
+    assert found[0].filename == "net.txt"
+    assert found[0].page_offsets == (0,)
+    assert TCP not in [c.content for c in found]
+
+
+def test_search_returns_nothing_for_an_uncovered_concept(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    store.add_document(ALICE, subject_id, doc("net.txt", SUBNET, ARP, TCP), [])
+
+    assert store.search_chunks(ALICE, subject_id, "Quantum entanglement") == []
+    assert store.search_chunks(ALICE, subject_id, "a to") == []
+
+
+def test_documents_are_scoped_to_the_user(store):
+    subject_id = store.create_subject(ALICE, "Networks", [])
+    store.add_document(ALICE, subject_id, doc("net.txt", SUBNET), [])
+
+    assert store.list_documents(BOB, subject_id) == []
+    assert store.search_chunks(BOB, subject_id, "subnet masks broadcast") == []
+    assert store.search_chunks(ALICE, subject_id, "subnet masks broadcast") != []

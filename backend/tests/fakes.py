@@ -1,5 +1,6 @@
 """Test doubles: an in-memory Store and a scripted Tutor. No network, no database."""
 
+import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
@@ -9,9 +10,12 @@ from uuid import UUID, uuid4
 from ebb import mastery
 from ebb.domain import (
     Answer,
+    Chunk,
     Concept,
+    Document,
     Grade,
     GradeValue,
+    NewDocument,
     Option,
     Question,
     ResumableSession,
@@ -19,14 +23,20 @@ from ebb.domain import (
 )
 from ebb.llm.schemas import ConceptDraft
 from ebb.llm.tutor import AllProvidersExhausted, Generated
-from ebb.store import PRUNE_AFTER, RESUME_WINDOW, new_concepts
+from ebb.store import MAX_DOCUMENTS, PRUNE_AFTER, RESUME_WINDOW, DocumentRefused, new_concepts
 
 # (type, difficulty) of each question in a fake batch, in order.
 BATCH_PATTERN = [("short", 1), ("mcq", 1), ("mcq", 2), ("short", 3), ("mcq", 3)]
 
 
+def _words(text: str) -> set[str]:
+    return {w.lower() for w in re.findall(r"[^\W_]+", text) if len(w) >= 3}
+
+
 class MemoryStore:
     def __init__(self) -> None:
+        # document id -> (user id, subject id, what was added, what list_documents shows)
+        self.documents: dict[UUID, tuple[UUID, UUID, NewDocument, Document]] = {}
         self.profiles: set[UUID] = set()
         self.subjects: dict[UUID, tuple[UUID, Subject]] = {}
         self.concepts: dict[UUID, tuple[UUID, Concept]] = {}  # insertion order = position
@@ -136,6 +146,78 @@ class MemoryStore:
             concept = Concept(uuid4(), subject_id, name, description)
             self.concepts[concept.id] = (user_id, concept)
         return len(fresh)
+
+    def create_subject_with_notes(
+        self,
+        user_id: UUID,
+        name: str,
+        documents: Sequence[NewDocument],
+        concepts: Sequence[tuple[str, str]],
+    ) -> UUID:
+        subject_id = self.create_subject(user_id, name, new_concepts([], concepts))
+        for document in documents:
+            self._store_document(user_id, subject_id, document)
+        return subject_id
+
+    def add_document(
+        self,
+        user_id: UUID,
+        subject_id: UUID,
+        document: NewDocument,
+        concepts: Sequence[tuple[str, str]],
+    ) -> int:
+        if self.subjects.get(subject_id, (None,))[0] != user_id:
+            raise LookupError(f"subject {subject_id} not found")
+        if self.has_document(user_id, subject_id, document.sha256):
+            raise DocumentRefused("duplicate")
+        if len(self.list_documents(user_id, subject_id)) >= MAX_DOCUMENTS:
+            raise DocumentRefused("full")
+        self._store_document(user_id, subject_id, document)
+        return self.add_concepts(user_id, subject_id, concepts)
+
+    def _store_document(self, user_id: UUID, subject_id: UUID, document: NewDocument) -> None:
+        shown = Document(
+            uuid4(),
+            document.filename,
+            document.kind,
+            document.size_bytes,
+            document.page_count,
+            len(document.chunks),
+            datetime.now(UTC),
+        )
+        self.documents[shown.id] = (user_id, subject_id, document, shown)
+
+    def list_documents(self, user_id: UUID, subject_id: UUID) -> list[Document]:
+        return [
+            shown
+            for owner, subject, _, shown in self.documents.values()
+            if owner == user_id and subject == subject_id
+        ]
+
+    def has_document(self, user_id: UUID, subject_id: UUID, sha256: str) -> bool:
+        return any(
+            owner == user_id and subject == subject_id and document.sha256 == sha256
+            for owner, subject, document, _ in self.documents.values()
+        )
+
+    def search_chunks(
+        self, user_id: UUID, subject_id: UUID, text: str, limit: int = 4
+    ) -> list[Chunk]:
+        """Ranks by the number of words shared with `text`; at least two are needed."""
+        wanted = _words(text)
+        scored: list[tuple[int, Chunk]] = []
+        for owner, subject, document, shown in self.documents.values():
+            if owner != user_id or subject != subject_id:
+                continue
+            for c in document.chunks:
+                shared = len(wanted & _words(f"{c.heading or ''} {c.content}"))
+                if shared >= 2:
+                    chunk = Chunk(
+                        uuid4(), shown.filename, c.content, c.heading, c.page_start, c.page_offsets
+                    )
+                    scored.append((shared, chunk))
+        scored.sort(key=lambda pair: -pair[0])
+        return [chunk for _, chunk in scored[:limit]]
 
     def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
         return sum(

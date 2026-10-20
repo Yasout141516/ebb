@@ -3,13 +3,32 @@
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
-from ebb.domain import Answer, Concept, Question, ResumableSession, Subject
+from ebb.domain import (
+    Answer,
+    Chunk,
+    Concept,
+    Document,
+    NewDocument,
+    Question,
+    ResumableSession,
+    Subject,
+)
 
 RESUME_WINDOW = timedelta(hours=24)
 PRUNE_AFTER = timedelta(days=7)
+MAX_DOCUMENTS = 5
+
+
+class DocumentRefused(Exception):
+    """A document was not stored: the subject already has MAX_DOCUMENTS ("full") or this
+    exact file ("duplicate")."""
+
+    def __init__(self, reason: Literal["full", "duplicate"]) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def new_concepts(
@@ -25,6 +44,24 @@ def new_concepts(
             seen.add(key)
             fresh.append((name, description))
     return fresh
+
+
+def merge_note_concepts(
+    existing_names: Sequence[str], found: Sequence[tuple[str, str, str | None]]
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Split concepts found in notes, given as (name, description, same_as), into the existing
+    names they match and the fresh ones. A same_as naming an existing concept (stripped,
+    case-insensitive) counts as a match; one naming nothing is dropped."""
+    existing = {name.strip().casefold(): name for name in existing_names}
+    matched: list[str] = []
+    unlinked: list[tuple[str, str]] = []
+    for name, description, same_as in found:
+        if same_as is None:
+            unlinked.append((name, description))
+        elif (hit := existing.get(same_as.strip().casefold())) is not None:
+            if hit not in matched:
+                matched.append(hit)
+    return matched, new_concepts(existing_names, unlinked)
 
 
 class Store(Protocol):
@@ -98,4 +135,39 @@ class Store(Protocol):
 
     def session_lock(self, user_id: UUID, thread_id: str) -> AbstractContextManager[bool]:
         """Yields True if this process now holds the thread's lock, False if another does."""
+        ...
+
+    def create_subject_with_notes(
+        self,
+        user_id: UUID,
+        name: str,
+        documents: Sequence[NewDocument],
+        concepts: Sequence[tuple[str, str]],
+    ) -> UUID:
+        """Create the subject, its documents with their chunks, and its concepts in one
+        transaction. Name clashes are the caller's to check."""
+        ...
+
+    def add_document(
+        self,
+        user_id: UUID,
+        subject_id: UUID,
+        document: NewDocument,
+        concepts: Sequence[tuple[str, str]],
+    ) -> int:
+        """Store the document, its chunks and the new concepts in one transaction; returns how
+        many concepts were added. Raises DocumentRefused at MAX_DOCUMENTS or for a file already
+        stored, and LookupError if the subject is not the user's."""
+        ...
+
+    def list_documents(self, user_id: UUID, subject_id: UUID) -> list[Document]:
+        """The subject's documents, oldest first."""
+        ...
+
+    def has_document(self, user_id: UUID, subject_id: UUID, sha256: str) -> bool: ...
+
+    def search_chunks(
+        self, user_id: UUID, subject_id: UUID, text: str, limit: int = 4
+    ) -> list[Chunk]:
+        """The subject's note chunks that best match `text`, best first; empty if none do."""
         ...
