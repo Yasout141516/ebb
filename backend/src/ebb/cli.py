@@ -1,4 +1,4 @@
-"""`ebb new`, `ebb study`, `ebb status`.
+"""`ebb new`, `ebb add`, `ebb study`, `ebb status`.
 
 The LLM and LangGraph stacks take seconds to import, so they are imported inside
 the commands that use them; `ebb --help` and `ebb status` never load them.
@@ -8,6 +8,7 @@ import atexit
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -20,17 +21,20 @@ from ebb.config import ConfigError, Settings, resolve_timezone
 from ebb.db.migrate import migrate, migration_lock
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
-from ebb.domain import ResumableSession, Subject
-from ebb.store import Store
+from ebb.domain import Concept, NewDocument, ResumableSession, Subject
+from ebb.store import MAX_DOCUMENTS, DocumentRefused, Store, merge_note_concepts
 from ebb.ui import (
+    PRIVACY_LINE,
     caught_up_line,
     format_ago,
     greeting,
+    notes_report,
     read_reply,
     read_yes_no,
     render_summary,
     render_turn,
     resume_question,
+    source_lines,
     status_table,
 )
 
@@ -116,34 +120,157 @@ def _ask(payload: dict[str, Any]) -> dict[str, Any]:
         return reply
 
 
-@app.command()
-def new(topic: Annotated[str, typer.Argument(help="What you are studying.")]) -> None:
-    """Create a subject from a topic: Ebb lists its core concepts."""
+def _exhausted(error: Exception) -> NoReturn:
     from ebb.graph.nodes import EXHAUSTED_NOTICE
+
+    console.print(f"[red]{escape(EXHAUSTED_NOTICE)}[/red]")
+    cause = str(error).strip()
+    if cause:
+        console.print(f"[dim]{escape(cause.splitlines()[0])}[/dim]")
+    raise typer.Exit(1) from error
+
+
+def _in_docker() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def _prepare(path: Path) -> NewDocument:
+    """Run every check on a notes file; a refusal exits 1 with its message."""
+    from ebb.notes import NotesError, prepare
+
+    try:
+        return prepare(path)
+    except NotesError as error:
+        message = str(error)
+        if message.startswith("Can't open") and _in_docker():
+            message += "\nIn Docker, put files in the notes/ folder and use notes/<file>."
+        _fail(message)
+
+
+def _find_concepts(
+    tutor: LangChainTutor,
+    subject: str,
+    known: list[tuple[str, str]],
+    document: NewDocument,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Ask for the concepts in one file; returns (matched names, new (name, description))."""
+    from ebb.chunking import digest
+    from ebb.llm.tutor import AllProvidersExhausted
+
+    # Placeholders: the prompt only uses names and descriptions, so these ids are never stored.
+    placeholder = uuid4()
+    existing = [Concept(uuid4(), placeholder, name, text) for name, text in known]
+    with console.status("Finding the concepts in your notes…"):
+        try:
+            generated = tutor.concepts_from_notes(subject, existing, digest(document.chunks))
+        except AllProvidersExhausted as error:
+            _exhausted(error)
+        except ConfigError as error:
+            _fail(str(error), code=2)
+    found = [(c.name, c.description, c.same_as) for c in generated.value]
+    return merge_note_concepts([name for name, _ in known], found)
+
+
+def _print_report(document: NewDocument, matched: list[str], fresh: list[tuple[str, str]]) -> None:
+    pages, chunks = document.page_count, len(document.chunks)
+    for line in notes_report(document.filename, pages, chunks, matched, fresh):
+        console.print(escape(line))
+
+
+@app.command()
+def new(
+    topic: Annotated[str, typer.Argument(help="What you are studying.")],
+    notes: Annotated[
+        list[Path] | None,
+        typer.Option("--notes", help="A PDF, TXT or MD file to build the concepts from."),
+    ] = None,
+) -> None:
+    """Create a subject from a topic, or from your notes: Ebb lists its core concepts."""
     from ebb.llm.tutor import AllProvidersExhausted
 
     topic = topic.strip()
     if not topic:
         _fail('Give a topic, e.g. ebb new "Computer Networks"')
     settings, store = _open_store()
+    user_id = settings.ebb_dev_user_id
+    for existing in store.list_subjects(user_id):
+        if existing.name.casefold() == topic.casefold():
+            _fail(f"{existing.name} already exists — add notes to it with: ebb add <file>")
+    if notes:
+        _new_from_notes(settings, store, topic, notes)
+        return
     tutor = _tutor(settings)
     with console.status("Mapping the topic…"):
         try:
             generated = tutor.extract_concepts(topic)
         except AllProvidersExhausted as error:
-            console.print(f"[red]{escape(EXHAUSTED_NOTICE)}[/red]")
-            cause = str(error).strip()
-            if cause:
-                console.print(f"[dim]{escape(cause.splitlines()[0])}[/dim]")
-            raise typer.Exit(1) from error
+            _exhausted(error)
         except ConfigError as error:
             _fail(str(error), code=2)
     concepts = [(c.name, c.description) for c in generated.value]
-    store.create_subject(settings.ebb_dev_user_id, topic, concepts)
+    store.create_subject(user_id, topic, concepts)
     console.print(f"[bold]{escape(topic)}[/bold] · {len(concepts)} concepts")
     for number, (name, description) in enumerate(concepts, start=1):
         console.print(f"  {number}. [bold]{escape(name)}[/bold] [dim]— {escape(description)}[/dim]")
     console.print("\nStart with: [bold]ebb study[/bold]")
+
+
+def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[Path]) -> None:
+    """All or nothing: every file is checked, then every concept call made, before any save."""
+    if len(paths) > MAX_DOCUMENTS:
+        _fail(f"{topic} can have at most {MAX_DOCUMENTS} files.")
+    documents: list[NewDocument] = []
+    for path in paths:
+        document = _prepare(path)
+        if any(d.sha256 == document.sha256 for d in documents):
+            _fail(f"{document.filename} is already in {topic}.")
+        documents.append(document)
+    tutor = _tutor(settings)
+    console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
+    known: list[tuple[str, str]] = []
+    reports: list[tuple[NewDocument, list[str], list[tuple[str, str]]]] = []
+    for document in documents:
+        matched, fresh = _find_concepts(tutor, topic, known, document)
+        known += fresh
+        reports.append((document, matched, fresh))
+    store.create_subject_with_notes(settings.ebb_dev_user_id, topic, documents, known)
+    console.print(f"[bold]{escape(topic)}[/bold]")
+    for document, matched, fresh in reports:
+        _print_report(document, matched, fresh)
+    console.print("\nStart with: [bold]ebb study[/bold]")
+
+
+def _full_copy(subject: Subject) -> str:
+    return f"{subject.name} already has {MAX_DOCUMENTS} of {MAX_DOCUMENTS} files."
+
+
+def _duplicate_copy(subject: Subject, document: NewDocument) -> str:
+    return f"{document.filename} is already in {subject.name}."
+
+
+@app.command()
+def add(
+    path: Annotated[Path, typer.Argument(help="A PDF, TXT or MD file of your notes.")],
+    subject: Annotated[str | None, typer.Argument(help="Subject name (default: newest).")] = None,
+) -> None:
+    """Add a notes file to a subject: Ebb finds the concepts in it and cites it."""
+    settings, store = _open_store()
+    user_id = settings.ebb_dev_user_id
+    chosen = _subject(store, user_id, subject)
+    document = _prepare(path)
+    if store.count_documents(user_id, chosen.id) >= MAX_DOCUMENTS:
+        _fail(_full_copy(chosen))
+    if store.has_document(user_id, chosen.id, document.sha256):
+        _fail(_duplicate_copy(chosen, document))
+    tutor = _tutor(settings)
+    console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
+    known = [(c.name, c.description) for c in store.list_concepts(user_id, chosen.id)]
+    matched, fresh = _find_concepts(tutor, chosen.name, known, document)
+    try:
+        store.add_document(user_id, chosen.id, document, fresh)
+    except DocumentRefused as error:  # another terminal got there first
+        _fail(_full_copy(chosen) if error.reason == "full" else _duplicate_copy(chosen, document))
+    _print_report(document, matched, fresh)
 
 
 def _checkpointer(store: PgStore) -> BaseCheckpointSaver:
@@ -308,3 +435,10 @@ def status(
     concepts = store.list_concepts(settings.ebb_dev_user_id, chosen.id)
     console.print(f"[bold]{escape(chosen.name)}[/bold]")
     console.print(status_table(concepts, datetime.now(UTC), tz))
+    documents = store.list_documents(settings.ebb_dev_user_id, chosen.id)
+    console.print("\n[bold]Sources[/bold]")
+    if documents:
+        for line in source_lines(documents):
+            console.print(f"  {escape(line)}")
+    else:
+        console.print("  No sources yet. Add notes with: ebb add <file>")

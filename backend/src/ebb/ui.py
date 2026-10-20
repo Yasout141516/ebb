@@ -10,7 +10,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from ebb.domain import Concept
+from ebb.domain import Concept, Document
 from ebb.grading import parse_choice
 from ebb.mastery import MAX_STAGE, is_due, tide
 
@@ -171,3 +171,36 @@ def render_summary(console: Console, final: dict[str, Any], tz: ZoneInfo) -> Non
             next_review,
         )
     console.print(table)
+
+
+PRIVACY_LINE = (
+    "Don't upload sensitive documents. "
+    "Files are processed by an AI model to write questions and cite answers."
+)
+
+
+def notes_report(
+    filename: str,
+    page_count: int | None,
+    chunk_count: int,
+    matched: Sequence[str],
+    fresh: Sequence[tuple[str, str]],
+) -> list[str]:
+    """What adding one file found, as plain lines (escape them before printing)."""
+    pages = "" if page_count is None else f"{page_count} pages · "
+    lines = [f"{filename} · {pages}{chunk_count} passages"]
+    summary = f"{len(matched) + len(fresh)} concepts in these notes — "
+    if matched:
+        summary += f"{len(matched)} already here ({', '.join(matched)}), "
+    lines.append(f"{summary}{len(fresh)} new:")
+    lines.extend(f"  {n}. {name} — {text}" for n, (name, text) in enumerate(fresh, start=1))
+    return lines
+
+
+def source_lines(documents: Sequence[Document]) -> list[str]:
+    """One line per stored file for `ebb status`."""
+    lines = []
+    for document in documents:
+        pages = "" if document.page_count is None else f"{document.page_count} pages · "
+        lines.append(f"{document.filename} · {pages}{document.size_bytes / (1024 * 1024):.1f} MB")
+    return lines

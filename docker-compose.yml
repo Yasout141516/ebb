@@ -31,6 +31,8 @@ services:
     # tini as PID 1: a closed terminal or `docker stop` then reaches ebb with the default
     # signal actions, as natively, so the session stays resumable.
     init: true
+    volumes:
+      - ./notes:/home/ebb/notes:ro
     stdin_open: true
     tty: true
 

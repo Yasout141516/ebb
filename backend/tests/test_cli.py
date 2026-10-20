@@ -515,3 +515,246 @@ def test_a_resumed_session_holds_its_lock_while_it_runs(fakes, monkeypatch):
     assert len(store.sessions) == 1  # the resumed session, not a fresh one
     assert seen == [True]
     assert store.locks == set()
+
+
+# --- adding notes ---
+
+PASSAGE = "A subnet splits one network into smaller ones. Routers forward packets between them. "
+
+
+def note_file(tmp_path, name="wk1.md", body=None):
+    path = tmp_path / name
+    path.write_text(body or f"# Subnets\n\n{PASSAGE * 5}\n", encoding="utf-8")
+    return path
+
+
+def one_subject(store):
+    [subject] = store.list_subjects(next(iter(store.profiles)))
+    return subject
+
+
+def flat(output: str) -> str:
+    return " ".join(output.split())
+
+
+def test_add_reports_matched_and_new_concepts(fakes, tmp_path):
+    store, tutor = fakes
+    user = next(iter(store.profiles))
+    runner.invoke(cli.app, ["new", "Networks"])  # concepts "Networks 1" ... "Networks 6"
+    tutor.note_concepts = [[("Networks 1", "Networks 1"), ("ARP", None)]]
+
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+
+    assert result.exit_code == 0, result.output
+    assert "wk1.md · 1 passages" in result.output
+    assert "2 concepts in these notes — 1 already here (Networks 1), 1 new:" in result.output
+    assert "1. ARP — About ARP." in result.output
+    assert store.count_documents(user, one_subject(store).id) == 1
+    assert len(store.list_concepts(user, one_subject(store).id)) == 7
+
+
+def test_add_prints_the_privacy_line_once(fakes, tmp_path):
+    runner.invoke(cli.app, ["new", "Networks"])
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+    assert result.exit_code == 0, result.output
+    assert flat(result.output).count("Don't upload sensitive documents.") == 1
+    assert "Files are processed by an AI model to write questions and cite answers." in flat(
+        result.output
+    )
+
+
+@pytest.mark.parametrize(
+    "case", ["scanned", "too_big", "wrong_type", "missing", "duplicate", "full"]
+)
+def test_add_refusals_store_nothing_and_never_call_the_llm(fakes, tmp_path, case):
+    store, tutor = fakes
+    user = next(iter(store.profiles))
+    runner.invoke(cli.app, ["new", "Networks"])
+    subject = one_subject(store)
+    path = note_file(tmp_path)
+    expected = ""
+    if case == "scanned":
+        from tests.pdfs import build_pdf
+
+        path = build_pdf(tmp_path / "scan.pdf", ["image", "image"])
+        expected = "No text found — this looks like a scanned PDF."
+    elif case == "too_big":
+        path = tmp_path / "big.txt"
+        with path.open("wb") as handle:
+            handle.truncate(21 * 1024 * 1024)
+        expected = "over the 20 MB limit"
+    elif case == "wrong_type":
+        path = note_file(tmp_path, "notes.docx")
+        expected = "Ebb reads PDF, TXT or MD files."
+    elif case == "missing":
+        path = tmp_path / "nope.md"
+        expected = "Can't open"
+    elif case == "duplicate":
+        assert runner.invoke(cli.app, ["add", str(path)]).exit_code == 0
+        tutor.concepts_calls.clear()
+        expected = "wk1.md is already in Networks."
+    elif case == "full":
+        for n in range(5):
+            other = note_file(tmp_path, f"f{n}.md", f"# H{n}\n\n{PASSAGE * 4}{n}\n")
+            assert runner.invoke(cli.app, ["add", str(other)]).exit_code == 0
+        tutor.concepts_calls.clear()
+        path = note_file(tmp_path, "sixth.md", f"# H6\n\n{PASSAGE * 4}six\n")
+        expected = "Networks already has 5 of 5 files."
+    before = store.count_documents(user, subject.id)
+
+    result = runner.invoke(cli.app, ["add", str(path)])
+
+    assert result.exit_code == 1
+    assert expected in flat(result.output)
+    assert store.count_documents(user, subject.id) == before
+    assert tutor.concepts_calls == []
+    assert "Don't upload" not in result.output
+
+
+def test_add_a_missing_file_in_docker_says_where_to_put_it(fakes, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_in_docker", lambda: True)
+    runner.invoke(cli.app, ["new", "Networks"])
+    result = runner.invoke(cli.app, ["add", str(tmp_path / "nope.md")])
+    assert result.exit_code == 1
+    assert "In Docker, put files in the notes/ folder and use notes/<file>." in flat(result.output)
+
+
+def test_add_a_missing_file_outside_docker_has_no_hint(fakes, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_in_docker", lambda: False)
+    runner.invoke(cli.app, ["new", "Networks"])
+    result = runner.invoke(cli.app, ["add", str(tmp_path / "nope.md")])
+    assert result.exit_code == 1
+    assert "In Docker" not in result.output
+
+
+def test_add_llm_unavailable_stores_nothing(fakes, tmp_path):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    tutor.fail_concepts = True
+
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+
+    assert result.exit_code == 1
+    assert "The tutor couldn't respond" in result.output
+    assert store.documents == {}
+
+
+def test_add_exits_2_on_a_rejected_key(fakes, tmp_path, monkeypatch):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    def rejected(*args, **kwargs):
+        raise ConfigError("Gemini rejected GOOGLE_API_KEY — check the key in .env")
+
+    monkeypatch.setattr(tutor, "concepts_from_notes", rejected)
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+    assert result.exit_code == 2
+    assert store.documents == {}
+
+
+def test_add_race_refusal_uses_the_same_copy(fakes, tmp_path, monkeypatch):
+    from ebb.store import DocumentRefused
+
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    def refused(*args, **kwargs):
+        raise DocumentRefused("duplicate")
+
+    monkeypatch.setattr(store, "add_document", refused)
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+    assert result.exit_code == 1
+    assert "wk1.md is already in Networks." in flat(result.output)
+
+
+def test_new_with_notes_uses_only_note_concepts(fakes, tmp_path, monkeypatch):
+    store, tutor = fakes
+    tutor.note_concepts = [[("ARP", None), ("NAT", None), ("DNS", None)]]
+    calls = []
+    monkeypatch.setattr(tutor, "extract_concepts", lambda topic: calls.append(topic))
+
+    result = runner.invoke(cli.app, ["new", "Networks", "--notes", str(note_file(tmp_path))])
+
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    user = next(iter(store.profiles))
+    names = [c.name for c in store.list_concepts(user, one_subject(store).id)]
+    assert names == ["ARP", "NAT", "DNS"]
+    assert flat(result.output).count("Don't upload sensitive documents.") == 1
+    assert "3 concepts in these notes — 3 new:" in result.output
+
+
+def test_new_with_two_files_shares_concepts_between_calls(fakes, tmp_path):
+    store, tutor = fakes
+    tutor.note_concepts = [[("ARP", None)], [("arp", "ARP"), ("NAT", None)]]
+    one = note_file(tmp_path, "a.md")
+    two = note_file(tmp_path, "b.md", f"# Other\n\n{PASSAGE * 4}two\n")
+
+    result = runner.invoke(cli.app, ["new", "Networks", "--notes", str(one), "--notes", str(two)])
+
+    assert result.exit_code == 0, result.output
+    assert tutor.concepts_calls[1][1] == ["ARP"]
+    assert "1 already here (ARP), 1 new:" in result.output
+    user = next(iter(store.profiles))
+    assert store.count_documents(user, one_subject(store).id) == 2
+    assert len(store.list_concepts(user, one_subject(store).id)) == 2
+
+
+def test_new_with_two_files_is_all_or_nothing(fakes, tmp_path, monkeypatch):
+    store, tutor = fakes
+    real = tutor.concepts_from_notes
+
+    def second_fails(subject, existing, digest):
+        if tutor.concepts_calls:
+            raise AllProvidersExhausted("down")
+        return real(subject, existing, digest)
+
+    monkeypatch.setattr(tutor, "concepts_from_notes", second_fails)
+    tutor.note_concepts = [[("ARP", None)]]
+    one = note_file(tmp_path, "a.md")
+    two = note_file(tmp_path, "b.md", f"# Other\n\n{PASSAGE * 4}two\n")
+
+    result = runner.invoke(cli.app, ["new", "Networks", "--notes", str(one), "--notes", str(two)])
+
+    assert result.exit_code == 1
+    assert "The tutor couldn't respond" in result.output
+    assert store.subjects == {} and store.documents == {} and store.concepts == {}
+
+
+def test_new_with_a_bad_second_file_calls_no_llm_and_creates_nothing(fakes, tmp_path):
+    store, tutor = fakes
+    good, bad = note_file(tmp_path), tmp_path / "x.docx"
+
+    result = runner.invoke(cli.app, ["new", "Networks", "--notes", str(good), "--notes", str(bad)])
+
+    assert result.exit_code == 1
+    assert tutor.concepts_calls == [] and store.subjects == {}
+
+
+def test_new_refuses_an_existing_name(fakes):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Computer Networks"])
+
+    result = runner.invoke(cli.app, ["new", "computer networks"])
+
+    assert result.exit_code == 1
+    expected = "Computer Networks already exists — add notes to it with: ebb add <file>"
+    assert expected in flat(result.output)
+    assert len(store.subjects) == 1
+
+
+def test_status_lists_sources(fakes, tmp_path):
+    runner.invoke(cli.app, ["new", "Networks"])
+    runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+
+    result = runner.invoke(cli.app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "Sources" in result.output
+    assert "wk1.md · 0.0 MB" in result.output
+
+
+def test_status_without_sources_says_how_to_add_some(fakes):
+    runner.invoke(cli.app, ["new", "Networks"])
+    result = runner.invoke(cli.app, ["status"])
+    assert "No sources yet. Add notes with: ebb add <file>" in flat(result.output)

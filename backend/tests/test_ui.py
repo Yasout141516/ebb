@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from rich.console import Console
 
-from ebb.domain import Concept
+from ebb.domain import Concept, Document
 from ebb.ui import (
     caught_up_line,
     due_label,
@@ -13,11 +13,13 @@ from ebb.ui import (
     format_day,
     format_tide,
     greeting,
+    notes_report,
     read_reply,
     read_yes_no,
     render_summary,
     render_turn,
     resume_question,
+    source_lines,
     stage_dots,
     status_table,
 )
@@ -172,3 +174,36 @@ def test_caught_up_line_in_the_time_zone():
     due = datetime(2026, 10, 16, 20, tzinfo=UTC)
     assert caught_up_line(due, DHAKA) == "You're all caught up — next review Sat 17 Oct."
     assert caught_up_line(None, DHAKA) == "You're all caught up."
+
+
+def test_notes_report_for_a_pdf_with_matches_and_new_concepts():
+    lines = notes_report(
+        "wk1.pdf", 38, 112, ["Subnetting", "DNS"], [("ARP", "Maps IPs to MACs."), ("NAT", "x")]
+    )
+    assert lines == [
+        "wk1.pdf · 38 pages · 112 passages",
+        "4 concepts in these notes — 2 already here (Subnetting, DNS), 2 new:",
+        "  1. ARP — Maps IPs to MACs.",
+        "  2. NAT — x",
+    ]
+
+
+def test_notes_report_leaves_out_pages_for_text_files():
+    lines = notes_report("ch3.md", None, 7, [], [("ARP", "x")])
+    assert lines[0] == "ch3.md · 7 passages"
+    assert lines[1] == "1 concepts in these notes — 1 new:"
+
+
+def test_notes_report_leaves_out_the_list_when_nothing_is_new():
+    lines = notes_report("ch3.md", None, 7, ["DNS"], [])
+    assert lines == [
+        "ch3.md · 7 passages",
+        "1 concepts in these notes — 1 already here (DNS), 0 new:",
+    ]
+
+
+def test_source_lines():
+    now = datetime(2026, 10, 15, tzinfo=UTC)
+    pdf = Document(uuid4(), "wk1.pdf", "pdf", 2 * 1024 * 1024, 38, 112, now)
+    text = Document(uuid4(), "ch3.md", "md", 512 * 1024, None, 7, now)
+    assert source_lines([pdf, text]) == ["wk1.pdf · 38 pages · 2.0 MB", "ch3.md · 0.5 MB"]
