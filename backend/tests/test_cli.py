@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 
 from ebb import cli
 from ebb.config import ConfigError, Settings
+from ebb.domain import ChunkDraft, NewDocument
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.ui import format_day
 from tests.fakes import FakeTutor, FakeWebSearch, MemoryStore, seed_concept
@@ -780,3 +781,82 @@ def test_status_without_sources_says_how_to_add_some(fakes):
     runner.invoke(cli.app, ["new", "Networks"])
     result = runner.invoke(cli.app, ["status"])
     assert "No sources yet. Add notes with: ebb add <file>" in flat(result.output)
+
+
+# --- citations and disputes ---
+
+
+def test_study_dispute_dialog_end_to_end(fakes):
+    _, tutor = fakes
+    tutor.regrades = [("correct", False)]
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    result = runner.invoke(cli.app, ["study"], input="meh\nd\n1\n\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert "d to dispute that grade" in result.output
+    assert "Why do you think the grade is wrong?" in result.output
+    assert "1. My answer is correct" in result.output
+    assert "4. Something else" in result.output
+    assert "Re-check: raised to Correct — Networks 1 back to" in result.output
+    assert tutor.regrade_calls == [("meh", "correct", "")]
+
+
+def test_a_failed_recheck_prints_the_hint_and_asks_again(fakes):
+    _, tutor = fakes
+    tutor.fail_regrade = True
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    result = runner.invoke(cli.app, ["study"], input="meh\nd\n4\nbecause\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Couldn't re-check right now — the grade stands. Try again with d." in result.output
+
+
+def test_d_when_not_allowed_prints_the_hint(fakes):
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    result = runner.invoke(cli.app, ["study"], input="d\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Only short-answer grades from this session can be disputed." in result.output
+    assert "Why do you think" not in result.output
+
+
+def test_reason_menu_asks_again_on_anything_else(fakes):
+    _, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    result = runner.invoke(cli.app, ["study"], input="meh\nd\n9\nx\n2\nit is vague\nq\n")
+
+    assert result.exit_code == 0, result.output
+    assert tutor.regrade_calls == [("meh", "ambiguous", "it is vague")]
+
+
+def test_ctrl_c_in_the_dialog_cancels_the_dispute(fakes):
+    _, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    # End of input at the explanation cancels the dialog; the next prompt then ends the session.
+    result = runner.invoke(cli.app, ["study"], input="meh\nd\n1\n")
+
+    assert result.exit_code == 0, result.output
+    assert tutor.regrade_calls == []
+    assert "Re-check" not in result.output
+
+
+def test_question_shows_its_source_line(fakes):
+    store, tutor = fakes
+    quote = "The first address identifies the network"
+    text = f"A subnet mask splits an address. {quote} and the last is the broadcast address."
+    tutor.cite = [[("N1", quote)]]
+    user = next(iter(store.profiles))
+    chunk = ChunkDraft(0, text, None, 12, 12, (0,))
+    document = NewDocument("CSE321.pdf", "pdf", 1000, 20, "sha", (chunk,))
+    concept = ("Subnet masks", "How a subnet mask splits an address.")
+    store.create_subject_with_notes(user, "Networks", [document], [concept])
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "From your notes · p. 12" in result.output

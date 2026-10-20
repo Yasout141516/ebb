@@ -8,6 +8,7 @@ from rich.console import Console
 from ebb.domain import Concept, Document
 from ebb.ui import (
     caught_up_line,
+    dispute_line,
     due_label,
     format_ago,
     format_day,
@@ -16,6 +17,7 @@ from ebb.ui import (
     notes_report,
     read_reply,
     read_yes_no,
+    render_citations,
     render_summary,
     render_turn,
     resume_question,
@@ -207,3 +209,119 @@ def test_source_lines():
     pdf = Document(uuid4(), "wk1.pdf", "pdf", 2 * 1024 * 1024, 38, 112, now)
     text = Document(uuid4(), "ch3.md", "md", 512 * 1024, None, 7, now)
     assert source_lines([pdf, text]) == ["wk1.pdf · 38 pages · 2.0 MB", "ch3.md · 0.5 MB"]
+
+
+def recorded(render, *args) -> str:
+    console = Console(record=True, width=100)
+    render(console, *args)
+    return console.export_text()
+
+
+def test_render_citations_for_pages_headings_and_web():
+    citations = [
+        {"kind": "chunk", "label": "CSE321.pdf · p. 12", "quote": "The first address."},
+        {"kind": "chunk", "label": "networks.md · § Subnet masks", "quote": "Masks [x]."},
+        {"kind": "web", "label": "cloudflare.com · What is DNS", "quote": "DNS maps names."},
+    ]
+
+    text = recorded(render_citations, citations, False)
+
+    assert text.splitlines() == [
+        "",
+        "From your notes",
+        "  [1] CSE321.pdf · p. 12",
+        "      “The first address.”",
+        "  [2] networks.md · § Subnet masks",
+        "      “Masks [x].”",
+        "",
+        "From the web",
+        "  [3] cloudflare.com · What is DNS",
+        "      “DNS maps names.”",
+    ]
+
+
+def test_general_knowledge_label_only_when_flagged():
+    cited = [{"kind": "chunk", "label": "a.md", "quote": "q"}]
+    assert "General knowledge · not from your notes" in recorded(render_citations, [], True)
+    assert recorded(render_citations, [], False) == ""
+    assert "General knowledge" not in recorded(render_citations, cited, True)
+
+
+def test_dispute_lines():
+    base = {
+        "original_grade": "partial",
+        "new_grade": None,
+        "explanation": "Because [x].",
+        "citations": [],
+        "concept": "DNS",
+        "stage": 2,
+    }
+    changed = {**base, "outcome": "changed"}
+    assert dispute_line({**changed, "new_grade": "correct"}) == (
+        "Re-check: raised to Correct — DNS back to ●●○○○ level 2."
+    )
+    assert dispute_line({**changed, "new_grade": "incorrect"}) == (
+        "Re-check: lowered to Incorrect — DNS now ●●○○○ level 2."
+    )
+    assert dispute_line({**base, "outcome": "voided"}) == (
+        "Re-check: the question was ambiguous — that answer no longer counts."
+    )
+    assert dispute_line({**base, "outcome": "upheld"}) == (
+        "Re-check: the grade stands — Because [x]."
+    )
+    assert dispute_line({"outcome": "failed"}) == (
+        "Couldn't re-check right now — the grade stands. Try again with d."
+    )
+    assert dispute_line({"outcome": "refused"}) == (
+        "Only short-answer grades from this session can be disputed."
+    )
+
+
+@pytest.mark.parametrize("raw", ["d", "D", " d "])
+@pytest.mark.parametrize("can_dispute", [True, False])
+def test_read_reply_d_requests_a_dispute(raw, can_dispute):
+    assert read_reply(raw, [], can_dispute) == {"dispute_request": True}
+    assert read_reply(raw, ["a", "b"], can_dispute) == {"dispute_request": True}
+
+
+def question_payload(question=None, **extra):
+    return {
+        "concept": "DNS",
+        "number": 2,
+        "question": {"type": "short", "prompt": "Why?", "options": [], **(question or {})},
+        "feedback": {
+            "value": "partial",
+            "explanation": "Half.",
+            "citations": [],
+            "general_knowledge": True,
+        },
+        "lesson": None,
+        "notices": [],
+        **extra,
+    }
+
+
+def test_render_turn_shows_source_line_hint_and_grade_label():
+    payload = question_payload({"source_line": "From your notes · p. 12"}, can_dispute=True)
+
+    text = recorded(render_turn, payload)
+
+    assert "From your notes · p. 12" in text
+    assert "Type your answer, d to dispute that grade, or q to stop" in text
+    assert "General knowledge · not from your notes" in text
+    assert "Type your answer, or q to stop" in recorded(render_turn, question_payload())
+
+
+def test_render_turn_after_a_dispute_skips_the_old_feedback():
+    cited = {"kind": "chunk", "label": "a.md", "quote": "Quote."}
+    result = {"outcome": "upheld", "explanation": "Still half.", "citations": [cited]}
+    payload = question_payload(dispute_result=result, lesson="Old lesson", notices=["oldnotice"])
+
+    text = recorded(render_turn, payload)
+
+    assert "Re-check: the grade stands — Still half." in text
+    assert "“Quote.”" in text
+    assert "Half." not in text.replace("Still half.", "")
+    assert "Old lesson" not in text
+    assert "oldnotice" not in text
+    assert "Why?" in text

@@ -38,11 +38,18 @@ def due_label(concept: Concept, now: datetime, tz: ZoneInfo) -> str:
     return format_day(concept.next_review_at, tz)
 
 
-def read_reply(raw: str, options: Sequence[str]) -> dict[str, Any] | None:
-    """Turn one line of input into a resume value, or None if it should be asked again."""
+def read_reply(
+    raw: str, options: Sequence[str], can_dispute: bool = False
+) -> dict[str, Any] | None:
+    """Turn one line of input into a resume value, or None if it should be asked again.
+
+    `d` always gives a dispute request; the caller checks `can_dispute` and may refuse it.
+    """
     text = raw.strip()
     if text.casefold() == "q":
         return {"quit": True}
+    if text.casefold() == "d":
+        return {"dispute_request": True}
     if not text:
         return None
     if options and parse_choice(options, text) is None:
@@ -108,13 +115,51 @@ def status_table(concepts: Sequence[Concept], now: datetime, tz: ZoneInfo) -> Ta
     return table
 
 
-def render_feedback(console: Console, grade: dict[str, Any] | None, lesson: str | None) -> None:
+GRADE_NAME = {"correct": "Correct", "partial": "Partial", "incorrect": "Incorrect"}
+GRADE_ORDER = {"incorrect": 0, "partial": 1, "correct": 2}
+DISPUTE_REASONS = [
+    ("correct", "My answer is correct"),
+    ("ambiguous", "The question is ambiguous"),
+    ("notes_differ", "My notes say something different"),
+    ("other", "Something else"),
+]
+NOT_DISPUTABLE = "Only short-answer grades from this session can be disputed."
+
+
+def render_citations(
+    console: Console, citations: Sequence[dict[str, Any]], general_knowledge: bool
+) -> None:
+    """The quoted sources under a grade or lesson, or the general-knowledge label."""
+    if not citations:
+        if general_knowledge:
+            console.print("[dim]General knowledge · not from your notes[/dim]")
+        return
+    number = 0
+    for heading, web in (("From your notes", False), ("From the web", True)):
+        shown = [c for c in citations if (c["kind"] == "web") == web]
+        if not shown:
+            continue
+        console.print(f"\n[bold]{heading}[/bold]")
+        for citation in shown:
+            number += 1
+            console.print(f"  [{number}] {escape(citation['label'])}")
+            console.print(f"      “{escape(citation['quote'])}”")
+
+
+def render_feedback(
+    console: Console,
+    grade: dict[str, Any] | None,
+    lesson: str | None,
+    lesson_citations: Sequence[dict[str, Any]] = (),
+) -> None:
     if grade:
         style = GRADE_STYLE[grade["value"]]
         explanation = escape(grade["explanation"])
         console.print(f"[bold {style}]{GRADE_MARK[grade['value']]}[/]  {explanation}")
+        render_citations(console, grade.get("citations", []), grade.get("general_knowledge", False))
     if lesson:
         console.print(Panel(escape(lesson), title="Let's fix that", border_style="cyan"))
+        render_citations(console, lesson_citations, False)
 
 
 def render_notices(console: Console, notices: Sequence[str]) -> None:
@@ -129,7 +174,11 @@ def render_question(console: Console, payload: dict[str, Any]) -> None:
     if question["options"]:
         lines += [f"  {n}. {escape(text)}" for n, text in enumerate(question["options"], start=1)]
         lines.append("")
+    if question.get("source_line"):
+        lines.insert(1, f"[dim]{escape(question['source_line'])}[/dim]")
     hint = "Type 1-4" if question["options"] else "Type your answer"
+    if payload.get("can_dispute"):
+        hint += ", d to dispute that grade"
     lines.append(f"[dim]{hint}, or q to stop[/dim]")
     console.print(
         Panel(
@@ -140,14 +189,42 @@ def render_question(console: Console, payload: dict[str, Any]) -> None:
     )
 
 
+def dispute_line(result: dict[str, Any]) -> str:
+    """The one-line outcome of a re-check, as plain text (escape it before printing)."""
+    outcome = result["outcome"]
+    if outcome == "refused":
+        return NOT_DISPUTABLE
+    if outcome == "failed":
+        return "Couldn't re-check right now — the grade stands. Try again with d."
+    if outcome == "upheld":
+        return f"Re-check: the grade stands — {result['explanation']}"
+    if outcome == "voided":
+        return "Re-check: the question was ambiguous — that answer no longer counts."
+    new = result["new_grade"]
+    raised = GRADE_ORDER[new] > GRADE_ORDER[result["original_grade"]]
+    verb, link = ("raised to", "back to") if raised else ("lowered to", "now")
+    level = f"{stage_dots(result['stage'])} level {result['stage']}"
+    return f"Re-check: {verb} {GRADE_NAME[new]} — {result['concept']} {link} {level}."
+
+
 def render_turn(console: Console, payload: dict[str, Any]) -> None:
-    render_feedback(console, payload["feedback"], payload["lesson"])
-    render_notices(console, payload["notices"])
+    result = payload.get("dispute_result")
+    if result:
+        # The grade, lesson and notices were shown before the dispute; only the verdict is new.
+        console.print(escape(dispute_line(result)))
+        render_citations(console, result.get("citations", []), False)
+    else:
+        render_feedback(
+            console, payload["feedback"], payload["lesson"], payload.get("lesson_citations", [])
+        )
+        render_notices(console, payload["notices"])
     render_question(console, payload)
 
 
 def render_summary(console: Console, final: dict[str, Any], tz: ZoneInfo) -> None:
-    render_feedback(console, final.get("grade"), final.get("lesson"))
+    render_feedback(
+        console, final.get("grade"), final.get("lesson"), final.get("lesson_citations", [])
+    )
     render_notices(console, final.get("notices", []))
     results = final.get("results", [])
     if not results:

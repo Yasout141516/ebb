@@ -24,6 +24,8 @@ from ebb.db.repo import PgStore
 from ebb.domain import Concept, NewDocument, ResumableSession, Subject
 from ebb.store import MAX_DOCUMENTS, DocumentRefused, Store, merge_note_concepts
 from ebb.ui import (
+    DISPUTE_REASONS,
+    NOT_DISPUTABLE,
     PRIVACY_LINE,
     caught_up_line,
     format_ago,
@@ -100,14 +102,33 @@ def _subject(store: PgStore, user_id: UUID, name: str | None) -> Subject:
     _fail(f"No subject called {name!r}. You have: " + ", ".join(s.name for s in subjects))
 
 
+def _dispute_dialog() -> dict[str, Any] | None:
+    """Ask why the grade is wrong; None if Ctrl+C or end of input cancels it."""
+    console.print("Why do you think the grade is wrong?")
+    for number, (_, text) in enumerate(DISPUTE_REASONS, start=1):
+        console.print(f"  {number}. {text}")
+    try:
+        while True:
+            choice = console.input("[bold]› [/bold]").strip()
+            if choice in {"1", "2", "3", "4"}:
+                break
+        explanation = console.input("Explain (optional, Enter to skip) › ").strip()
+    except KeyboardInterrupt, EOFError:
+        console.print()
+        return None
+    reason = DISPUTE_REASONS[int(choice) - 1][0]
+    return {"dispute": {"id": str(uuid4()), "reason": reason, "explanation": explanation}}
+
+
 def _ask(payload: dict[str, Any]) -> dict[str, Any]:
     options = payload["question"]["options"]
+    can_dispute = payload.get("can_dispute", False)
     while True:
         try:
             raw = console.input("[bold]› [/bold]")
         except KeyboardInterrupt, EOFError:
             return {"quit": True}
-        reply = read_reply(raw, options)
+        reply = read_reply(raw, options, can_dispute)
         if reply is None:
             console.print(
                 "[dim]Type 1-4, or q to stop.[/dim]"
@@ -115,6 +136,14 @@ def _ask(payload: dict[str, Any]) -> dict[str, Any]:
                 else "[dim]Type an answer, or q to stop.[/dim]"
             )
             continue
+        if "dispute_request" in reply:
+            if not can_dispute:
+                console.print(f"[dim]{escape(NOT_DISPUTABLE)}[/dim]")
+                continue
+            dispute = _dispute_dialog()
+            if dispute is None:
+                continue
+            return dispute
         if "answer" in reply:
             reply["attempt_id"] = str(uuid4())
         return reply
@@ -412,7 +441,7 @@ def study(
             while payload is not None:
                 render_turn(console, payload)
                 reply = _ask(payload)
-                with console.status("Thinking…"):
+                with console.status("Re-checking…" if "dispute" in reply else "Thinking…"):
                     result = graph.invoke(Command(resume=reply), config)
                 payload = _pending(result)
         except ConfigError as error:
