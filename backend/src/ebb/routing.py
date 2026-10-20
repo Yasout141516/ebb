@@ -84,15 +84,24 @@ def after_mastery(state: Mapping[str, Any]) -> NextStep | Literal["teach"]:
     return decide_next(state)
 
 
-def after_generate(state: Mapping[str, Any]) -> Literal["ask_question", "summarize"]:
-    return "summarize" if state["fatal"] else "ask_question"
+def after_generate(state: Mapping[str, Any]) -> Literal["verify_citations", "summarize"]:
+    return "summarize" if state["fatal"] else "verify_citations"
+
+
+def after_verify(state: Mapping[str, Any]) -> NextStep:
+    """Failures left in state mean the candidates go back for another try."""
+    if state["citation_failures"]:
+        return "generate_questions"
+    if state["batch"]:
+        return "ask_question"
+    return decide_next(state)
 
 
 def after_pick(
     state: Mapping[str, Any],
-) -> Literal["generate_questions", "extend_subject", "summarize"]:
+) -> Literal["retrieve_notes", "extend_subject", "summarize"]:
     if state["concept"] is not None:
-        return "generate_questions"
+        return "retrieve_notes"
     return "summarize" if state["caught_up"] else "extend_subject"
 
 

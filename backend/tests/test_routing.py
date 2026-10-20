@@ -6,8 +6,10 @@ import pytest
 from ebb.domain import Concept
 from ebb.routing import (
     after_extend,
+    after_generate,
     after_mastery,
     after_pick,
+    after_verify,
     choose_question,
     decide_next,
     pick_next_concept,
@@ -132,8 +134,8 @@ def test_duplicate_answer_routes_like_an_uncounted_answer():
     assert after_mastery(state(grade=None, correct_streak=2)) == "next_concept"
 
 
-def test_after_pick_generates_when_a_concept_was_picked():
-    assert after_pick({"concept": {"id": "a"}, "caught_up": False}) == "generate_questions"
+def test_after_pick_retrieves_notes_when_a_concept_was_picked():
+    assert after_pick({"concept": {"id": "a"}, "caught_up": False}) == "retrieve_notes"
 
 
 def test_after_pick_extends_when_nothing_is_left():
@@ -148,3 +150,23 @@ def test_after_extend():
     assert after_extend({"caught_up": False, "fatal": False}) == "pick_concept"
     assert after_extend({"caught_up": True, "fatal": False}) == "summarize"
     assert after_extend({"caught_up": False, "fatal": True}) == "summarize"
+
+
+def test_after_generate_verifies_unless_fatal():
+    assert after_generate({"fatal": None}) == "verify_citations"
+    assert after_generate({"fatal": "down"}) == "summarize"
+
+
+def test_after_verify_retries_on_citation_failures():
+    pending = state(batch=[], citation_failures=["question 1 cites nothing"])
+    assert after_verify(pending) == "generate_questions"
+
+
+def test_after_verify_asks_from_a_finalised_batch():
+    assert after_verify(state(citation_failures=[])) == "ask_question"
+
+
+def test_after_verify_with_an_empty_batch_follows_decide_next():
+    assert after_verify(state(batch=[], citation_failures=[])) == "generate_questions"
+    empty = state(batch=[], citation_failures=[], generation_calls_on_concept=2)
+    assert after_verify(empty) == "next_concept"

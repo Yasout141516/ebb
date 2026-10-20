@@ -1,7 +1,8 @@
-"""Wire the ten quiz-loop nodes into a LangGraph graph.
+"""Wire the twelve quiz-loop nodes into a LangGraph graph.
 
-pick_concept -> generate_questions | extend_subject | summarize
+pick_concept -> retrieve_notes | extend_subject | summarize
 extend_subject -> pick_concept | summarize
+retrieve_notes -> generate_questions <-> verify_citations -> ask_question
 """
 
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from ebb.routing import (
     after_grade,
     after_mastery,
     after_pick,
+    after_verify,
     decide_next,
 )
 from ebb.store import Store
@@ -45,10 +47,14 @@ def build_graph(
     graph.add_edge(START, "load_learner")
     graph.add_edge("load_learner", "pick_concept")
     graph.add_conditional_edges(
-        "pick_concept", after_pick, ["generate_questions", "extend_subject", "summarize"]
+        "pick_concept", after_pick, ["retrieve_notes", "extend_subject", "summarize"]
     )
     graph.add_conditional_edges("extend_subject", after_extend, ["pick_concept", "summarize"])
-    graph.add_conditional_edges("generate_questions", after_generate, ["ask_question", "summarize"])
+    graph.add_edge("retrieve_notes", "generate_questions")
+    graph.add_conditional_edges(
+        "generate_questions", after_generate, ["verify_citations", "summarize"]
+    )
+    graph.add_conditional_edges("verify_citations", after_verify, _NEXT)
     graph.add_conditional_edges("ask_question", after_ask, ["grade_answer", "summarize"])
     graph.add_conditional_edges("grade_answer", after_grade, ["update_mastery", "ask_question"])
     graph.add_conditional_edges("update_mastery", after_mastery, ["teach", *_NEXT])
