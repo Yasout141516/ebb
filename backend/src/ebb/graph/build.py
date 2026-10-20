@@ -1,8 +1,9 @@
-"""Wire the twelve quiz-loop nodes into a LangGraph graph.
+"""Wire the thirteen quiz-loop nodes into a LangGraph graph.
 
 pick_concept -> retrieve_notes | extend_subject | summarize
 extend_subject -> pick_concept | summarize
 retrieve_notes -> generate_questions <-> verify_citations -> ask_question
+verify_citations -> search_web -> generate_questions (web mode) | ask_question
 """
 
 from collections.abc import Callable
@@ -22,10 +23,12 @@ from ebb.routing import (
     after_grade,
     after_mastery,
     after_pick,
+    after_search,
     after_verify,
     decide_next,
 )
 from ebb.store import Store
+from ebb.web import WebSearch
 
 _NEXT = ["ask_question", "generate_questions", "next_concept", "summarize"]
 
@@ -39,9 +42,10 @@ def build_graph(
     store: Store,
     checkpointer: BaseCheckpointSaver,
     now: Callable[[], datetime] = _utc_now,
+    web: WebSearch | None = None,
 ) -> CompiledStateGraph:
     graph = StateGraph(QuizState)
-    for name, node in make_nodes(tutor, store, now).items():
+    for name, node in make_nodes(tutor, store, now, web).items():
         graph.add_node(name, node)
 
     graph.add_edge(START, "load_learner")
@@ -54,7 +58,12 @@ def build_graph(
     graph.add_conditional_edges(
         "generate_questions", after_generate, ["verify_citations", "summarize"]
     )
-    graph.add_conditional_edges("verify_citations", after_verify, _NEXT)
+    graph.add_conditional_edges(
+        "verify_citations",
+        lambda state: after_verify(state, web=web is not None),
+        [*_NEXT, "search_web"],
+    )
+    graph.add_conditional_edges("search_web", after_search, _NEXT)
     graph.add_conditional_edges("ask_question", after_ask, ["grade_answer", "summarize"])
     graph.add_conditional_edges("grade_answer", after_grade, ["update_mastery", "ask_question"])
     graph.add_conditional_edges("update_mastery", after_mastery, ["teach", *_NEXT])

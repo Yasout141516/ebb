@@ -359,6 +359,7 @@ def study(
     from langgraph.types import Command
 
     from ebb.graph.build import build_graph
+    from ebb.web import web_search
 
     settings, store = _open_store()
     user_id = settings.ebb_dev_user_id
@@ -377,7 +378,7 @@ def study(
         store.mark_pruned(user_id, old_threads, now)
 
     chosen = _subject(store, user_id, subject)
-    graph = build_graph(tutor, store, saver)
+    graph = build_graph(tutor, store, saver, web=web_search(settings))
     with ExitStack() as held:
         found = store.resumable_session(user_id, chosen.id, now)
         resume = None if found is None else _offer_resume(store, graph, user_id, found, held, now)

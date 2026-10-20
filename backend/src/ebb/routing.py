@@ -88,9 +88,28 @@ def after_generate(state: Mapping[str, Any]) -> Literal["verify_citations", "sum
     return "summarize" if state["fatal"] else "verify_citations"
 
 
-def after_verify(state: Mapping[str, Any]) -> NextStep:
-    """Failures left in state mean the candidates go back for another try."""
+def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["search_web"]:
+    """Failures left in state mean the candidates go back for another try. Repeats dropped
+    from a notes batch are replaced from the web, if `web` search is set up and this
+    session hasn't searched for this concept or seen a search fail."""
     if state["citation_failures"]:
+        return "generate_questions"
+    if (
+        web
+        and state.get("generation_mode", "notes") == "notes"
+        and state.get("replacements_needed", 0) > 0
+        and state["concept"]["id"] not in state.get("web_searched", [])
+        and not state.get("web_failed", False)
+    ):
+        return "search_web"
+    if state["batch"]:
+        return "ask_question"
+    return decide_next(state)
+
+
+def after_search(state: Mapping[str, Any]) -> NextStep:
+    """Pages found switch generation to web mode; otherwise the batch goes on without them."""
+    if state.get("generation_mode", "notes") == "web":
         return "generate_questions"
     if state["batch"]:
         return "ask_question"

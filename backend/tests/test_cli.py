@@ -11,7 +11,7 @@ from ebb import cli
 from ebb.config import ConfigError, Settings
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.ui import format_day
-from tests.fakes import FakeTutor, MemoryStore, seed_concept
+from tests.fakes import FakeTutor, FakeWebSearch, MemoryStore, seed_concept
 
 runner = CliRunner()
 # Captured at import time, before any test patches cli._tutor or cli._ask.
@@ -21,7 +21,7 @@ _real_ask = cli._ask
 
 @pytest.fixture
 def fakes(monkeypatch):
-    settings = Settings(_env_file=None, ebb_timezone="UTC")
+    settings = Settings(_env_file=None, ebb_timezone="UTC", tavily_api_key=None)
     store, tutor = MemoryStore(), FakeTutor()
     store.ensure_profile(settings.ebb_dev_user_id)
     monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
@@ -67,6 +67,28 @@ def test_study_session_end_to_end(fakes):
     assert "● Correct" in result.output
     assert "Session summary" in result.output
     assert "Networks 1" in result.output
+
+
+def test_study_gives_the_graph_the_configured_web_search(fakes, monkeypatch):
+    from ebb import web
+    from ebb.graph import build
+
+    search = FakeWebSearch()
+    given = []
+    real_build = build.build_graph
+
+    def recording_build(*args, **kwargs):
+        given.append(kwargs.get("web"))
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(web, "web_search", lambda settings: search)
+    monkeypatch.setattr(build, "build_graph", recording_build)
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert given == [search]
 
 
 def test_study_ends_cleanly_when_input_runs_out(fakes):

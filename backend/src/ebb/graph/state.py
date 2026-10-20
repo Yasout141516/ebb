@@ -7,7 +7,7 @@ domain objects are converted at the node boundary with the helpers below.
 
 from dataclasses import asdict
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 from uuid import UUID
 
 from ebb.citations import from_dict as citation_from_dict
@@ -29,6 +29,9 @@ class QuizState(TypedDict, total=False):
     fatal: str | None
     notices: list[str]
     has_notes: bool  # the subject has documents
+    web_searched: list[str]  # ids of the concepts searched for on the web
+    web_failed: bool  # a web search failed, so no more are tried
+    web_notice_shown: bool
     # current concept
     concept: dict[str, Any] | None
     start: dict[str, Any]  # {"stage": int, "tide": float | None} when the concept was picked
@@ -42,6 +45,9 @@ class QuizState(TypedDict, total=False):
     candidates: list[dict[str, Any]]  # generated questions waiting for verify_citations
     citation_retries: int
     citation_failures: list[str]  # why the last candidates' citations failed; empty when done
+    generation_mode: Literal["notes", "web"]  # "web" while replacements for repeats are written
+    replacements_needed: int  # repeats dropped from the last notes batch
+    web_sources: list[dict[str, Any]]  # the concept's web pages, as Source dicts
     # current question
     question: dict[str, Any] | None
     difficulty: int | None

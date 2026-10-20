@@ -9,6 +9,7 @@ from ebb.routing import (
     after_generate,
     after_mastery,
     after_pick,
+    after_search,
     after_verify,
     choose_question,
     decide_next,
@@ -159,14 +160,59 @@ def test_after_generate_verifies_unless_fatal():
 
 def test_after_verify_retries_on_citation_failures():
     pending = state(batch=[], citation_failures=["question 1 cites nothing"])
-    assert after_verify(pending) == "generate_questions"
+    assert after_verify(pending, web=True) == "generate_questions"
 
 
 def test_after_verify_asks_from_a_finalised_batch():
-    assert after_verify(state(citation_failures=[])) == "ask_question"
+    # state() has none of the web keys, like a milestone-2 session
+    assert after_verify(state(citation_failures=[]), web=True) == "ask_question"
 
 
 def test_after_verify_with_an_empty_batch_follows_decide_next():
-    assert after_verify(state(batch=[], citation_failures=[])) == "generate_questions"
+    assert after_verify(state(batch=[], citation_failures=[]), web=True) == "generate_questions"
     empty = state(batch=[], citation_failures=[], generation_calls_on_concept=2)
-    assert after_verify(empty) == "next_concept"
+    assert after_verify(empty, web=True) == "next_concept"
+
+
+def repeats(**overrides):
+    """A finalised notes batch that dropped one repeat on a concept not yet searched."""
+    base = {
+        "citation_failures": [],
+        "concept": {"id": "c1"},
+        "generation_mode": "notes",
+        "replacements_needed": 1,
+        "web_searched": [],
+        "web_failed": False,
+    }
+    return state(**{**base, **overrides})
+
+
+def test_after_verify_searches_the_web_for_dropped_repeats():
+    assert after_verify(repeats(), web=True) == "search_web"
+    assert after_verify(repeats(batch=[]), web=True) == "search_web"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "web"),
+    [
+        ({}, False),  # no Tavily key
+        ({"replacements_needed": 0}, True),
+        ({"generation_mode": "web"}, True),  # web questions never search again
+        ({"web_searched": ["c1"]}, True),
+        ({"web_failed": True}, True),
+    ],
+)
+def test_after_verify_skips_the_search(overrides, web):
+    assert after_verify(repeats(**overrides), web=web) == "ask_question"
+    assert after_verify(repeats(batch=[], **overrides), web=web) == "generate_questions"
+
+
+def test_after_search_writes_web_questions_when_pages_were_found():
+    assert after_search(state(generation_mode="web")) == "generate_questions"
+
+
+def test_after_search_without_pages_continues_with_the_batch():
+    assert after_search(state(generation_mode="notes")) == "ask_question"
+    assert after_search(state(batch=[], generation_mode="notes")) == "generate_questions"
+    empty = state(batch=[], generation_mode="notes", generation_calls_on_concept=2)
+    assert after_search(empty) == "next_concept"

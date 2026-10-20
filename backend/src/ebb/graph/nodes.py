@@ -1,5 +1,6 @@
-"""The twelve quiz-loop nodes. Only generate_questions, extend_subject, grade_answer (short
-answers) and teach call the LLM; everything else is plain code."""
+"""The thirteen quiz-loop nodes. Only generate_questions, extend_subject, grade_answer (short
+answers) and teach call the LLM, and only search_web searches the web; everything else is
+plain code."""
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -16,6 +17,7 @@ from ebb.citations import (
     source_to_dict,
     to_dict,
     verify,
+    web_sources,
 )
 from ebb.domain import Answer, Citation, Claim, Grade, GradeValue, Question, Source
 from ebb.grading import grade_mcq
@@ -30,11 +32,14 @@ from ebb.graph.state import (
 )
 from ebb.llm.tutor import AllProvidersExhausted, Generated, Tutor
 from ebb.mastery import tide
+from ebb.repeats import too_close
 from ebb.routing import choose_question, pick_next_concept
 from ebb.store import Store
+from ebb.web import WebSearch, WebSearchFailed
 
 FALLBACK_NOTICE = "Switched to a backup model while the main one is busy."
 EXHAUSTED_NOTICE = "The tutor couldn't respond — your progress is saved. Try again in a minute."
+WEB_NOTICE = "Web search unavailable — skipped repeated questions."
 
 Node = Callable[[QuizState], dict[str, Any]]
 
@@ -50,12 +55,32 @@ def _notices(state: QuizState, generated: Generated[Any]) -> list[str]:
     return _with_notice(state, FALLBACK_NOTICE) if generated.fell_back else list(state["notices"])
 
 
+def _web_notice(state: QuizState) -> dict[str, Any]:
+    """The notice that repeats were skipped without replacements, once per session."""
+    if state.get("web_notice_shown", False):
+        return {}
+    return {"notices": _with_notice(state, WEB_NOTICE), "web_notice_shown": True}
+
+
 # Keys added after milestone 2 are read with a default: a session saved before them may resume.
+
+
+def _sources(state: QuizState, key: str) -> list[Source]:
+    return [source_from_dict(s) for s in state.get(key, [])]
+
+
+def _web_mode(state: QuizState) -> bool:
+    return state.get("generation_mode", "notes") == "web"
+
+
+def _candidate_sources(state: QuizState) -> list[Source]:
+    """What the candidates are written from: the notes, or the web pages in web mode."""
+    return _sources(state, "web_sources" if _web_mode(state) else "sources")
 
 
 def sources_for(state: QuizState, question: Question) -> list[Source]:
     """The sources `question` was written from, for grading and teaching it."""
-    return [source_from_dict(s) for s in state.get("sources", [])]
+    return _sources(state, "web_sources" if question.source == "web" else "sources")
 
 
 def source_line(question: dict[str, Any]) -> str | None:
@@ -103,9 +128,17 @@ def _grade_dict(
     return grade_to_dict(final, state.get("has_notes", False) and not final.citations)
 
 
-def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[str, Node]:
+def make_nodes(
+    tutor: Tutor, store: Store, now: Callable[[], datetime], web: WebSearch | None = None
+) -> dict[str, Node]:
     def ids(state: QuizState) -> tuple[UUID, UUID]:
         return UUID(state["user_id"]), UUID(state["subject_id"])
+
+    def earlier_prompts(state: QuizState) -> list[str]:
+        """Earlier sessions' prompts on this concept first, then this session's, without repeats."""
+        user_id, _ = ids(state)
+        answered = store.answered_prompts(user_id, UUID(state["concept"]["id"]), 40)
+        return list(dict.fromkeys([*answered, *state["asked_prompts"]]))
 
     def record_result(state: QuizState) -> list[dict[str, Any]]:
         results = list(state["results"])
@@ -132,6 +165,9 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
         return {
             "session_id": str(session_id),
             "has_notes": store.count_documents(user_id, subject_id) > 0,
+            "web_searched": [],
+            "web_failed": False,
+            "web_notice_shown": False,
             "sources": [],
             "candidates": [],
             "citation_retries": 0,
@@ -170,6 +206,9 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
             "generation_calls_on_concept": 0,
             "difficulty": None,
             "retry_question": False,
+            "generation_mode": "notes",
+            "replacements_needed": 0,
+            "web_sources": [],
         }
 
     def extend_subject(state: QuizState) -> dict[str, Any]:
@@ -204,24 +243,28 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
         return {"sources": sources, "citation_retries": 0, "citation_failures": []}
 
     def generate_questions(state: QuizState) -> dict[str, Any]:
-        user_id, _ = ids(state)
         concept = concept_from_dict(state["concept"])
         failures = state.get("citation_failures", [])
-        # A citation retry rewrites the same batch, so it isn't another generation call.
-        calls = state["generation_calls_on_concept"] + (0 if failures else 1)
-        # Earlier sessions' questions first, then this session's, without repeats.
-        avoid = list(
-            dict.fromkeys(
-                [*store.answered_prompts(user_id, concept.id, 40), *state["asked_prompts"]]
-            )
-        )
-        sources = [source_from_dict(s) for s in state.get("sources", [])]
+        web_mode = _web_mode(state)
+        # A citation retry rewrites the same batch, and web questions fill in the last one,
+        # so neither is another generation call.
+        calls = state["generation_calls_on_concept"] + (0 if failures or web_mode else 1)
+        web_count = state.get("replacements_needed", 0) if web_mode else None
         try:
-            generated = tutor.generate_questions(concept, avoid, sources, failures)
+            generated = tutor.generate_questions(
+                concept,
+                earlier_prompts(state),
+                _candidate_sources(state),
+                failures,
+                web_count=web_count,
+            )
         except AllProvidersExhausted:
             if failures:
                 # Keep the candidates we have; verify_citations drops their bad citations.
                 return {"citation_retries": MAX_RETRIES}
+            if web_mode:
+                # The batch goes on without replacements, as when the search finds nothing.
+                return {"candidates": []}
             return {
                 "fatal": EXHAUSTED_NOTICE,
                 "generation_calls_on_concept": calls,
@@ -235,7 +278,8 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
 
     def verify_citations(state: QuizState) -> dict[str, Any]:
         user_id, _ = ids(state)
-        sources = [source_from_dict(s) for s in state.get("sources", [])]
+        web_mode = _web_mode(state)
+        sources = _candidate_sources(state)
         retries = state.get("citation_retries", 0)
         checked: list[tuple[Question, tuple[Citation, ...]]] = []
         failures: list[str] = []
@@ -248,17 +292,56 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
             checked.append((question, citations))
         if failures and retries < MAX_RETRIES:
             return {"citation_retries": retries + 1, "citation_failures": failures}
-        # Out of retries: bad citations are dropped, and a question left with none is general.
-        kept = [
-            replace(q, source="notes" if cited else "general", claims=(), citations=cited)
-            for q, cited in checked
-        ]
+        # Out of retries: bad citations are dropped. A notes question left with none is
+        # general; a web question left with none is dropped.
+        if web_mode:
+            final = [
+                replace(q, source="web", claims=(), citations=cited)
+                for q, cited in checked
+                if cited
+            ]
+        else:
+            final = [
+                replace(q, source="notes" if cited else "general", claims=(), citations=cited)
+                for q, cited in checked
+            ]
+        earlier = earlier_prompts(state)
+        kept = [q for q in final if not too_close(q.prompt, earlier)]
         store.save_questions(user_id, UUID(state["session_id"]), kept)
-        return {
+        update: dict[str, Any] = {
             "batch": [*state["batch"], *(question_to_dict(q) for q in kept)],
             "candidates": [],
             "citation_retries": 0,
             "citation_failures": [],
+            "generation_mode": "notes",
+            # Only repeats from a notes batch are replaced; web ones are simply dropped.
+            "replacements_needed": 0 if web_mode else len(final) - len(kept),
+        }
+        if update["replacements_needed"] and web is None:
+            update |= _web_notice(state)
+        return update
+
+    def search_web(state: QuizState) -> dict[str, Any]:
+        # Routing sends the graph here only when web search is set up.
+        if web is None:
+            raise RuntimeError("search_web needs a web search client")
+        user_id, subject_id = ids(state)
+        subject = store.get_subject(user_id, subject_id)
+        if subject is None:
+            raise LookupError(f"subject {subject_id} not found")
+        concept = state["concept"]
+        searched = {"web_searched": [*state.get("web_searched", []), concept["id"]]}
+        try:
+            # Only these two names leave the machine.
+            pages = web.search(f"{subject.name} {concept['name']}")
+        except WebSearchFailed:
+            return {**searched, "web_failed": True, "replacements_needed": 0, **_web_notice(state)}
+        if not pages:
+            return {**searched, "replacements_needed": 0}
+        return {
+            **searched,
+            "web_sources": [source_to_dict(s) for s in web_sources(pages)],
+            "generation_mode": "web",
         }
 
     def ask_question(state: QuizState) -> dict[str, Any]:
@@ -400,6 +483,7 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
         "retrieve_notes": retrieve_notes,
         "generate_questions": generate_questions,
         "verify_citations": verify_citations,
+        "search_web": search_web,
         "ask_question": ask_question,
         "grade_answer": grade_answer,
         "update_mastery": update_mastery,

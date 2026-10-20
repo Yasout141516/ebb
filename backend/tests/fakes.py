@@ -479,7 +479,9 @@ class FakeTutor:
             if scripted is not None and index < len(scripted):
                 prompt = scripted[index]
             else:
-                prompt = f"{concept.name} question {self.counter}"
+                # Two words of its own keep each prompt from looking like a repeat of another.
+                n = self.counter
+                prompt = f"{concept.name} question {n} (part {n}a or {n}b)"
             questions.append(
                 Question(
                     id=uuid4(),

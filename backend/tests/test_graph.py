@@ -26,7 +26,7 @@ from ebb.domain import (
     Question,
 )
 from ebb.graph.build import build_graph
-from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE
+from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE, WEB_NOTICE
 from ebb.graph.state import (
     concept_to_dict,
     grade_from_dict,
@@ -35,7 +35,8 @@ from ebb.graph.state import (
     question_to_dict,
 )
 from ebb.llm.tutor import AllProvidersExhausted
-from tests.fakes import FakeTutor, MemoryStore, make_subject, seed_concept
+from ebb.web import WebPage
+from tests.fakes import FakeTutor, FakeWebSearch, MemoryStore, make_subject, seed_concept
 
 NOW = datetime(2026, 10, 15, 9, 0, tzinfo=UTC)
 USER = UUID("00000000-0000-0000-0000-0000000000aa")
@@ -46,8 +47,9 @@ def run(
     store: MemoryStore,
     subject_id: UUID,
     answer: Callable[[dict[str, Any]], dict[str, Any]],
+    web: FakeWebSearch | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW, web=web)
     config = {"configurable": {"thread_id": str(uuid4())}}
     start = {"user_id": str(USER), "subject_id": str(subject_id), "thread_id": "t-1"}
     result = graph.invoke(start, config)
@@ -729,3 +731,195 @@ def test_milestone_2_checkpoint_still_resumes():
     assert second["lesson"] == "Here is the idea, with an example."
     assert tutor.sources_calls == [[]]  # the next batch, generated without retrieval
     assert second["question"]["source"] == "general"
+
+
+# --- web questions for repeats ---------------------------------------------------------
+
+PAGE = WebPage(
+    "https://www.example.org/subnets",
+    "Subnetting basics",
+    "Subnetting divides one network into smaller networks. "
+    "Each subnet keeps its own broadcast address, which no host may use.",
+)
+PAGE_QUOTE = "Subnetting divides one network into smaller networks"
+OTHER_PAGE_QUOTE = "Each subnet keeps its own broadcast address"
+REPEAT = "Why can't a host use the broadcast address?"
+WEB_PROMPT = "What does subnetting divide a network into?"
+
+
+def answered_before(store: MemoryStore, subject_id: UUID, prompt: str, index: int = 0) -> None:
+    """An earlier session answered `prompt` on the index-th concept, which is now due."""
+    concept = store.list_concepts(USER, subject_id)[index]
+    session_id = store.create_session(USER, subject_id, f"earlier-{index}")
+    question = Question(uuid4(), concept.id, "short", 1, prompt, "right")
+    store.save_questions(USER, session_id, [question])
+    earlier = NOW - timedelta(days=2)
+    store.record_answer(
+        USER,
+        Answer(uuid4(), question.id, concept.id, "right", GradeValue.CORRECT, "Ok.", "m", earlier),
+    )
+    store.end_session(USER, session_id, earlier)
+    seed_concept(
+        store, concept.id, stage=1, last_reviewed_at=earlier, next_review_at=NOW - timedelta(days=1)
+    )
+
+
+def prompts_of(payloads: list[dict[str, Any]]) -> list[str]:
+    return [p["question"]["prompt"] for p in payloads]
+
+
+def test_repeat_triggers_one_search_and_a_web_question():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    answered_before(store, subject_id, REPEAT)
+    tutor = FakeTutor(prompts=[REPEAT], web_prompts=[WEB_PROMPT], cite=[[], [("W1", PAGE_QUOTE)]])
+    web = FakeWebSearch(pages=[PAGE])
+
+    final, payloads = run(tutor, store, subject_id, quit_after(2, always_wrong), web=web)
+
+    assert web.queries == ["Networks Concept 1"]
+    assert tutor.web_count_calls == [None, 1]
+    assert [s.label for s in tutor.sources_calls[1]] == ["W1"]
+    assert REPEAT not in prompts_of(payloads)
+    asked = payloads[1]["question"]  # the easiest left after a wrong answer at difficulty 1
+    assert asked["prompt"] == WEB_PROMPT
+    assert asked["source"] == "web"
+    assert asked["source_line"] == "From the web · example.org"
+    question = stored(store, WEB_PROMPT)
+    assert question.source == "web"
+    assert [(c.kind, c.label, c.quote) for c in question.citations] == [
+        ("web", "example.org · Subnetting basics", PAGE_QUOTE)
+    ]
+    assert len(store.questions) == 1 + 5  # the earlier one, then four kept and one from the web
+    assert final["generation_calls_on_concept"] == 1  # the web batch fills in; it isn't another
+    assert WEB_NOTICE not in [n for p in payloads for n in p["notices"]]
+
+
+def test_web_question_with_bad_citations_is_dropped():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    answered_before(store, subject_id, REPEAT)
+    bad = [("W1", "not on the page")]
+    tutor = FakeTutor(prompts=[REPEAT], web_prompts=[WEB_PROMPT], cite=[[], bad, bad, bad])
+
+    final, payloads = run(
+        tutor, store, subject_id, lambda p: {"quit": True}, web=FakeWebSearch(pages=[PAGE])
+    )
+
+    assert tutor.web_count_calls == [None, 1, 1, 1]
+    assert all(q.prompt != WEB_PROMPT and q.source != "web" for q in store.questions.values())
+    assert len(store.questions) == 1 + 4
+    assert payloads[0]["question"]["source"] == "general"
+    assert final["generation_mode"] == "notes"
+    assert final["replacements_needed"] == 0
+
+
+def test_no_web_key_drops_repeats_with_one_notice():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=2)
+    answered_before(store, subject_id, REPEAT, 0)
+    answered_before(store, subject_id, REPEAT, 1)
+    tutor = FakeTutor(prompts=[REPEAT])
+
+    final, payloads = run(tutor, store, subject_id, always_right)
+
+    assert [p["concept"] for p in payloads] == ["Concept 1"] * 2 + ["Concept 2"] * 2
+    assert REPEAT not in prompts_of(payloads)
+    assert payloads[0]["notices"] == [WEB_NOTICE]
+    assert all(WEB_NOTICE not in p["notices"] for p in payloads[1:])
+    assert tutor.web_count_calls == [None, None]
+    assert final["web_notice_shown"] is True
+
+
+def test_search_failure_stops_further_searches():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=2)
+    answered_before(store, subject_id, REPEAT, 0)
+    answered_before(store, subject_id, REPEAT, 1)
+    tutor = FakeTutor(prompts=[REPEAT])
+    web = FakeWebSearch(fail=True)
+
+    final, payloads = run(tutor, store, subject_id, always_right, web=web)
+
+    assert web.queries == ["Networks Concept 1"]
+    assert [p["concept"] for p in payloads] == ["Concept 1"] * 2 + ["Concept 2"] * 2
+    assert payloads[0]["notices"] == [WEB_NOTICE]
+    assert all(WEB_NOTICE not in p["notices"] for p in payloads[1:])
+    assert tutor.web_count_calls == [None, None]
+    assert final["web_failed"] is True
+
+
+def test_only_one_search_per_concept():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    answered_before(store, subject_id, REPEAT)
+    tutor = FakeTutor(
+        batch_size=1, prompts=[REPEAT], web_prompts=[WEB_PROMPT], cite=[[], [("W1", PAGE_QUOTE)]]
+    )
+    web = FakeWebSearch(pages=[PAGE])
+
+    final, payloads = run(tutor, store, subject_id, always_wrong, web=web)
+
+    assert prompts_of(payloads) == [WEB_PROMPT]  # the second batch was all repeats again
+    assert web.queries == ["Networks Concept 1"]
+    assert tutor.web_count_calls == [None, 1, None]
+    assert final["generation_calls_on_concept"] == 2
+    assert all(WEB_NOTICE not in p["notices"] for p in payloads)  # search ran; nothing failed
+
+
+def test_web_question_is_graded_with_its_page():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    answered_before(store, subject_id, REPEAT)
+    tutor = FakeTutor(
+        batch_size=1,
+        prompts=[REPEAT],
+        web_prompts=[WEB_PROMPT],
+        cite=[[], [("W1", PAGE_QUOTE)]],
+        grade_cites=[[("W1", OTHER_PAGE_QUOTE)]],
+    )
+
+    final, payloads = run(tutor, store, subject_id, lambda p: reply("meh"), FakeWebSearch([PAGE]))
+
+    assert prompts_of(payloads) == [WEB_PROMPT]  # then the second batch is all repeats
+    feedback = final["grade"]
+    assert feedback["value"] == "partial"
+    assert feedback["citations"] == [
+        {
+            "kind": "web",
+            "ref": PAGE.url,
+            "label": "example.org · Subnetting basics",
+            "page": None,
+            "quote": OTHER_PAGE_QUOTE,
+        }
+    ]
+    assert feedback["general_knowledge"] is False
+
+
+def test_all_repeats_and_no_web_regenerates_or_moves_on():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=2)
+    answered_before(store, subject_id, REPEAT, 0)  # only Concept 1 has answered it
+    tutor = FakeTutor(batch_size=1, prompts=[REPEAT])
+
+    _, payloads = run(tutor, store, subject_id, lambda p: {"quit": True})
+
+    assert tutor.generate_calls == ["Concept 1", "Concept 1", "Concept 2"]
+    assert payloads[0]["concept"] == "Concept 2"
+    assert payloads[0]["question"]["prompt"] == REPEAT  # not a repeat on Concept 2
+    assert payloads[0]["notices"] == [WEB_NOTICE]
+
+
+def test_failed_web_generation_keeps_the_batch():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    answered_before(store, subject_id, REPEAT)
+    tutor = FakeTutor(prompts=[REPEAT], fail_generate_on_call=2)
+
+    final, payloads = run(tutor, store, subject_id, lambda p: {"quit": True}, FakeWebSearch([PAGE]))
+
+    assert tutor.web_count_calls == [None, 1]
+    assert final["fatal"] is None
+    assert EXHAUSTED_NOTICE not in payloads[0]["notices"]
+    assert len(store.questions) == 1 + 4
+    assert final["generation_mode"] == "notes"

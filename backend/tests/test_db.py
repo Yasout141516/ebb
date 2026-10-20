@@ -648,7 +648,9 @@ def test_resume_after_a_crash_while_saving_questions(pg_pool):
 
     result = graph.invoke(None, config)  # verify_citations runs again with the same ids
 
-    assert result["__interrupt__"][0].value["question"]["prompt"] == "DNS question 1"
+    assert (
+        result["__interrupt__"][0].value["question"]["prompt"] == "DNS question 1 (part 1a or 1b)"
+    )
     with pg_pool.connection() as conn:
         saved = conn.execute(
             "select count(*) as n from questions where user_id = %s", (ALICE,)
