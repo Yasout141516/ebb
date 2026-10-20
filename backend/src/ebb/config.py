@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://ebb:ebb@localhost:5432/ebb"
     google_api_key: str | None = None
     groq_api_key: str | None = None
+    tavily_api_key: str | None = None
     ebb_primary_model: str = "gemini-3.8-flash"
     ebb_fallback_model: str = "qwen/qwen3.8-27b"
     ebb_dev_user_id: UUID = UUID("00000000-0000-0000-0000-000000000001")

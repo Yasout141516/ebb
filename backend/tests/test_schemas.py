@@ -5,6 +5,7 @@ from ebb.llm.schemas import (
     ConceptExtension,
     ConceptList,
     LessonResult,
+    NoteConceptList,
     QuestionBatch,
     WebQuestionBatch,
 )
@@ -100,3 +101,15 @@ def test_web_batch_takes_one_to_five_questions(count):
 
 def test_web_batch_has_no_mix_rule():
     assert len(WebQuestionBatch.model_validate({"questions": [short(1)] * 3}).questions) == 3
+
+
+def test_note_concept_list_bounds():
+    def concepts(count):
+        return {"concepts": [{"name": f"c{n}", "description": "d"} for n in range(count)]}
+
+    assert len(NoteConceptList.model_validate(concepts(3)).concepts) == 3
+    assert len(NoteConceptList.model_validate(concepts(12)).concepts) == 12
+    for count in (2, 13):
+        with pytest.raises(ValidationError):
+            NoteConceptList.model_validate(concepts(count))
+    assert NoteConceptList.model_validate(concepts(3)).concepts[0].same_as is None

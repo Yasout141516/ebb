@@ -15,6 +15,7 @@ from ebb.domain import (
     Concept,
     Dispute,
     DisputeOutcome,
+    DisputeReason,
     Document,
     Grade,
     GradeValue,
@@ -26,7 +27,7 @@ from ebb.domain import (
     Source,
     Subject,
 )
-from ebb.llm.schemas import ConceptDraft
+from ebb.llm.schemas import ConceptDraft, NoteConcept
 from ebb.llm.tutor import AllProvidersExhausted, Generated
 from ebb.store import (
     MAX_DOCUMENTS,
@@ -38,6 +39,7 @@ from ebb.store import (
     restore,
     snapshot,
 )
+from ebb.web import WebPage, WebSearchFailed
 
 # (type, difficulty) of each question in a fake batch, in order.
 BATCH_PATTERN = [("short", 1), ("mcq", 1), ("mcq", 2), ("short", 3), ("mcq", 3)]
@@ -379,6 +381,10 @@ class FakeTutor:
         teach_cites: list[list[tuple[str, str]]] | None = None,
         web_prompts: list[str] | None = None,
         prompts: list[str] | None = None,
+        note_concepts: list[list[tuple[str, str | None]]] | None = None,
+        regrades: list[tuple[str, bool]] | None = None,
+        fail_regrade: bool = False,
+        fail_concepts: bool = False,
     ) -> None:
         self.batch_size = batch_size
         self.fail_grade_times = fail_grade_times
@@ -403,6 +409,12 @@ class FakeTutor:
         self.web_count_calls: list[int | None] = []
         self.grade_attempts = 0
         self.teach_attempts = 0
+        self.note_concepts = note_concepts  # (name, same_as) per concepts_from_notes call
+        self.regrades = regrades  # (grade, ambiguous) per regrade call
+        self.fail_regrade = fail_regrade
+        self.fail_concepts = fail_concepts
+        self.concepts_calls: list[tuple[str, list[str], str]] = []
+        self.regrade_calls: list[tuple[str, DisputeReason, str]] = []
 
     @staticmethod
     def _claims(scripted: list[list[tuple[str, str]]] | None, call: int) -> tuple[Claim, ...]:
@@ -510,6 +522,53 @@ class FakeTutor:
         claims = self._claims(self.teach_cites, self.teach_attempts)
         self.teach_attempts += 1
         return self._out(Lesson("Here is the idea, with an example.", claims))
+
+    def concepts_from_notes(
+        self, subject: str, existing: Sequence[Concept], digest: str
+    ) -> Generated[list[NoteConcept]]:
+        self.concepts_calls.append((subject, [c.name for c in existing], digest))
+        if self.fail_concepts:
+            raise AllProvidersExhausted("concepts down")
+        call = len(self.concepts_calls) - 1
+        scripted = self.note_concepts or []
+        pairs = scripted[call] if call < len(scripted) else []
+        return self._out(
+            [NoteConcept(name=n, description=f"About {n}.", same_as=s) for n, s in pairs]
+        )
+
+    def regrade(
+        self,
+        question: Question,
+        answer: str,
+        grade: Grade,
+        reason: DisputeReason,
+        explanation: str,
+        sources: Sequence[Source] = (),
+        failures: Sequence[str] = (),
+    ) -> Generated[tuple[Grade, bool]]:
+        self.regrade_calls.append((answer, reason, explanation))
+        if self.fail_regrade:
+            raise AllProvidersExhausted("regrade down")
+        call = len(self.regrade_calls) - 1
+        scripted = self.regrades or []
+        value, ambiguous = scripted[call] if call < len(scripted) else (grade.value.value, False)
+        new = Grade(GradeValue(value), f"Regraded {value}.", grade.misconception)
+        return self._out((new, ambiguous))
+
+
+class FakeWebSearch:
+    """Returns the given pages for every query and records the queries."""
+
+    def __init__(self, pages: list[WebPage] | None = None, fail: bool = False) -> None:
+        self.pages = pages or []
+        self.fail = fail
+        self.queries: list[str] = []
+
+    def search(self, query: str) -> list[WebPage]:
+        self.queries.append(query)
+        if self.fail:
+            raise WebSearchFailed("search down")
+        return list(self.pages)
 
 
 def make_subject(store: MemoryStore, user_id: UUID, concepts: int = 4) -> UUID:

@@ -115,3 +115,43 @@ class GradeResult(BaseModel):
 class LessonResult(BaseModel):
     text: str
     citations: list[CitationDraft]
+
+
+class NoteConcept(BaseModel):
+    name: str
+    description: str
+    same_as: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def short_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value or len(value) > 60:
+            raise ValueError("concept name must be 1-60 characters")
+        return value
+
+
+class NoteConceptList(BaseModel):
+    concepts: list[NoteConcept]
+
+    @field_validator("concepts")
+    @classmethod
+    def three_to_twelve(cls, value: list[NoteConcept]) -> list[NoteConcept]:
+        if not 3 <= len(value) <= 12:
+            raise ValueError(f"expected 3-12 concepts, got {len(value)}")
+        return value
+
+
+class RegradeResult(BaseModel):
+    grade: Literal["correct", "partial", "incorrect"]
+    explanation: str
+    misconception: str | None = None
+    question_ambiguous: bool = False
+    citations: list[CitationDraft] = []
+
+
+class EvalCaseDraft(BaseModel):
+    question: str
+    reference: str
+    answer: str
+    reason: str

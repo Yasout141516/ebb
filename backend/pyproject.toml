@@ -18,6 +18,7 @@ dependencies = [
     "tzdata>=2026.5",
     "tzlocal>=5.4.4,<6",
     "pypdf>=6.21.1,<7",
+    "tavily-python>=0.8.5,<0.9",
 ]
 
 [project.scripts]
