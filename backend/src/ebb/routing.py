@@ -67,7 +67,9 @@ def decide_next(state: Mapping[str, Any]) -> NextStep:
     return "next_concept"
 
 
-def after_ask(state: Mapping[str, Any]) -> Literal["grade_answer", "summarize"]:
+def after_ask(state: Mapping[str, Any]) -> Literal["grade_answer", "regrade", "summarize"]:
+    if state.get("dispute"):
+        return "regrade"
     return "summarize" if state["quit"] else "grade_answer"
 
 

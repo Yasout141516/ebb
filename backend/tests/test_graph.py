@@ -2,7 +2,9 @@
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from itertools import count
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -48,8 +50,9 @@ def run(
     subject_id: UUID,
     answer: Callable[[dict[str, Any]], dict[str, Any]],
     web: FakeWebSearch | None = None,
+    now: Callable[[], datetime] = lambda: NOW,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW, web=web)
+    graph = build_graph(tutor, store, InMemorySaver(), now=now, web=web)
     config = {"configurable": {"thread_id": str(uuid4())}}
     start = {"user_id": str(USER), "subject_id": str(subject_id), "thread_id": "t-1"}
     result = graph.invoke(start, config)
@@ -923,3 +926,272 @@ def test_failed_web_generation_keeps_the_batch():
     assert EXHAUSTED_NOTICE not in payloads[0]["notices"]
     assert len(store.questions) == 1 + 4
     assert final["generation_mode"] == "notes"
+
+
+# --- disputes --------------------------------------------------------------------------
+
+
+def dispute(reason: str = "correct", explanation: str = "") -> dict[str, Any]:
+    return {"dispute": {"id": str(uuid4()), "reason": reason, "explanation": explanation}}
+
+
+def script(*replies: dict[str, Any]) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """The replies in order, then quit."""
+    pending = iter(replies)
+    return lambda payload: next(pending, {"quit": True})
+
+
+def due_subject(store: MemoryStore, concepts: int = 1) -> tuple[UUID, Concept]:
+    """A subject whose first concept is at stage 2 and due."""
+    subject_id = make_subject(store, USER, concepts=concepts)
+    concept = store.list_concepts(USER, subject_id)[0]
+    seed_concept(
+        store,
+        concept.id,
+        stage=2,
+        last_reviewed_at=NOW - timedelta(days=4),
+        next_review_at=NOW - timedelta(days=1),
+    )
+    return subject_id, store.concept(concept.id)
+
+
+def test_dispute_raises_the_grade_and_the_stage():
+    store, tutor = MemoryStore(), FakeTutor(regrades=[("correct", False)])
+    subject_id, concept = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+
+    assert payloads[1]["feedback"]["value"] == "partial"
+    assert payloads[1]["can_dispute"] is True
+    assert payloads[1]["dispute_result"] is None
+    assert payloads[2]["dispute_result"] == {
+        "outcome": "changed",
+        "original_grade": "partial",
+        "new_grade": "correct",
+        "explanation": "Regraded correct.",
+        "citations": [],
+        "concept": "Concept 1",
+        "stage": 3,
+    }
+    assert tutor.regrade_calls == [("meh", "correct", "")]
+    assert store.concept(concept.id).stage == 3  # recomputed as if the answer were correct
+    [attempt] = store.attempts.values()
+    assert attempt.grade is GradeValue.CORRECT
+    assert final["concept"]["stage"] == 3
+    [result] = final["results"]
+    assert result["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}
+    assert result["stage_after"] == 3
+
+
+def test_dispute_can_lower_the_grade():
+    store, tutor = MemoryStore(), FakeTutor(regrades=[("incorrect", False)])
+    subject_id, concept = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+
+    assert payloads[2]["dispute_result"]["outcome"] == "changed"
+    assert payloads[2]["dispute_result"]["new_grade"] == "incorrect"
+    assert store.concept(concept.id).stage == 1
+    assert tutor.teach_attempts == 0  # no lesson for the lowered grade
+    assert payloads[2]["lesson"] is None
+    assert final["results"][0]["tally"] == {"correct": 0, "partial": 0, "incorrect": 1}
+
+
+def test_ambiguous_dispute_voids_the_answer():
+    store, tutor = MemoryStore(), FakeTutor(regrades=[("partial", True)])
+    subject_id, concept = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute("ambiguous")))
+
+    result = payloads[2]["dispute_result"]
+    assert (result["outcome"], result["new_grade"], result["stage"]) == ("voided", None, 2)
+    assert store.concept(concept.id) == concept  # restored to its state before the answer
+    [attempt_id] = store.attempts
+    assert attempt_id in store.voided
+    assert final["tally"] == {"correct": 0, "partial": 0, "incorrect": 0}
+    assert final["results"] == []  # nothing left to summarise
+
+
+def test_upheld_dispute_changes_nothing():
+    store, tutor = MemoryStore(), FakeTutor(regrades=[("partial", False)])
+    subject_id, concept = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+
+    assert payloads[2]["dispute_result"]["outcome"] == "upheld"
+    assert payloads[2]["dispute_result"]["new_grade"] == "partial"
+    [attempt] = store.attempts.values()
+    assert attempt.grade is GradeValue.PARTIAL
+    assert store.concept(concept.id).stage == 2
+    assert len(store.disputes) == 1  # recorded whatever the outcome
+    assert final["results"][0]["tally"] == {"correct": 0, "partial": 1, "incorrect": 0}
+
+
+def test_dispute_reshows_the_same_question():
+    store, tutor = MemoryStore(), FakeTutor(regrades=[("correct", False)])
+    subject_id, _ = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute(), reply("1")))
+
+    assert payloads[2]["question"] == payloads[1]["question"]
+    assert payloads[2]["number"] == payloads[1]["number"] == 2
+    assert payloads[2]["feedback"]["value"] == "partial"  # the grade card stays as shown
+    # answering it consumes it and clears the dispute
+    assert payloads[3]["question"]["prompt"] != payloads[1]["question"]["prompt"]
+    assert payloads[3]["dispute_result"] is None
+    assert payloads[3]["can_dispute"] is False  # an MCQ answer
+    assert final["pending_question_id"] is None
+    assert len(store.attempts) == 2
+
+
+def test_dispute_after_moving_on_corrects_the_previous_concept():
+    store, tutor = MemoryStore(), FakeTutor(batch_size=1, regrades=[("incorrect", False)])
+    subject_id, concept = due_subject(store, concepts=2)
+    replies = script(reply("meh"), reply("meh"), dispute(), reply("meh"))
+    # Concept 1's two answers must be graded at different times for one to be the latest.
+    ticks = count()
+
+    final, payloads = run(
+        tutor, store, subject_id, replies, now=lambda: NOW + timedelta(seconds=next(ticks))
+    )
+
+    assert [p["concept"] for p in payloads] == ["Concept 1"] * 2 + ["Concept 2"] * 3
+    assert payloads[2]["number"] == 1 and payloads[2]["can_dispute"] is True
+    result = payloads[3]["dispute_result"]
+    assert (result["outcome"], result["concept"], result["stage"]) == ("changed", "Concept 1", 1)
+    assert payloads[3]["question"] == payloads[2]["question"]
+    assert store.concept(concept.id).stage == 1
+    first, second = final["results"]
+    assert first["concept_id"] == str(concept.id)
+    assert first["tally"] == {"correct": 0, "partial": 1, "incorrect": 1}
+    assert first["stage_after"] == 1
+    assert first["next_review_at"] == store.concept(concept.id).next_review_at.isoformat()
+    assert first["tide_after"] == pytest.approx(1.0, abs=1e-3)  # seconds after the answer
+    assert second["tally"] == {"correct": 0, "partial": 1, "incorrect": 0}  # Concept 2 untouched
+
+
+def test_mcq_grades_cannot_be_disputed():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id, _ = due_subject(store)
+
+    # a wrong MCQ answer, so the concept isn't finished by two correct ones
+    _, payloads = run(tutor, store, subject_id, script(reply("right"), reply("2")))
+
+    assert payloads[0]["can_dispute"] is False  # nothing graded yet
+    assert payloads[1]["can_dispute"] is True
+    assert payloads[1]["question"]["type"] == "mcq"
+    assert payloads[2]["can_dispute"] is False
+
+
+def test_each_answer_disputed_once():
+    store, tutor = MemoryStore(), FakeTutor(regrades=[("correct", False)])
+    subject_id, _ = due_subject(store)
+
+    _, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute(), dispute()))
+
+    assert payloads[2]["can_dispute"] is False
+    assert payloads[3]["dispute_result"] == {"outcome": "refused"}
+    assert payloads[3]["question"] == payloads[1]["question"]
+    assert len(tutor.regrade_calls) == 1
+    assert len(store.disputes) == 1
+
+
+def test_dispute_the_store_refuses_is_not_offered_again():
+    class RefusingStore(MemoryStore):
+        def resolve_dispute(self, user_id, dispute, now):
+            raise ValueError("not the concept's latest attempt")
+
+    store, tutor = RefusingStore(), FakeTutor(regrades=[("correct", False)])
+    subject_id, _ = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+
+    assert payloads[2]["dispute_result"] == {"outcome": "refused"}
+    assert payloads[2]["can_dispute"] is False
+    assert payloads[2]["question"] == payloads[1]["question"]
+    assert final["results"][0]["tally"] == {"correct": 0, "partial": 1, "incorrect": 0}
+
+
+def test_regrade_unavailable_keeps_the_grade():
+    store, tutor = MemoryStore(), FakeTutor(fail_regrade=True)
+    subject_id, _ = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+
+    assert payloads[2]["dispute_result"] == {"outcome": "failed"}
+    assert payloads[2]["can_dispute"] is True  # try again with d
+    assert payloads[2]["question"] == payloads[1]["question"]
+    assert store.disputes == {}
+    [attempt] = store.attempts.values()
+    assert attempt.grade is GradeValue.PARTIAL
+    assert final["results"][0]["tally"] == {"correct": 0, "partial": 1, "incorrect": 0}
+
+
+def test_regrade_checks_the_grades_sources_and_cites_them():
+    class CitingTutor(FakeTutor):
+        def regrade(self, question, answer, grade, reason, explanation, sources=(), failures=()):
+            self.regrade_sources = [s.label for s in sources]
+            generated = super().regrade(question, answer, grade, reason, explanation)
+            new, ambiguous = generated.value
+            cited = replace(new, claims=(Claim("N1", OTHER_QUOTE),))
+            return replace(generated, value=(cited, ambiguous))
+
+    store = MemoryStore()
+    tutor = CitingTutor(cite=[[("N1", QUOTE)]], regrades=[("correct", False)])
+    subject_id = notes_subject(store)
+
+    _, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute("notes_differ")))
+
+    assert tutor.regrade_sources == ["N1"]
+    [citation] = payloads[2]["dispute_result"]["citations"]
+    assert (citation["label"], citation["quote"]) == ("CSE321.pdf · p. 12", OTHER_QUOTE)
+    [(_, recorded)] = store.disputes.values()
+    assert [c.quote for c in recorded.citations] == [OTHER_QUOTE]
+
+
+class Crash(Exception):
+    pass
+
+
+class CrashAfterCommitStore(MemoryStore):
+    """The process dies after resolve_dispute commits, before regrade's checkpoint."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.crashed = False
+
+    def resolve_dispute(self, user_id, dispute, now):
+        resolved = super().resolve_dispute(user_id, dispute, now)
+        if not self.crashed:
+            self.crashed = True
+            raise Crash
+        return resolved
+
+
+def test_resume_while_regrading_resolves_once():
+    store = CrashAfterCommitStore()
+    # the re-run's call disagrees with the first, but the stored outcome wins
+    tutor = FakeTutor(regrades=[("correct", False), ("incorrect", False)])
+    subject_id, concept = due_subject(store)
+    saver = InMemorySaver()
+    config = {"configurable": {"thread_id": "regrading"}}
+    start = {"user_id": str(USER), "subject_id": str(subject_id), "thread_id": "regrading"}
+    graph = build_graph(tutor, store, saver, now=lambda: NOW)
+    graph.invoke(start, config)
+    graph.invoke(Command(resume=reply("meh")), config)
+    with pytest.raises(Crash):
+        graph.invoke(Command(resume=dispute()), config)
+
+    graph = build_graph(tutor, store, saver, now=lambda: NOW)  # as after a restart
+    payload = graph.invoke(None, config)["__interrupt__"][0].value
+
+    assert len(tutor.regrade_calls) == 2
+    result = payload["dispute_result"]
+    assert (result["outcome"], result["new_grade"], result["stage"]) == ("changed", "correct", 3)
+    assert result["explanation"] == "Regraded correct."  # the stored dispute's
+    assert len(store.disputes) == 1
+    assert store.concept(concept.id).stage == 3
+    state = graph.get_state(config).values
+    assert state["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}
+    assert state["last_graded"]["disputed"] is True
+    assert state["dispute"] is None

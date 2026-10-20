@@ -1,9 +1,10 @@
-"""Wire the thirteen quiz-loop nodes into a LangGraph graph.
+"""Wire the fourteen quiz-loop nodes into a LangGraph graph.
 
 pick_concept -> retrieve_notes | extend_subject | summarize
 extend_subject -> pick_concept | summarize
 retrieve_notes -> generate_questions <-> verify_citations -> ask_question
 verify_citations -> search_web -> generate_questions (web mode) | ask_question
+ask_question -> regrade -> ask_question (a disputed grade)
 """
 
 from collections.abc import Callable
@@ -64,7 +65,8 @@ def build_graph(
         [*_NEXT, "search_web"],
     )
     graph.add_conditional_edges("search_web", after_search, _NEXT)
-    graph.add_conditional_edges("ask_question", after_ask, ["grade_answer", "summarize"])
+    graph.add_conditional_edges("ask_question", after_ask, ["grade_answer", "regrade", "summarize"])
+    graph.add_edge("regrade", "ask_question")
     graph.add_conditional_edges("grade_answer", after_grade, ["update_mastery", "ask_question"])
     graph.add_conditional_edges("update_mastery", after_mastery, ["teach", *_NEXT])
     graph.add_conditional_edges("teach", decide_next, _NEXT)

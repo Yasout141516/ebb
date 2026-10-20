@@ -5,6 +5,7 @@ import pytest
 
 from ebb.domain import Concept
 from ebb.routing import (
+    after_ask,
     after_extend,
     after_generate,
     after_mastery,
@@ -216,3 +217,10 @@ def test_after_search_without_pages_continues_with_the_batch():
     assert after_search(state(batch=[], generation_mode="notes")) == "generate_questions"
     empty = state(batch=[], generation_mode="notes", generation_calls_on_concept=2)
     assert after_search(empty) == "next_concept"
+
+
+def test_after_ask_regrades_a_dispute():
+    assert after_ask({"quit": False, "dispute": {"reason": "correct"}}) == "regrade"
+    assert after_ask({"quit": False, "dispute": None}) == "grade_answer"
+    assert after_ask({"quit": False}) == "grade_answer"  # a milestone-2 state
+    assert after_ask({"quit": True, "dispute": None}) == "summarize"

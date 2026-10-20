@@ -1,6 +1,6 @@
-"""The thirteen quiz-loop nodes. Only generate_questions, extend_subject, grade_answer (short
-answers) and teach call the LLM, and only search_web searches the web; everything else is
-plain code."""
+"""The fourteen quiz-loop nodes. Only generate_questions, extend_subject, grade_answer (short
+answers), teach and regrade call the LLM, and only search_web searches the web; everything
+else is plain code."""
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -19,8 +19,20 @@ from ebb.citations import (
     verify,
     web_sources,
 )
-from ebb.domain import Answer, Citation, Claim, Grade, GradeValue, Question, Source
-from ebb.grading import grade_mcq
+from ebb.domain import (
+    Answer,
+    Citation,
+    Claim,
+    Concept,
+    Dispute,
+    DisputeOutcome,
+    DisputeReason,
+    Grade,
+    GradeValue,
+    Question,
+    Source,
+)
+from ebb.grading import dispute_outcome, grade_mcq
 from ebb.graph.state import (
     QuizState,
     concept_from_dict,
@@ -128,6 +140,29 @@ def _grade_dict(
     return grade_to_dict(final, state.get("has_notes", False) and not final.citations)
 
 
+def _corrected_tally(tally: dict[str, int], dispute: Dispute) -> dict[str, int]:
+    """`tally` with the disputed answer moved to its new grade, or taken out if voided."""
+    corrected = dict(tally)
+    if dispute.outcome is DisputeOutcome.UPHELD:
+        return corrected
+    corrected[dispute.original_grade.value] -= 1
+    if dispute.new_grade is not None:
+        corrected[dispute.new_grade.value] += 1
+    return corrected
+
+
+def _dispute_result(dispute: Dispute, concept: Concept) -> dict[str, Any]:
+    return {
+        "outcome": dispute.outcome.value,
+        "original_grade": dispute.original_grade.value,
+        "new_grade": None if dispute.new_grade is None else dispute.new_grade.value,
+        "explanation": dispute.regrade_explanation,
+        "citations": [to_dict(c) for c in dispute.citations],
+        "concept": concept.name,
+        "stage": concept.stage,
+    }
+
+
 def make_nodes(
     tutor: Tutor, store: Store, now: Callable[[], datetime], web: WebSearch | None = None
 ) -> dict[str, Node]:
@@ -149,6 +184,7 @@ def make_nodes(
         results.append(
             {
                 "concept": current.name,
+                "concept_id": concept["id"],
                 "tally": dict(state["tally"]),
                 "stage_before": state["start"]["stage"],
                 "stage_after": current.stage,
@@ -157,6 +193,35 @@ def make_nodes(
                 "next_review_at": concept["next_review_at"],
             }
         )
+        return results
+
+    def corrected_results(
+        results: list[dict[str, Any]], concept: Concept, dispute: Dispute
+    ) -> list[dict[str, Any]]:
+        """`results` with the last entry for `concept` corrected by `dispute`. Entries saved
+        before results carried concept ids are never matched."""
+        results = list(results)
+        index = next(
+            (
+                i
+                for i in reversed(range(len(results)))
+                if results[i].get("concept_id") == str(concept.id)
+            ),
+            None,
+        )
+        if index is None:
+            return results
+        tally = _corrected_tally(results[index]["tally"], dispute)
+        if sum(tally.values()) == 0:
+            del results[index]  # its only answer was voided; record_result skips such concepts
+            return results
+        results[index] = {
+            **results[index],
+            "tally": tally,
+            "stage_after": concept.stage,
+            "tide_after": tide(concept, now()),
+            "next_review_at": concept_to_dict(concept)["next_review_at"],
+        }
         return results
 
     def load_learner(state: QuizState) -> dict[str, Any]:
@@ -347,9 +412,12 @@ def make_nodes(
     def ask_question(state: QuizState) -> dict[str, Any]:
         # Runs again from the top when resumed, so nothing before interrupt() may have side effects.
         batch = state["batch"]
-        if state["retry_question"]:
+        # After a dispute the question it interrupted is shown again, whatever the grade now is.
+        pending = state.get("pending_question_id")
+        index = next((i for i, q in enumerate(batch) if q["id"] == pending), None)
+        if index is None and state["retry_question"]:
             index = 0
-        else:
+        elif index is None:
             last = state["grade"]["value"] if state["grade"] else None
             index = choose_question(
                 batch, state["difficulty"], last, first=state["asked_on_concept"] == 0
@@ -357,6 +425,7 @@ def make_nodes(
         question = batch[index]
         grade = state["grade"]
         feedback = None if grade is None else {"citations": [], "general_knowledge": False, **grade}
+        graded = state.get("last_graded")
         reply = interrupt(
             {
                 "concept": state["concept"]["name"],
@@ -373,8 +442,13 @@ def make_nodes(
                 "lesson": state["lesson"],
                 "lesson_citations": state.get("lesson_citations", []),
                 "notices": state["notices"],
+                "can_dispute": graded is not None and not graded["disputed"],
+                "dispute_result": state.get("dispute_result"),
             }
         )
+        if "dispute" in reply:
+            # The question stays in the batch, to be shown again once regrade is done.
+            return {"dispute": reply["dispute"], "pending_question_id": question["id"]}
         update: dict[str, Any] = {
             "question": question,
             "batch": batch[:index] + batch[index + 1 :],
@@ -383,6 +457,9 @@ def make_nodes(
             "lesson": None,
             "lesson_citations": [],
             "notices": [],
+            "pending_question_id": None,
+            "dispute_result": None,
+            "last_graded": None,
         }
         if reply.get("quit"):
             return {**update, "quit": True}
@@ -443,6 +520,21 @@ def make_nodes(
             "tally": {**state["tally"], grade.value.value: state["tally"][grade.value.value] + 1},
             "correct_streak": state["correct_streak"] + 1 if correct else 0,
             "asked_on_concept": state["asked_on_concept"] + 1,
+            "last_graded": None if state["model_used"] == "code" else disputable(state),
+        }
+
+    def disputable(state: QuizState) -> dict[str, Any]:
+        """What regrade needs of the answer just graded. Its sources are kept here, so a
+        dispute raised after moving on to another concept still has them."""
+        sources = sources_for(state, question_from_dict(state["question"]))
+        return {
+            "attempt_id": state["attempt_id"],
+            "concept_id": state["concept"]["id"],
+            "question": state["question"],
+            "answer": state["answer"],
+            "grade": state["grade"],
+            "sources": [source_to_dict(s) for s in sources],
+            "disputed": False,
         }
 
     def teach(state: QuizState) -> dict[str, Any]:
@@ -468,6 +560,67 @@ def make_nodes(
             "notices": _notices(state, generated),
         }
 
+    def regrade(state: QuizState) -> dict[str, Any]:
+        user_id, _ = ids(state)
+        graded = state.get("last_graded")
+        request = state["dispute"]
+        refused = {"dispute": None, "dispute_result": {"outcome": "refused"}}
+        if graded is None or graded["disputed"] or request["reason"] not in DisputeReason:
+            return refused
+        question = question_from_dict(graded["question"])
+        first = grade_from_dict(graded["grade"])
+        reason = DisputeReason(request["reason"])
+        sources = [source_from_dict(s) for s in graded["sources"]]
+        try:
+            generated, citations = _verified(
+                lambda failures: tutor.regrade(
+                    question,
+                    graded["answer"],
+                    first,
+                    reason,
+                    request["explanation"],
+                    sources,
+                    failures,
+                ),
+                lambda regraded: regraded[0].claims,
+                sources,
+            )
+        except AllProvidersExhausted:
+            return {"dispute": None, "dispute_result": {"outcome": "failed"}}
+        new, ambiguous = generated.value
+        outcome = dispute_outcome(reason, first.value, new.value, ambiguous)
+        dispute = Dispute(
+            id=UUID(request["id"]),
+            attempt_id=UUID(graded["attempt_id"]),
+            reason=reason,
+            explanation=request["explanation"],
+            original_grade=first.value,
+            new_grade=None if outcome is DisputeOutcome.VOIDED else new.value,
+            outcome=outcome,
+            regrade_explanation=new.explanation,
+            citations=citations,
+            model_used=generated.model,
+        )
+        try:
+            # Resumed after the store committed, this returns the dispute stored then, which
+            # may differ from this run's: everything below follows the stored one.
+            recorded, concept = store.resolve_dispute(user_id, dispute, now())
+        except ValueError, LookupError:
+            # Nothing the store refuses can succeed later, so d isn't offered again.
+            return {**refused, "last_graded": {**graded, "disputed": True}}
+        update: dict[str, Any] = {
+            "dispute": None,
+            "dispute_result": _dispute_result(recorded, concept),
+            "last_graded": {**graded, "disputed": True},
+            "notices": _notices(state, generated),
+        }
+        if graded["concept_id"] == state["concept"]["id"]:
+            update["concept"] = concept_to_dict(concept)
+            update["tally"] = _corrected_tally(state["tally"], recorded)
+        else:
+            update["results"] = corrected_results(state["results"], concept, recorded)
+        return update
+
     def next_concept(state: QuizState) -> dict[str, Any]:
         return {"results": record_result(state)}
 
@@ -488,6 +641,7 @@ def make_nodes(
         "grade_answer": grade_answer,
         "update_mastery": update_mastery,
         "teach": teach,
+        "regrade": regrade,
         "next_concept": next_concept,
         "summarize": summarize,
     }

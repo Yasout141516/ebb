@@ -58,6 +58,13 @@ class QuizState(TypedDict, total=False):
     model_used: str | None
     lesson: str | None
     lesson_citations: list[dict[str, Any]]
+    # disputes
+    # The last short answer graded by the LLM, kept until the next answer so it can be
+    # disputed: {attempt_id, concept_id, question, answer, grade, sources, disputed}.
+    last_graded: dict[str, Any] | None
+    dispute: dict[str, Any] | None  # {id, reason, explanation} waiting for regrade
+    dispute_result: dict[str, Any] | None  # shown above the re-shown question
+    pending_question_id: str | None  # the question to show again after a dispute
 
 
 def _dt(value: datetime | None) -> str | None:
