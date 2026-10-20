@@ -5,9 +5,10 @@ the commands that use them; `ebb --help` and `ebb status` never load them.
 """
 
 import atexit
+import time
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
@@ -51,6 +52,8 @@ app = typer.Typer(
     add_completion=False,
     help="Ebb: an AI tutor that quizzes you and brings ideas back before you forget them.",
 )
+eval_app = typer.Typer(no_args_is_help=True, help="Build and run the grading eval.")
+app.add_typer(eval_app, name="eval")
 console = Console()
 
 
@@ -472,3 +475,105 @@ def status(
             console.print(f"  {escape(line)}")
     else:
         console.print("  No sources yet. Add notes with: ebb add <file>")
+
+
+def _eval_settings() -> Settings:
+    try:
+        return Settings()
+    except ConfigError as error:
+        _fail(str(error), code=2)
+
+
+def _eval_writer(settings: Settings) -> LangChainTutor:
+    from ebb.llm.tutor import LangChainTutor
+
+    try:
+        return LangChainTutor.writer(settings)
+    except ConfigError as error:
+        _fail(str(error), code=2)
+
+
+def _eval_grader(settings: Settings) -> LangChainTutor:
+    """The primary model alone, so one run measures one model."""
+    from ebb.llm.tutor import LangChainTutor
+
+    try:
+        return LangChainTutor.from_settings(settings, fallback=False)
+    except ConfigError as error:
+        _fail(str(error), code=2)
+
+
+def _pace(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _today() -> date:
+    return date.today()
+
+
+def _dispute_counts() -> dict[str, int] | None:
+    """Disputes raised, changed, voided and upheld; None when the database is down."""
+    try:
+        settings, store = _open_store()
+    except typer.Exit:
+        return None
+    return store.dispute_counts(settings.ebb_dev_user_id)
+
+
+@eval_app.command("build")
+def eval_build(
+    dataset: Annotated[Path, typer.Option(help="Where to write the cases.")] = Path(
+        "evals/grading.jsonl"
+    ),
+    notes: Annotated[Path, typer.Option(help="Notes for the grounded cases.")] = Path(
+        "evals/sample_notes.md"
+    ),
+    force: Annotated[bool, typer.Option("--force", help="Overwrite an existing set.")] = False,
+) -> None:
+    """Have the writer model generate the labelled cases (needs GROQ_API_KEY)."""
+    from ebb.evals import EVAL_TOPICS, GROUNDED_CASES, build_cases, save_cases
+    from ebb.notes import NotesError
+
+    if dataset.exists() and not force:
+        _fail(f"{dataset} exists — pass --force to rebuild it.")
+    writer = _eval_writer(_eval_settings())
+    expected = len(EVAL_TOPICS) + GROUNDED_CASES
+    console.print(f"Writing {expected} cases; this takes a few minutes.")
+    try:
+        cases = build_cases(writer, EVAL_TOPICS, notes, GROUNDED_CASES, sleep=_pace)
+    except NotesError as error:
+        _fail(str(error))
+    save_cases(cases, dataset)
+    console.print(f"Wrote {len(cases)} cases to {escape(str(dataset))}.")
+    if len(cases) < expected:
+        console.print(
+            f"[yellow]{expected - len(cases)} skipped: the writer failed on them.[/yellow]"
+        )
+
+
+@eval_app.command("run")
+def eval_run(
+    dataset: Annotated[Path, typer.Option(help="The cases to grade.")] = Path(
+        "evals/grading.jsonl"
+    ),
+    results: Annotated[Path, typer.Option(help="Folder for the dated report.")] = Path(
+        "evals/results"
+    ),
+) -> None:
+    """Grade every case with the primary model and write a dated report."""
+    from ebb.evals import agreement_line, load_cases, report_markdown, run_cases, score
+
+    if not dataset.is_file():
+        _fail(f"{dataset} not found. Build it first with: ebb eval build")
+    cases = load_cases(dataset)
+    settings = _eval_settings()
+    model = settings.ebb_primary_model
+    grades = run_cases(_eval_grader(settings), cases, sleep=_pace)
+    result = score(cases, grades)
+    writer = cases[0].writer_model if cases else "the writer model"
+    text = report_markdown(result, model, _today(), _dispute_counts(), writer)
+    results.mkdir(parents=True, exist_ok=True)
+    path = results / f"{_today().isoformat()}-{model.replace('/', '-')}.md"
+    path.write_text(text, encoding="utf-8")
+    console.print(escape(agreement_line(result)))
+    console.print(f"Report: {escape(str(path))}")

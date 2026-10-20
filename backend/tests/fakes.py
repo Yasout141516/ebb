@@ -27,7 +27,7 @@ from ebb.domain import (
     Source,
     Subject,
 )
-from ebb.llm.schemas import ConceptDraft, NoteConcept
+from ebb.llm.schemas import ConceptDraft, EvalCaseDraft, NoteConcept
 from ebb.llm.tutor import AllProvidersExhausted, Generated
 from ebb.store import (
     MAX_DOCUMENTS,
@@ -391,6 +391,7 @@ class FakeTutor:
         regrades: list[tuple[str, bool]] | None = None,
         fail_regrade: bool = False,
         fail_concepts: bool = False,
+        fail_eval_on_calls: Sequence[int] = (),
     ) -> None:
         self.batch_size = batch_size
         self.fail_grade_times = fail_grade_times
@@ -421,6 +422,8 @@ class FakeTutor:
         self.fail_concepts = fail_concepts
         self.concepts_calls: list[tuple[str, list[str], str]] = []
         self.regrade_calls: list[tuple[str, DisputeReason, str]] = []
+        self.fail_eval_on_calls = fail_eval_on_calls  # 1-based write_eval_case call numbers
+        self.eval_calls: list[tuple[str, GradeValue, str | None]] = []
 
     @staticmethod
     def _claims(scripted: list[list[tuple[str, str]]] | None, call: int) -> tuple[Claim, ...]:
@@ -562,6 +565,22 @@ class FakeTutor:
         value, ambiguous = scripted[call] if call < len(scripted) else (grade.value.value, False)
         new = Grade(GradeValue(value), f"Regraded {value}.", grade.misconception)
         return self._out((new, ambiguous))
+
+    def write_eval_case(
+        self, topic: str, target: GradeValue, notes: str | None
+    ) -> Generated[EvalCaseDraft]:
+        """An answer this tutor's own `grade` marks as the target: right, meh or wrong."""
+        self.eval_calls.append((topic, target, notes))
+        if len(self.eval_calls) in self.fail_eval_on_calls:
+            raise AllProvidersExhausted("writer down")
+        answer = {"correct": "right", "partial": "meh", "incorrect": "wrong"}[target.value]
+        draft = EvalCaseDraft(
+            question=f"What is {topic}?",
+            reference="right",
+            answer=answer,
+            reason=f"Written to be {target.value}.",
+        )
+        return self._out(draft)
 
 
 class FakeWebSearch:
