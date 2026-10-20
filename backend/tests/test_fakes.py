@@ -310,6 +310,16 @@ def test_memory_store_keeps_citations_but_not_claims():
     assert store.attempts[answer.id].citations == (CITE,)
 
 
+def test_memory_store_saving_a_question_twice_is_a_no_op():
+    store, _, session_id, question = setup()
+
+    store.save_questions(ALICE, session_id, [question])  # a replay after a crash
+    store.save_questions(ALICE, session_id, [replace(question, source="notes", citations=(CITE,))])
+
+    assert store.questions[question.id] == question
+    assert len(store.questions) == 1
+
+
 def test_memory_store_changed_dispute_recomputes_from_the_snapshot():
     store, question, before, answer = stage_3_then_incorrect()
     dispute = dispute_for(answer, DisputeOutcome.CHANGED, GradeValue.CORRECT)

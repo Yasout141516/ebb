@@ -245,7 +245,9 @@ class PgStore:
                 cur.executemany(
                     "insert into questions (id, user_id, session_id, concept_id, type, difficulty,"
                     " prompt, options, reference_answer, source, citations)"
-                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                    # verify_citations re-runs with the same ids if it dies before checkpointing.
+                    " on conflict (id) do nothing",
                     [
                         (
                             q.id,

@@ -116,6 +116,8 @@ class MemoryStore:
             if self.concepts.get(question.concept_id, (None,))[0] != user_id:
                 raise LookupError("concept not found")
         for question in questions:
+            if question.id in self.questions:
+                continue  # already saved: a replay is a no-op
             self.questions[question.id] = replace(question, claims=())  # claims aren't stored
             self.question_sessions[question.id] = session_id
 

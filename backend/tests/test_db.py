@@ -604,6 +604,58 @@ def test_citations_round_trip_on_questions_and_attempts(store, pg_pool):
     assert [citations.from_dict(c) for c in attempt_row(pg_pool, answer)["citations"]] == [CITE]
 
 
+def test_saving_a_question_batch_twice_is_a_no_op(store, pg_pool):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "Names.")])
+    concept = store.list_concepts(ALICE, subject_id)[0]
+    session_id = store.create_session(ALICE, subject_id, "t")
+    question = Question(
+        uuid4(), concept.id, "short", 1, "Why split?", "-", source="notes", citations=(CITE,)
+    )
+    store.save_questions(ALICE, session_id, [question])
+
+    store.save_questions(ALICE, session_id, [question])  # a replay after a crash
+    store.save_questions(ALICE, session_id, [replace(question, source="general", citations=())])
+
+    with pg_pool.connection() as conn:
+        rows = conn.execute(
+            "select source, citations from questions where id = %s", (question.id,)
+        ).fetchall()
+    assert [r["source"] for r in rows] == ["notes"]
+    assert [citations.from_dict(c) for c in rows[0]["citations"]] == [CITE]
+
+
+class CrashAfterSavingQuestions(PgStore):
+    """The process dies after the batch commits but before verify_citations checkpoints."""
+
+    crashed = False
+
+    def save_questions(self, user_id, session_id, questions):
+        super().save_questions(user_id, session_id, questions)
+        if not self.crashed:
+            self.crashed = True
+            raise RuntimeError("killed after saving the batch")
+
+
+def test_resume_after_a_crash_while_saving_questions(pg_pool):
+    store = CrashAfterSavingQuestions(pg_pool)
+    store.ensure_profile(ALICE)
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    graph = build_graph(FakeTutor(), store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": "pg-crash"}}
+    start = {"user_id": str(ALICE), "subject_id": str(subject_id), "thread_id": "pg-crash"}
+    with pytest.raises(RuntimeError):
+        graph.invoke(start, config)
+
+    result = graph.invoke(None, config)  # verify_citations runs again with the same ids
+
+    assert result["__interrupt__"][0].value["question"]["prompt"] == "DNS question 1"
+    with pg_pool.connection() as conn:
+        saved = conn.execute(
+            "select count(*) as n from questions where user_id = %s", (ALICE,)
+        ).fetchone()
+    assert saved["n"] == 5
+
+
 def test_record_answer_snapshots_the_concept_before(store, pg_pool):
     _, _, before, answer = stage_3_then_incorrect(store, pg_pool)
 

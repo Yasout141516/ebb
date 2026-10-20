@@ -135,7 +135,8 @@ class Store(Protocol):
     ) -> None:
         """Stores each question with its source and citations (not its unverified claims).
 
-        Raises LookupError if the session or a question's concept is not the user's."""
+        A question whose id is already stored is left as it is, so a replayed save is a
+        no-op. Raises LookupError if the session or a question's concept is not the user's."""
         ...
 
     def record_answer(self, user_id: UUID, answer: Answer) -> Concept:
