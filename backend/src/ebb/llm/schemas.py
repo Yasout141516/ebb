@@ -50,12 +50,18 @@ class OptionDraft(BaseModel):
     why: str
 
 
+class CitationDraft(BaseModel):
+    source: str
+    quote: str
+
+
 class QuestionDraft(BaseModel):
     type: Literal["mcq", "short"]
     difficulty: int
     prompt: str
     reference_answer: str
     options: list[OptionDraft]
+    citations: list[CitationDraft] = []
 
     @model_validator(mode="after")
     def well_formed(self) -> QuestionDraft:
@@ -86,7 +92,26 @@ class QuestionBatch(BaseModel):
         return self
 
 
+class WebQuestionBatch(BaseModel):
+    """Questions written from web sources: any mix of types and difficulties."""
+
+    questions: list[QuestionDraft]
+
+    @field_validator("questions")
+    @classmethod
+    def one_to_five(cls, value: list[QuestionDraft]) -> list[QuestionDraft]:
+        if not 1 <= len(value) <= 5:
+            raise ValueError(f"expected 1-5 questions, got {len(value)}")
+        return value
+
+
 class GradeResult(BaseModel):
     grade: Literal["correct", "partial", "incorrect"]
     explanation: str
     misconception: str | None = None
+    citations: list[CitationDraft] = []
+
+
+class LessonResult(BaseModel):
+    text: str
+    citations: list[CitationDraft]

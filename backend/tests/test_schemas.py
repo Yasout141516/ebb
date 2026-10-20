@@ -1,7 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from ebb.llm.schemas import ConceptExtension, ConceptList, QuestionBatch
+from ebb.llm.schemas import (
+    ConceptExtension,
+    ConceptList,
+    LessonResult,
+    QuestionBatch,
+    WebQuestionBatch,
+)
 
 
 def mcq(difficulty=1, correct=1, count=4):
@@ -73,3 +79,24 @@ def test_concept_extension_needs_three_to_five():
     for bad in (2, 6):
         with pytest.raises(ValidationError):
             ConceptExtension.model_validate(concepts(bad))
+
+
+def test_citations_default_to_empty_and_parse_when_given():
+    batch = QuestionBatch.model_validate(
+        {"questions": [mcq(1), mcq(2), short(3), mcq(3), short(2)]}
+    )
+    assert batch.questions[0].citations == []
+    draft = short() | {"citations": [{"source": "N1", "quote": "q"}]}
+    web = WebQuestionBatch.model_validate({"questions": [draft]})
+    assert web.questions[0].citations[0].source == "N1"
+    assert LessonResult(text="t", citations=[]).citations == []
+
+
+@pytest.mark.parametrize("count", [0, 6])
+def test_web_batch_takes_one_to_five_questions(count):
+    with pytest.raises(ValidationError):
+        WebQuestionBatch.model_validate({"questions": [short() for _ in range(count)]})
+
+
+def test_web_batch_has_no_mix_rule():
+    assert len(WebQuestionBatch.model_validate({"questions": [short(1)] * 3}).questions) == 3

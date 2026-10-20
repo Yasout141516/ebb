@@ -249,7 +249,7 @@ def make_nodes(tutor: Tutor, store: Store, now: Callable[[], datetime]) -> dict[
             )
         except AllProvidersExhausted:
             return {"lesson": None, "notices": _with_notice(state, EXHAUSTED_NOTICE)}
-        return {"lesson": generated.value, "notices": _notices(state, generated)}
+        return {"lesson": generated.value.text, "notices": _notices(state, generated)}
 
     def next_concept(state: QuizState) -> dict[str, Any]:
         return {"results": record_result(state)}

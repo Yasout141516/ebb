@@ -11,16 +11,19 @@ from ebb import mastery
 from ebb.domain import (
     Answer,
     Chunk,
+    Claim,
     Concept,
     Dispute,
     DisputeOutcome,
     Document,
     Grade,
     GradeValue,
+    Lesson,
     NewDocument,
     Option,
     Question,
     ResumableSession,
+    Source,
     Subject,
 )
 from ebb.llm.schemas import ConceptDraft
@@ -371,6 +374,11 @@ class FakeTutor:
         fail_generate_on_call: int | None = None,
         extensions: list[list[str]] | None = None,
         fail_extend: bool = False,
+        cite: list[list[tuple[str, str]]] | None = None,
+        grade_cites: list[list[tuple[str, str]]] | None = None,
+        teach_cites: list[list[tuple[str, str]]] | None = None,
+        web_prompts: list[str] | None = None,
+        prompts: list[str] | None = None,
     ) -> None:
         self.batch_size = batch_size
         self.fail_grade_times = fail_grade_times
@@ -385,6 +393,21 @@ class FakeTutor:
         self.generate_calls: list[str] = []
         self.avoid_calls: list[list[str]] = []
         self.counter = 0
+        self.cite = cite  # claims per generate call, applied to every question in that batch
+        self.grade_cites = grade_cites  # claims per grade call
+        self.teach_cites = teach_cites  # claims per teach call
+        self.web_prompts = web_prompts  # prompts returned in web mode
+        self.prompts = prompts  # prompts returned for normal batches
+        self.sources_calls: list[list[Source]] = []
+        self.failures_calls: list[list[str]] = []
+        self.web_count_calls: list[int | None] = []
+        self.grade_attempts = 0
+        self.teach_attempts = 0
+
+    @staticmethod
+    def _claims(scripted: list[list[tuple[str, str]]] | None, call: int) -> tuple[Claim, ...]:
+        pairs = scripted[call] if scripted and call < len(scripted) else []
+        return tuple(Claim(source, quote) for source, quote in pairs)
 
     def _out[T](self, value: T) -> Generated[T]:
         return Generated(value, "fake-model", self.fell_back)
@@ -407,14 +430,29 @@ class FakeTutor:
         names = scripted[call] if call < len(scripted) else []
         return self._out([ConceptDraft(name=n, description=f"About {n}.") for n in names])
 
-    def generate_questions(self, concept: Concept, avoid: list[str]) -> Generated[list[Question]]:
+    def generate_questions(
+        self,
+        concept: Concept,
+        avoid: list[str],
+        sources: Sequence[Source] = (),
+        failures: Sequence[str] = (),
+        web_count: int | None = None,
+    ) -> Generated[list[Question]]:
         self.generate_attempts += 1
         self.avoid_calls.append(list(avoid))
+        self.sources_calls.append(list(sources))
+        self.failures_calls.append(list(failures))
+        self.web_count_calls.append(web_count)
         if self.fail_generate or self.generate_attempts == self.fail_generate_on_call:
             raise AllProvidersExhausted("generation down")
         self.generate_calls.append(concept.name)
+        claims = self._claims(self.cite, self.generate_attempts - 1)
+        pattern = BATCH_PATTERN[: self.batch_size] if web_count is None else None
+        if pattern is None:
+            pattern = [BATCH_PATTERN[n % len(BATCH_PATTERN)] for n in range(web_count)]
+        scripted = self.prompts if web_count is None else self.web_prompts
         questions = []
-        for kind, difficulty in BATCH_PATTERN[: self.batch_size]:
+        for index, (kind, difficulty) in enumerate(pattern):
             self.counter += 1
             options: tuple[Option, ...] = ()
             if kind == "mcq":
@@ -424,32 +462,54 @@ class FakeTutor:
                     Option("wrong option B", False, "That is a different layer."),
                     Option("wrong option C", False, "That is the opposite."),
                 )
+            if scripted is not None and index < len(scripted):
+                prompt = scripted[index]
+            else:
+                prompt = f"{concept.name} question {self.counter}"
             questions.append(
                 Question(
                     id=uuid4(),
                     concept_id=concept.id,
                     type=kind,
                     difficulty=difficulty,
-                    prompt=f"{concept.name} question {self.counter}",
+                    prompt=prompt,
                     reference_answer="right",
                     options=options,
+                    claims=claims,
                 )
             )
         return self._out(questions)
 
-    def grade(self, question: Question, answer: str) -> Generated[Grade]:
+    def grade(
+        self,
+        question: Question,
+        answer: str,
+        sources: Sequence[Source] = (),
+        failures: Sequence[str] = (),
+    ) -> Generated[Grade]:
         if self.fail_grade_times > 0:
             self.fail_grade_times -= 1
             raise AllProvidersExhausted("grading down")
+        claims = self._claims(self.grade_cites, self.grade_attempts)
+        self.grade_attempts += 1
         value = {"right": GradeValue.CORRECT, "meh": GradeValue.PARTIAL}.get(
             answer, GradeValue.INCORRECT
         )
-        return self._out(Grade(value, f"Graded {value.value}.", None))
+        return self._out(Grade(value, f"Graded {value.value}.", None, claims=claims))
 
-    def teach(self, question: Question, answer: str, grade: Grade) -> Generated[str]:
+    def teach(
+        self,
+        question: Question,
+        answer: str,
+        grade: Grade,
+        sources: Sequence[Source] = (),
+        failures: Sequence[str] = (),
+    ) -> Generated[Lesson]:
         if self.fail_teach:
             raise AllProvidersExhausted("teaching down")
-        return self._out("Here is the idea, with an example.")
+        claims = self._claims(self.teach_cites, self.teach_attempts)
+        self.teach_attempts += 1
+        return self._out(Lesson("Here is the idea, with an example.", claims))
 
 
 def make_subject(store: MemoryStore, user_id: UUID, concepts: int = 4) -> UUID:
