@@ -403,6 +403,14 @@ class PgStore:
             )
         return dispute, after
 
+    def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select * from grade_disputes where id = %s and user_id = %s",
+                (dispute_id, user_id),
+            ).fetchone()
+        return None if row is None else _dispute(row)
+
     def dispute_counts(self, user_id: UUID) -> dict[str, int]:
         with self.pool.connection() as conn:
             row = conn.execute(

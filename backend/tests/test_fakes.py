@@ -355,6 +355,18 @@ def test_memory_store_upheld_dispute_and_idempotent_rerun():
     assert store.dispute_counts(BOB)["raised"] == 0
 
 
+def test_memory_store_get_dispute_finds_only_the_users_own():
+    store, _, _, answer = stage_3_then_incorrect()
+    dispute = dispute_for(answer, DisputeOutcome.VOIDED)
+    assert store.get_dispute(ALICE, dispute.id) is None
+
+    store.resolve_dispute(ALICE, dispute, NOW)
+
+    assert store.get_dispute(ALICE, dispute.id) == dispute
+    assert store.get_dispute(BOB, dispute.id) is None
+    assert store.get_dispute(ALICE, uuid4()) is None
+
+
 def test_memory_store_refuses_disputes_it_cannot_apply():
     store, question, _, first = stage_3_then_incorrect()
     second = answer_for(question, GradeValue.CORRECT, NOW + timedelta(days=2))

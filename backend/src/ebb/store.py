@@ -170,6 +170,10 @@ class Store(Protocol):
         """
         ...
 
+    def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:
+        """The recorded dispute with this id, or None if it isn't the user's or doesn't exist."""
+        ...
+
     def dispute_counts(self, user_id: UUID) -> dict[str, int]:
         """How many disputes were raised, and how many were changed, voided and upheld."""
         ...

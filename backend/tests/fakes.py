@@ -189,6 +189,10 @@ class MemoryStore:
         self.disputes[dispute.id] = (user_id, dispute)
         return dispute, after
 
+    def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:
+        owner, dispute = self.disputes.get(dispute_id, (None, None))
+        return dispute if owner == user_id else None
+
     def dispute_counts(self, user_id: UUID) -> dict[str, int]:
         outcomes = [d.outcome for owner, d in self.disputes.values() if owner == user_id]
         counts = {"raised": len(outcomes)}

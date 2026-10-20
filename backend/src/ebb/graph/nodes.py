@@ -560,33 +560,28 @@ def make_nodes(
             "notices": _notices(state, generated),
         }
 
-    def regrade(state: QuizState) -> dict[str, Any]:
-        user_id, _ = ids(state)
-        graded = state.get("last_graded")
-        request = state["dispute"]
-        refused = {"dispute": None, "dispute_result": {"outcome": "refused"}}
-        if graded is None or graded["disputed"] or request["reason"] not in DisputeReason:
-            return refused
+    def recheck(
+        graded: dict[str, Any], request: dict[str, Any]
+    ) -> tuple[Dispute, Generated[tuple[Grade, bool]]]:
+        """Ask the model to re-check the graded answer; code decides the outcome. Raises
+        AllProvidersExhausted if the first call fails."""
         question = question_from_dict(graded["question"])
         first = grade_from_dict(graded["grade"])
         reason = DisputeReason(request["reason"])
         sources = [source_from_dict(s) for s in graded["sources"]]
-        try:
-            generated, citations = _verified(
-                lambda failures: tutor.regrade(
-                    question,
-                    graded["answer"],
-                    first,
-                    reason,
-                    request["explanation"],
-                    sources,
-                    failures,
-                ),
-                lambda regraded: regraded[0].claims,
+        generated, citations = _verified(
+            lambda failures: tutor.regrade(
+                question,
+                graded["answer"],
+                first,
+                reason,
+                request["explanation"],
                 sources,
-            )
-        except AllProvidersExhausted:
-            return {"dispute": None, "dispute_result": {"outcome": "failed"}}
+                failures,
+            ),
+            lambda regraded: regraded[0].claims,
+            sources,
+        )
         new, ambiguous = generated.value
         outcome = dispute_outcome(reason, first.value, new.value, ambiguous)
         dispute = Dispute(
@@ -601,9 +596,27 @@ def make_nodes(
             citations=citations,
             model_used=generated.model,
         )
+        return dispute, generated
+
+    def regrade(state: QuizState) -> dict[str, Any]:
+        user_id, _ = ids(state)
+        graded = state.get("last_graded")
+        request = state["dispute"]
+        refused = {"dispute": None, "dispute_result": {"outcome": "refused"}}
+        if graded is None or graded["disputed"] or request["reason"] not in DisputeReason:
+            return refused
+        # Resumed after the store committed, the stored dispute is applied as it was: the
+        # model isn't asked again, so a busy or different answer can't undo it.
+        dispute = store.get_dispute(user_id, UUID(request["id"]))
+        notices = list(state["notices"])
+        if dispute is None:
+            try:
+                dispute, generated = recheck(graded, request)
+            except AllProvidersExhausted:
+                return {"dispute": None, "dispute_result": {"outcome": "failed"}}
+            notices = _notices(state, generated)
         try:
-            # Resumed after the store committed, this returns the dispute stored then, which
-            # may differ from this run's: everything below follows the stored one.
+            # A stored dispute comes back unchanged, with the concept as it is now.
             recorded, concept = store.resolve_dispute(user_id, dispute, now())
         except ValueError, LookupError:
             # Nothing the store refuses can succeed later, so d isn't offered again.
@@ -612,7 +625,7 @@ def make_nodes(
             "dispute": None,
             "dispute_result": _dispute_result(recorded, concept),
             "last_graded": {**graded, "disputed": True},
-            "notices": _notices(state, generated),
+            "notices": notices,
         }
         if graded["concept_id"] == state["concept"]["id"]:
             update["concept"] = concept_to_dict(concept)

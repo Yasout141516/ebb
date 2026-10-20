@@ -851,6 +851,18 @@ def test_concurrent_disputes_apply_once(store, pg_pool):
     assert (concept.stage, concept.review_count) == (4, before.review_count + 1)
 
 
+def test_get_dispute_finds_only_the_users_own(store, pg_pool):
+    _, _, _, answer = stage_3_then_incorrect(store, pg_pool)
+    dispute = dispute_for(answer, DisputeOutcome.CHANGED, GradeValue.CORRECT)
+    assert store.get_dispute(ALICE, dispute.id) is None
+
+    store.resolve_dispute(ALICE, dispute, NOW)
+
+    assert store.get_dispute(ALICE, dispute.id) == dispute
+    assert store.get_dispute(BOB, dispute.id) is None
+    assert store.get_dispute(ALICE, uuid4()) is None
+
+
 def test_other_users_cannot_dispute_alices_attempts(store, pg_pool):
     subject_id, _, _, answer = stage_3_then_incorrect(store, pg_pool)
     [graded] = store.list_concepts(ALICE, subject_id)

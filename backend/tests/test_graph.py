@@ -1168,10 +1168,11 @@ class CrashAfterCommitStore(MemoryStore):
         return resolved
 
 
-def test_resume_while_regrading_resolves_once():
-    store = CrashAfterCommitStore()
-    # the re-run's call disagrees with the first, but the stored outcome wins
-    tutor = FakeTutor(regrades=[("correct", False), ("incorrect", False)])
+def crash_while_regrading(
+    store: CrashAfterCommitStore, tutor: FakeTutor
+) -> tuple[Any, dict[str, Any], Concept]:
+    """Answer "meh", dispute it, and crash once the store has committed the dispute;
+    returns a graph built as after a restart, its config, and the disputed concept."""
     subject_id, concept = due_subject(store)
     saver = InMemorySaver()
     config = {"configurable": {"thread_id": "regrading"}}
@@ -1181,11 +1182,18 @@ def test_resume_while_regrading_resolves_once():
     graph.invoke(Command(resume=reply("meh")), config)
     with pytest.raises(Crash):
         graph.invoke(Command(resume=dispute()), config)
+    return build_graph(tutor, store, saver, now=lambda: NOW), config, concept
 
-    graph = build_graph(tutor, store, saver, now=lambda: NOW)  # as after a restart
+
+def test_resume_while_regrading_resolves_once():
+    store = CrashAfterCommitStore()
+    # a second call would lower the grade; the stored outcome must win without one
+    tutor = FakeTutor(regrades=[("correct", False), ("incorrect", False)])
+    graph, config, concept = crash_while_regrading(store, tutor)
+
     payload = graph.invoke(None, config)["__interrupt__"][0].value
 
-    assert len(tutor.regrade_calls) == 2
+    assert len(tutor.regrade_calls) == 1  # the model isn't asked again
     result = payload["dispute_result"]
     assert (result["outcome"], result["new_grade"], result["stage"]) == ("changed", "correct", 3)
     assert result["explanation"] == "Regraded correct."  # the stored dispute's
@@ -1195,3 +1203,20 @@ def test_resume_while_regrading_resolves_once():
     assert state["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}
     assert state["last_graded"]["disputed"] is True
     assert state["dispute"] is None
+
+
+def test_resume_while_regrading_needs_no_model():
+    store, tutor = CrashAfterCommitStore(), FakeTutor(regrades=[("correct", False)])
+    graph, config, concept = crash_while_regrading(store, tutor)
+    tutor.fail_regrade = True  # every provider is busy after the restart
+
+    payload = graph.invoke(None, config)["__interrupt__"][0].value
+
+    result = payload["dispute_result"]
+    assert (result["outcome"], result["new_grade"], result["stage"]) == ("changed", "correct", 3)
+    assert payload["can_dispute"] is False
+    assert len(tutor.regrade_calls) == 1
+    assert store.concept(concept.id).stage == 3
+    state = graph.get_state(config).values
+    assert state["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}  # corrected once
+    assert state["concept"]["stage"] == 3
