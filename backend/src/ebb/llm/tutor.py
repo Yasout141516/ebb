@@ -7,7 +7,6 @@ from string import Template
 from typing import Any, Literal, Protocol
 from uuid import uuid4
 
-import google.genai.errors
 import groq
 import httpx
 from langchain_core.exceptions import (
@@ -18,8 +17,6 @@ from langchain_core.exceptions import (
 )
 from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
-from langchain_google_genai._common import GoogleGenerativeAIError
-from langchain_google_genai.chat_models import GoogleInvalidRequestError
 from pydantic import ValidationError
 
 from ebb.config import ConfigError, Settings
@@ -49,16 +46,6 @@ from ebb.llm.schemas import (
     WebQuestionBatch,
 )
 
-try:  # google-genai uses httpx2 when it is installed (it arrives via langsmith today)
-    import httpx2
-
-    _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
-        httpx.TransportError,
-        httpx2.TransportError,
-    )
-except ImportError:
-    _TRANSPORT_ERRORS = (httpx.TransportError,)
-
 # Errors a retry or a backup model cannot fix: the key or the model name is wrong.
 _AUTH_ERRORS: tuple[type[BaseException], ...] = (
     ModelAuthenticationError,
@@ -67,16 +54,15 @@ _AUTH_ERRORS: tuple[type[BaseException], ...] = (
     groq.PermissionDeniedError,
 )
 _NOT_FOUND_ERRORS: tuple[type[BaseException], ...] = (ModelNotFoundError, groq.NotFoundError)
-# Gemini reports a malformed key as 400 INVALID_ARGUMENT rather than 401.
-_BAD_KEY_MARKERS = ("api key not valid", "api_key_invalid")
 
+# ChatMistralAI raises httpx.HTTPStatusError for any error response; transport errors
+# (timeouts, connection failures) subclass httpx.TransportError.
 PROVIDER_ERRORS: tuple[type[BaseException], ...] = (
-    GoogleGenerativeAIError,
-    google.genai.errors.APIError,
     groq.APIError,
+    httpx.HTTPStatusError,
+    httpx.TransportError,
     OutputParserException,
     ValidationError,
-    *_TRANSPORT_ERRORS,
     *_AUTH_ERRORS,
     *_NOT_FOUND_ERRORS,
 )
@@ -90,12 +76,14 @@ def _classify(error: BaseException) -> Failure:
     """What a provider error means: worth retrying, or a key/model the user must fix."""
     if isinstance(error, _AUTH_ERRORS):
         return "bad_key"
-    if isinstance(error, GoogleInvalidRequestError) and any(
-        marker in str(error).lower() for marker in _BAD_KEY_MARKERS
-    ):
-        return "bad_key"
     if isinstance(error, _NOT_FOUND_ERRORS):
         return "no_model"
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        if status in (401, 403):
+            return "bad_key"
+        if status == 404:
+            return "no_model"
     return "retry"
 
 
@@ -172,8 +160,8 @@ class Provider:
     name: str
     precise: BaseChatModel  # low temperature: grading
     creative: BaseChatModel  # higher temperature: generating and teaching
-    service: str = "Gemini"
-    key_name: str = "GOOGLE_API_KEY"
+    service: str = "Groq"
+    key_name: str = "GROQ_API_KEY"
 
 
 def _prompt(template: str, /, **values: str) -> str:
@@ -260,7 +248,7 @@ def _groq_provider(settings: Settings, api_key: str) -> Provider:
 
     def groq_model(temperature: float) -> BaseChatModel:
         return ChatGroq(
-            model_name=settings.ebb_fallback_model,
+            model_name=settings.ebb_primary_model,
             groq_api_key=api_key,
             temperature=temperature,
             max_retries=1,
@@ -268,11 +256,32 @@ def _groq_provider(settings: Settings, api_key: str) -> Provider:
         )
 
     return Provider(
-        settings.ebb_fallback_model,
+        settings.ebb_primary_model,
         groq_model(0.2),
         groq_model(0.7),
         service="Groq",
         key_name="GROQ_API_KEY",
+    )
+
+
+def _mistral_provider(settings: Settings, api_key: str) -> Provider:
+    from langchain_mistralai import ChatMistralAI
+
+    def mistral_model(temperature: float) -> BaseChatModel:
+        return ChatMistralAI(
+            model=settings.ebb_fallback_model,
+            api_key=api_key,
+            temperature=temperature,
+            max_retries=1,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+
+    return Provider(
+        settings.ebb_fallback_model,
+        mistral_model(0.2),
+        mistral_model(0.7),
+        service="Mistral",
+        key_name="MISTRAL_API_KEY",
     )
 
 
@@ -285,32 +294,20 @@ class LangChainTutor:
 
     @classmethod
     def from_settings(cls, settings: Settings, fallback: bool = True) -> LangChainTutor:
-        """The primary model, plus the backup when a Groq key is set and `fallback` allows."""
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        if not settings.google_api_key:
-            raise ConfigError("GOOGLE_API_KEY is not set (get one free at aistudio.google.com)")
-
-        def gemini(temperature: float) -> BaseChatModel:
-            return ChatGoogleGenerativeAI(
-                model=settings.ebb_primary_model,
-                google_api_key=settings.google_api_key,
-                temperature=temperature,
-                max_retries=1,
-                request_timeout=REQUEST_TIMEOUT_SECONDS,
-            )
-
-        providers = [Provider(settings.ebb_primary_model, gemini(0.2), gemini(0.7))]
-        if fallback and settings.groq_api_key:
-            providers.append(_groq_provider(settings, settings.groq_api_key))
+        """Groq first, plus the Mistral backup when its key is set and `fallback` allows."""
+        if not settings.groq_api_key:
+            raise ConfigError("GROQ_API_KEY is not set (get one free at console.groq.com)")
+        providers = [_groq_provider(settings, settings.groq_api_key)]
+        if fallback and settings.mistral_api_key:
+            providers.append(_mistral_provider(settings, settings.mistral_api_key))
         return cls(providers)
 
     @classmethod
     def writer(cls, settings: Settings) -> LangChainTutor:
-        """Groq only: the model that writes eval cases, apart from the one being graded."""
-        if not settings.groq_api_key:
-            raise ConfigError("eval build needs GROQ_API_KEY (the writer model).")
-        return cls([_groq_provider(settings, settings.groq_api_key)])
+        """Mistral only: the model that writes eval cases, apart from the Groq one graded."""
+        if not settings.mistral_api_key:
+            raise ConfigError("eval build needs MISTRAL_API_KEY (the writer model).")
+        return cls([_mistral_provider(settings, settings.mistral_api_key)])
 
     def _run[T](
         self,

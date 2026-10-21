@@ -530,7 +530,7 @@ def eval_build(
     ),
     force: Annotated[bool, typer.Option("--force", help="Overwrite an existing set.")] = False,
 ) -> None:
-    """Have the writer model generate the labelled cases (needs GROQ_API_KEY)."""
+    """Have the writer model generate the labelled cases (needs MISTRAL_API_KEY)."""
     from ebb.evals import EVAL_TOPICS, GROUNDED_CASES, build_cases, save_cases
     from ebb.notes import NotesError
 

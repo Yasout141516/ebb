@@ -15,11 +15,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(".env", "../.env"), extra="ignore")
 
     database_url: str = "postgresql://ebb:ebb@localhost:5432/ebb"
-    google_api_key: str | None = None
     groq_api_key: str | None = None
+    mistral_api_key: str | None = None
     tavily_api_key: str | None = None
-    ebb_primary_model: str = "gemini-3.8-flash"
-    ebb_fallback_model: str = "qwen/qwen3.8-27b"
+    ebb_primary_model: str = "openai/gpt-oss-120b"
+    ebb_fallback_model: str = "mistral-medium-latest"
     ebb_dev_user_id: UUID = UUID("00000000-0000-0000-0000-000000000001")
     ebb_timezone: str | None = None
 

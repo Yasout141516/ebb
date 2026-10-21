@@ -10,12 +10,6 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import RunnableLambda
-from langchain_google_genai.chat_models import (
-    GoogleAuthenticationError,
-    GoogleInvalidRequestError,
-    GoogleModelNotFoundError,
-    GooglePermissionDeniedError,
-)
 
 from ebb.config import ConfigError, Settings
 from ebb.domain import (
@@ -182,29 +176,34 @@ def test_correct_text_uses_the_right_option_for_mcq():
 
 
 def test_missing_api_key_is_a_config_error():
-    with pytest.raises(ConfigError, match="GOOGLE_API_KEY"):
-        LangChainTutor.from_settings(Settings(_env_file=None, google_api_key=None))
+    with pytest.raises(ConfigError) as caught:
+        LangChainTutor.from_settings(Settings(_env_file=None, groq_api_key=None))
+    assert str(caught.value) == "GROQ_API_KEY is not set (get one free at console.groq.com)"
 
 
-def test_groq_key_adds_a_fallback_provider():
-    settings = Settings(_env_file=None, google_api_key="g-test", groq_api_key="q-test")
+def test_groq_is_primary_and_a_mistral_key_adds_the_fallback():
+    settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key="m-test")
     tutor = LangChainTutor.from_settings(settings)
     assert [p.name for p in tutor.providers] == [
-        settings.ebb_primary_model,
-        settings.ebb_fallback_model,
+        "openai/gpt-oss-120b",
+        "mistral-medium-latest",
+    ]
+    assert [(p.service, p.key_name) for p in tutor.providers] == [
+        ("Groq", "GROQ_API_KEY"),
+        ("Mistral", "MISTRAL_API_KEY"),
     ]
 
 
 def test_providers_use_low_temperature_for_grading_and_high_for_creative_work():
-    settings = Settings(_env_file=None, google_api_key="g-test", groq_api_key="q-test")
+    settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key="m-test")
     tutor = LangChainTutor.from_settings(settings)
     for provider in tutor.providers:
         assert provider.precise.temperature == 0.2
         assert provider.creative.temperature == 0.7
 
 
-def test_without_a_groq_key_there_is_one_provider():
-    settings = Settings(_env_file=None, google_api_key="g-test", groq_api_key=None)
+def test_without_a_mistral_key_there_is_one_provider():
+    settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key=None)
     tutor = LangChainTutor.from_settings(settings)
     assert [p.name for p in tutor.providers] == [settings.ebb_primary_model]
 
@@ -334,41 +333,18 @@ def test_network_errors_alone_exhaust_the_providers():
 
 def test_from_settings_sets_a_request_timeout_on_both_clients():
     tutor = LangChainTutor.from_settings(
-        Settings(_env_file=None, google_api_key="g", groq_api_key="q")
+        Settings(_env_file=None, groq_api_key="q", mistral_api_key="m")
     )
-    gemini, groq_provider = tutor.providers
-    assert gemini.creative.timeout == REQUEST_TIMEOUT_SECONDS
-    assert gemini.precise.timeout == REQUEST_TIMEOUT_SECONDS
+    groq_provider, mistral = tutor.providers
     assert groq_provider.creative.request_timeout == REQUEST_TIMEOUT_SECONDS
     assert groq_provider.precise.request_timeout == REQUEST_TIMEOUT_SECONDS
+    assert mistral.creative.timeout == REQUEST_TIMEOUT_SECONDS
+    assert mistral.precise.timeout == REQUEST_TIMEOUT_SECONDS
 
 
-GEMINI_KEY = "Gemini rejected GOOGLE_API_KEY — check the key in .env"
 GROQ_KEY = "Groq rejected GROQ_API_KEY — check the key in .env"
+MISTRAL_KEY = "Mistral rejected MISTRAL_API_KEY — check the key in .env"
 NOT_FOUND = "Model 'primary' was not found — set EBB_PRIMARY_MODEL (or EBB_FALLBACK_MODEL) in .env"
-
-
-@pytest.mark.parametrize(
-    ("error", "message"),
-    [
-        (GoogleAuthenticationError("401"), GEMINI_KEY),
-        (GooglePermissionDeniedError("403"), GEMINI_KEY),
-        (
-            GoogleInvalidRequestError("400 INVALID_ARGUMENT: API key not valid. Please pass one."),
-            GEMINI_KEY,
-        ),
-        (GoogleModelNotFoundError("404"), NOT_FOUND),
-    ],
-)
-def test_gemini_config_errors_surface_without_retry_or_fallback(error, message):
-    bad, backup = Raising(error=error), Raising(error=OutputParserException("never reached"))
-    tutor = LangChainTutor(
-        [Provider("primary", bad, bad), Provider("backup", backup, backup)], attempts=3
-    )
-    with pytest.raises(ConfigError) as caught:
-        tutor.teach(QUESTION, "TTL", GRADE)
-    assert str(caught.value) == message
-    assert (bad.calls, backup.calls) == (1, 0)
 
 
 @pytest.mark.parametrize(
@@ -387,6 +363,51 @@ def test_groq_config_errors_surface_without_retry(cls, status, message):
         tutor.teach(QUESTION, "TTL", GRADE)
     assert str(caught.value) == message
     assert bad.calls == 1
+
+
+def _http_error(status: int) -> httpx.HTTPStatusError:
+    """What ChatMistralAI raises for an error response."""
+    response = httpx.Response(status, request=httpx.Request("POST", "https://x.test"))
+    return httpx.HTTPStatusError(
+        f"Error response {status}", request=response.request, response=response
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "message"), [(401, MISTRAL_KEY), (403, MISTRAL_KEY), (404, NOT_FOUND)]
+)
+def test_mistral_config_errors_surface_without_retry_or_fallback(status, message):
+    bad, backup = Raising(error=_http_error(status)), Raising(error=OutputParserException("x"))
+    tutor = LangChainTutor(
+        [
+            Provider("primary", bad, bad, service="Mistral", key_name="MISTRAL_API_KEY"),
+            Provider("backup", backup, backup),
+        ],
+        attempts=3,
+    )
+    with pytest.raises(ConfigError) as caught:
+        tutor.teach(QUESTION, "TTL", GRADE)
+    assert str(caught.value) == message
+    assert (bad.calls, backup.calls) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _http_error(429),
+        _http_error(500),
+        _http_error(503),
+        _http_error(400),
+        httpx.ReadTimeout("slow"),
+        httpx.ConnectError("down"),
+    ],
+)
+def test_mistral_overload_and_transport_errors_are_retried_then_exhaust(error):
+    bad = Raising(error=error)
+    tutor = LangChainTutor([Provider("primary", bad, bad)], attempts=2)
+    with pytest.raises(AllProvidersExhausted):
+        tutor.teach(QUESTION, "TTL", GRADE)
+    assert bad.calls == 2
 
 
 def test_groq_bad_request_stays_retryable():
@@ -651,18 +672,19 @@ def test_regrade_returns_grade_and_ambiguity():
 
 
 def test_primary_only_tutor_has_one_provider():
-    settings = Settings(_env_file=None, google_api_key="g-test", groq_api_key="q-test")
+    settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key="m-test")
     tutor = LangChainTutor.from_settings(settings, fallback=False)
     assert [p.name for p in tutor.providers] == [settings.ebb_primary_model]
 
 
-def test_writer_needs_groq_key():
+def test_writer_is_mistral_only_and_needs_its_key():
     with pytest.raises(ConfigError) as caught:
-        LangChainTutor.writer(Settings(_env_file=None, google_api_key="g", groq_api_key=None))
-    assert str(caught.value) == "eval build needs GROQ_API_KEY (the writer model)."
-    settings = Settings(_env_file=None, groq_api_key="q-test")
+        LangChainTutor.writer(Settings(_env_file=None, groq_api_key="q", mistral_api_key=None))
+    assert str(caught.value) == "eval build needs MISTRAL_API_KEY (the writer model)."
+    settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key="m-test")
     writer = LangChainTutor.writer(settings)
-    assert [p.name for p in writer.providers] == [settings.ebb_fallback_model]
+    [provider] = writer.providers
+    assert (provider.name, provider.service) == (settings.ebb_fallback_model, "Mistral")
 
 
 def test_write_eval_case_fences_notes_and_uses_the_creative_model():

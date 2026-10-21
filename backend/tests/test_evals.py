@@ -154,7 +154,7 @@ def test_report_states_where_labels_come_from():
     cases = [_case(CORRECT, 1), _case(PARTIAL, 2)]
     result = score(cases, [_grade(CORRECT), _grade(CORRECT)])
 
-    text = report_markdown(result, "gemini-x", date(2026, 10, 20), None)
+    text = report_markdown(result, "model-x", date(2026, 10, 20), None)
 
     assert text.startswith("# Grading eval")
     assert "Agreement: 1/2 (50.0%) — target 90%" in text
@@ -162,7 +162,7 @@ def test_report_states_where_labels_come_from():
     assert "too lenient: 1" in text.lower()
     assert "Question 2?" in text
     assert "writer" in text and "a model, not a person" in text
-    assert "gemini-x" in text and "2026-10-20" in text
+    assert "model-x" in text and "2026-10-20" in text
 
 
 def test_report_shows_dispute_counts():
@@ -177,7 +177,11 @@ def test_report_shows_dispute_counts():
 @pytest.fixture
 def eval_cli(monkeypatch):
     settings = Settings(
-        _env_file=None, ebb_timezone="UTC", groq_api_key="g", ebb_primary_model="a/b"
+        _env_file=None,
+        ebb_timezone="UTC",
+        groq_api_key="g",
+        mistral_api_key="m",
+        ebb_primary_model="a/b",
     )
     monkeypatch.setattr(cli, "Settings", lambda: settings)
     monkeypatch.setattr(cli, "_open_store", lambda: (settings, MemoryStore()))
@@ -216,8 +220,8 @@ def test_eval_build_writes_the_dataset(eval_cli, tmp_path):
     assert sum(1 for r in rows if r["sources"]) == 10
 
 
-def test_eval_build_without_groq_exits_2(tmp_path, monkeypatch):
-    settings = Settings(_env_file=None, groq_api_key=None)
+def test_eval_build_without_mistral_exits_2(tmp_path, monkeypatch):
+    settings = Settings(_env_file=None, mistral_api_key=None)
     monkeypatch.setattr(cli, "Settings", lambda: settings)
 
     result = runner.invoke(
@@ -226,7 +230,7 @@ def test_eval_build_without_groq_exits_2(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 2
-    assert "eval build needs GROQ_API_KEY" in result.output
+    assert "eval build needs MISTRAL_API_KEY" in result.output
 
 
 def test_eval_run_writes_a_dated_report(eval_cli, tmp_path):

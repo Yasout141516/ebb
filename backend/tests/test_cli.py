@@ -1,4 +1,4 @@
-"""The CLI end to end with typed input, using the fakes instead of Postgres and Gemini."""
+"""The CLI end to end with typed input, using the fakes instead of Postgres and the LLM."""
 
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -122,13 +122,13 @@ def test_missing_api_key_exits_2(fakes, monkeypatch):
     # Real _tutor, real key check: no key configured means exit 2 before any LLM call.
     store, _ = fakes
     monkeypatch.setattr(cli, "_tutor", _real_tutor)
-    settings = Settings(_env_file=None, google_api_key=None)
+    settings = Settings(_env_file=None, groq_api_key=None)
     monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
 
     result = runner.invoke(cli.app, ["new", "Networks"])
 
     assert result.exit_code == 2
-    assert "GOOGLE_API_KEY is not set" in result.output
+    assert "GROQ_API_KEY is not set" in result.output
 
 
 def test_unreachable_database_exits_2(monkeypatch):
@@ -174,14 +174,14 @@ def test_new_exits_2_on_a_rejected_key(fakes, monkeypatch):
     _, tutor = fakes
 
     def rejected(topic: str):
-        raise ConfigError("Gemini rejected GOOGLE_API_KEY — check the key in .env")
+        raise ConfigError("Groq rejected GROQ_API_KEY — check the key in .env")
 
     monkeypatch.setattr(tutor, "extract_concepts", rejected)
 
     result = runner.invoke(cli.app, ["new", "Networks"])
 
     assert result.exit_code == 2
-    assert "Gemini rejected GOOGLE_API_KEY" in result.output
+    assert "Groq rejected GROQ_API_KEY" in result.output
 
 
 def test_study_exits_2_on_a_rejected_key(fakes, monkeypatch):
@@ -189,14 +189,14 @@ def test_study_exits_2_on_a_rejected_key(fakes, monkeypatch):
     runner.invoke(cli.app, ["new", "Networks"])
 
     def rejected(*args, **kwargs):
-        raise ConfigError("Gemini rejected GOOGLE_API_KEY — check the key in .env")
+        raise ConfigError("Groq rejected GROQ_API_KEY — check the key in .env")
 
     monkeypatch.setattr(tutor, "generate_questions", rejected)
 
     result = runner.invoke(cli.app, ["study"], input="q\n")
 
     assert result.exit_code == 2
-    assert "Gemini rejected GOOGLE_API_KEY" in result.output
+    assert "Groq rejected GROQ_API_KEY" in result.output
 
 
 @pytest.mark.parametrize("command", ["status", "study"])
@@ -667,7 +667,7 @@ def test_add_exits_2_on_a_rejected_key(fakes, tmp_path, monkeypatch):
     runner.invoke(cli.app, ["new", "Networks"])
 
     def rejected(*args, **kwargs):
-        raise ConfigError("Gemini rejected GOOGLE_API_KEY — check the key in .env")
+        raise ConfigError("Groq rejected GROQ_API_KEY — check the key in .env")
 
     monkeypatch.setattr(tutor, "concepts_from_notes", rejected)
     result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
