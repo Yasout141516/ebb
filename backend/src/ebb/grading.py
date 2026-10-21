@@ -1,6 +1,7 @@
 """Multiple-choice grading in code (review decision E4)."""
 
 from collections.abc import Sequence
+from dataclasses import replace
 
 from ebb.domain import DisputeOutcome, DisputeReason, Grade, GradeValue, Question
 
@@ -49,3 +50,17 @@ def dispute_outcome(
     if regraded != original:
         return DisputeOutcome.CHANGED
     return DisputeOutcome.UPHELD
+
+
+# What models write in place of JSON null when they report no misconception.
+_NO_MISCONCEPTION = {"none", "null", "n/a", "no misconception"}
+
+
+def cap_for_misconception(grade: Grade) -> Grade:
+    """A "correct" grade that names a misconception is capped at "partial"."""
+    named = grade.misconception is not None and (
+        grade.misconception.strip().casefold() not in {"", *_NO_MISCONCEPTION}
+    )
+    if grade.value is GradeValue.CORRECT and named:
+        return replace(grade, value=GradeValue.PARTIAL)
+    return grade

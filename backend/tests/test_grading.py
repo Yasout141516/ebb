@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from ebb.domain import DisputeOutcome, DisputeReason, GradeValue, Option, Question
-from ebb.grading import dispute_outcome, grade_mcq, parse_choice
+from ebb.domain import Claim, DisputeOutcome, DisputeReason, Grade, GradeValue, Option, Question
+from ebb.grading import cap_for_misconception, dispute_outcome, grade_mcq, parse_choice
 
 OPTIONS = ["64", "62", "30", "126"]
 QUESTION = Question(
@@ -78,3 +78,27 @@ _R, _G, _O = DisputeReason, GradeValue, DisputeOutcome
 )
 def test_dispute_outcome(reason, orig, new, amb, outcome):
     assert dispute_outcome(reason, orig, new, amb) == outcome
+
+
+@pytest.mark.parametrize("misconception", ["Confuses TTL with caching.", "  x  "])
+def test_a_correct_grade_with_a_misconception_is_capped_at_partial(misconception):
+    claims = (Claim("N1", "cache answers"),)
+    grade = Grade(GradeValue.CORRECT, "Mostly.", misconception, claims=claims)
+
+    capped = cap_for_misconception(grade)
+
+    assert capped == Grade(GradeValue.PARTIAL, "Mostly.", misconception, claims=claims)
+
+
+@pytest.mark.parametrize(
+    "misconception", [None, "", "  ", "None", "NULL", "n/a", "No misconception"]
+)
+def test_a_correct_grade_without_a_real_misconception_stays_correct(misconception):
+    grade = Grade(GradeValue.CORRECT, "Right.", misconception)
+    assert cap_for_misconception(grade) == grade
+
+
+@pytest.mark.parametrize("value", [GradeValue.PARTIAL, GradeValue.INCORRECT])
+def test_partial_and_incorrect_grades_are_never_changed(value):
+    grade = Grade(value, "e", "Confuses TTL with caching.")
+    assert cap_for_misconception(grade) == grade

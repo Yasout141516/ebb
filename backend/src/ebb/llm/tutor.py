@@ -31,6 +31,7 @@ from ebb.domain import (
     Question,
     Source,
 )
+from ebb.grading import cap_for_misconception
 from ebb.llm.schemas import (
     CitationDraft,
     ConceptDraft,
@@ -428,11 +429,13 @@ class LangChainTutor:
             lambda m: m.with_structured_output(GradeResult),
             prompt,
             creative=False,
-            parse=lambda out: Grade(
-                GradeValue(out.grade),
-                out.explanation,
-                out.misconception,
-                claims=_claims(out.citations),
+            parse=lambda out: cap_for_misconception(
+                Grade(
+                    GradeValue(out.grade),
+                    out.explanation,
+                    out.misconception,
+                    claims=_claims(out.citations),
+                )
             ),
         )
 
@@ -513,11 +516,13 @@ class LangChainTutor:
             prompt,
             creative=False,
             parse=lambda out: (
-                Grade(
-                    GradeValue(out.grade),
-                    out.explanation,
-                    out.misconception,
-                    claims=_claims(out.citations),
+                cap_for_misconception(
+                    Grade(
+                        GradeValue(out.grade),
+                        out.explanation,
+                        out.misconception,
+                        claims=_claims(out.citations),
+                    )
                 ),
                 out.question_ambiguous,
             ),

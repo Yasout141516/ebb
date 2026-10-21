@@ -293,6 +293,22 @@ def test_grade_converts_the_result_and_uses_the_precise_model():
     assert "<<<ANSWER\nIt expires entries.\nANSWER>>>" in prompt
 
 
+def test_grade_caps_a_correct_result_that_names_a_misconception():
+    result = GradeResult(grade="correct", explanation="Fine.", misconception="Mixes up TTL.")
+    tutor = LangChainTutor([Provider("primary", Structured(result), Structured(None))], attempts=1)
+
+    out = tutor.grade(QUESTION, "It expires entries.")
+
+    assert out.value == Grade(GradeValue.PARTIAL, "Fine.", "Mixes up TTL.")
+
+
+def test_regrade_caps_a_correct_result_that_names_a_misconception():
+    result = RegradeResult(grade="correct", explanation="Fair.", misconception="Mixes up TTL.")
+    out, _ = regrade_with(result)
+    new, _ambiguous = out.value
+    assert new == Grade(GradeValue.PARTIAL, "Fair.", "Mixes up TTL.")
+
+
 class Raising(BaseChatModel):
     """A chat model whose every call raises the given exception."""
 
