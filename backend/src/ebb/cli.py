@@ -568,7 +568,15 @@ def eval_run(
     cases = load_cases(dataset)
     settings = _eval_settings()
     model = settings.ebb_primary_model
-    grades = run_cases(_eval_grader(settings), cases, sleep=_pace)
+    grader = _eval_grader(settings)
+
+    def progress(number: int, total: int) -> None:
+        console.print(f"Grading {number}/{total}…")
+
+    try:
+        grades = run_cases(grader, cases, sleep=_pace, progress=progress)
+    except ConfigError as error:
+        _fail(str(error), code=2)
     result = score(cases, grades)
     writer = cases[0].writer_model if cases else "the writer model"
     text = report_markdown(result, model, _today(), _dispute_counts(), writer)

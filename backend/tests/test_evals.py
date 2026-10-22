@@ -9,11 +9,12 @@ from typer.testing import CliRunner
 
 from ebb import cli
 from ebb.citations import normalise
-from ebb.config import Settings
+from ebb.config import ConfigError, Settings
 from ebb.domain import Claim, Grade, GradeValue
 from ebb.evals import (
     EVAL_TOPICS,
     PACE_SECONDS,
+    RETRY_WAITS,
     EvalCase,
     build_cases,
     load_cases,
@@ -120,17 +121,80 @@ def test_score_agreement_and_confusion():
     assert result.disagreements[0]["explanation"] == "It is partial."
 
 
-def test_grading_failure_counts_as_disagreement():
+def test_a_failed_grade_is_counted_apart_from_disagreements():
     cases = [_case(CORRECT, 1), _case(INCORRECT, 2, answer="wrong")]
-    grader = FakeTutor(fail_grade_times=1)
+    grader = FakeTutor(fail_grade_times=1 + len(RETRY_WAITS))  # every try on case 1
 
     grades = run_cases(grader, cases, sleep=_no_sleep)
     result = score(cases, grades)
 
     assert grades[0] is None and grades[1].value is INCORRECT
-    assert (result.total, result.agreed) == (2, 1)
-    assert result.disagreements[0]["grade"] == "error"
+    assert (result.total, result.failed, result.agreed) == (2, 1, 1)
+    assert result.agreement == 1.0  # over the one graded case
+    assert result.disagreements == []
+    assert result.failures == [{"id": "case-001", "question": "Question 1?"}]
     assert (result.too_harsh, result.too_lenient) == (0, 0)
+    assert sum(sum(row.values()) for row in result.confusion.values()) == 1
+
+
+def test_a_failed_grade_leaves_agreement_and_disagreements_unchanged():
+    cases = [_case(CORRECT, 1), _case(PARTIAL, 2), _case(INCORRECT, 3)]
+    graded = [_grade(CORRECT), _grade(CORRECT)]
+
+    with_failure = score(cases, [*graded, None])
+    without = score(cases[:2], graded)
+
+    assert with_failure.failed == 1 and without.failed == 0
+    assert with_failure.agreement == without.agreement == 0.5
+    assert with_failure.disagreements == without.disagreements
+    assert with_failure.confusion == without.confusion
+
+
+def test_run_retries_a_case_with_backoff_before_failing():
+    cases = [_case(CORRECT, 1), _case(INCORRECT, 2, answer="wrong")]
+    grader = FakeTutor(fail_grade_times=2)
+    pauses: list[float] = []
+    seen: list[tuple[int, int]] = []
+
+    grades = run_cases(
+        grader, cases, sleep=pauses.append, progress=lambda n, total: seen.append((n, total))
+    )
+
+    assert [g.value if g else None for g in grades] == [CORRECT, INCORRECT]
+    assert pauses == [RETRY_WAITS[0], RETRY_WAITS[1], PACE_SECONDS, PACE_SECONDS]
+    assert seen == [(1, 2), (2, 2)]
+
+
+def test_run_gives_up_on_a_case_after_the_last_wait():
+    pauses: list[float] = []
+
+    grades = run_cases(FakeTutor(fail_grade_times=99), [_case(CORRECT)], sleep=pauses.append)
+
+    assert grades == [None]
+    assert pauses == [*RETRY_WAITS, PACE_SECONDS]
+
+
+def test_run_stops_on_a_config_error():
+    class BadKey(FakeTutor):
+        def grade(self, *args, **kwargs):
+            raise ConfigError("Groq rejected the API key — check GROQ_API_KEY.")
+
+    with pytest.raises(ConfigError):
+        run_cases(BadKey(), [_case(CORRECT)], sleep=_no_sleep)
+
+
+def test_report_lists_failed_cases_apart():
+    cases = [_case(CORRECT, 1), _case(PARTIAL, 2), _case(INCORRECT, 3)]
+    result = score(cases, [_grade(CORRECT), _grade(CORRECT), None])
+
+    text = report_markdown(result, "m", date(2026, 10, 20), None)
+
+    assert "Agreement: 1 of 2 graded (50.0%) · 1 failed — target 90%" in text
+    assert "not comparable" in text
+    failed = text.split("## Failed", 1)[1]
+    assert "case-003" in failed and "Question 3?" in failed
+    disagreements = text.split("## Disagreements", 1)[1].split("## Failed", 1)[0]
+    assert "Question 2?" in disagreements and "Question 3?" not in disagreements
 
 
 def test_grounded_cases_count_valid_citations():
@@ -157,7 +221,9 @@ def test_report_states_where_labels_come_from():
     text = report_markdown(result, "model-x", date(2026, 10, 20), None)
 
     assert text.startswith("# Grading eval")
-    assert "Agreement: 1/2 (50.0%) — target 90%" in text
+    assert "Agreement: 1 of 2 graded (50.0%) · 0 failed — target 90%" in text
+    assert "not comparable" not in text
+    assert "## Failed\n\nNone." in text
     assert "Disputes: database not reachable" in text
     assert "too lenient: 1" in text.lower()
     assert "Question 2?" in text
@@ -243,10 +309,31 @@ def test_eval_run_writes_a_dated_report(eval_cli, tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    assert "Agreement: 6/6 (100.0%)" in result.output
+    assert "Grading 1/6…" in result.output and "Grading 6/6…" in result.output
+    assert "Agreement: 6 of 6 graded (100.0%) · 0 failed" in result.output
     report = (results / "2026-10-20-a-b.md").read_text(encoding="utf-8")
-    assert "Agreement: 6/6 (100.0%) — target 90%" in report
+    assert "Agreement: 6 of 6 graded (100.0%) · 0 failed — target 90%" in report
     assert "Disputes: 0 raised" in report
+
+
+def test_eval_run_with_a_bad_key_exits_2(eval_cli, tmp_path, monkeypatch):
+    dataset = tmp_path / "grading.jsonl"
+    save_cases(build_cases(FakeTutor(), EVAL_TOPICS[:2], NOTES, 0, _no_sleep), dataset)
+
+    class BadKey(FakeTutor):
+        def grade(self, *args, **kwargs):
+            raise ConfigError("Groq rejected GROQ_API_KEY — check the key in .env")
+
+    monkeypatch.setattr(cli, "_eval_grader", lambda s: BadKey())
+
+    result = runner.invoke(
+        cli.app, ["eval", "run", "--dataset", str(dataset), "--results", str(tmp_path / "r")]
+    )
+
+    assert result.exit_code == 2
+    assert "Groq rejected GROQ_API_KEY — check the key in .env" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert not (tmp_path / "r").exists()
 
 
 def test_eval_run_survives_an_unreachable_database(eval_cli, tmp_path, monkeypatch):

@@ -19,6 +19,9 @@ from ebb.llm.tutor import AllProvidersExhausted, Tutor
 from ebb.notes import read_notes
 
 PACE_SECONDS = 2.0
+# Waits before each retry of a case whose grading failed: long enough to outlast a
+# per-minute rate limit or a burst of "overloaded" errors.
+RETRY_WAITS = (15.0, 30.0, 60.0)
 TARGET_AGREEMENT = 0.9
 GROUNDED_CASES = 10
 
@@ -86,15 +89,24 @@ class EvalCase:
 
 @dataclass(frozen=True)
 class EvalScore:
+    """Agreement, the confusion table and the disagreements cover graded cases only;
+    a case whose grading failed is counted in `failed` and listed in `failures`."""
+
     total: int
+    failed: int
     agreed: int
     agreement: float
     confusion: dict[str, dict[str, int]]
     too_harsh: int
     too_lenient: int
     disagreements: list[dict]
+    failures: list[dict]
     grounded_total: int
     grounded_cited: int
+
+    @property
+    def graded(self) -> int:
+        return self.total - self.failed
 
 
 def _note_chunks(notes_path: Path) -> list[Chunk]:
@@ -210,18 +222,30 @@ def _question(case: EvalCase) -> Question:
     )
 
 
+def _grade_case(grader: Tutor, case: EvalCase, sleep: Callable[[float], None]) -> Grade | None:
+    """Grade one case, waiting and retrying when every provider failed; None if it never
+    succeeds. A ConfigError (bad key, unknown model) is not retried: it ends the run."""
+    for wait in (*RETRY_WAITS, None):
+        try:
+            return grader.grade(_question(case), case.answer, case.sources).value
+        except AllProvidersExhausted:
+            if wait is None:
+                return None
+            sleep(wait)
+    return None
+
+
 def run_cases(
     grader: Tutor,
     cases: Sequence[EvalCase],
     sleep: Callable[[float], None] = time.sleep,
+    progress: Callable[[int, int], None] = lambda number, total: None,
 ) -> list[Grade | None]:
     """Grade every case; None where every attempt failed."""
     grades: list[Grade | None] = []
-    for case in cases:
-        try:
-            grades.append(grader.grade(_question(case), case.answer, case.sources).value)
-        except AllProvidersExhausted:
-            grades.append(None)
+    for number, case in enumerate(cases, start=1):
+        progress(number, len(cases))
+        grades.append(_grade_case(grader, case, sleep))
         sleep(PACE_SECONDS)
     return grades
 
@@ -230,40 +254,44 @@ def score(cases: Sequence[EvalCase], grades: Sequence[Grade | None]) -> EvalScor
     confusion = {label: dict.fromkeys(_ORDER, 0) for label in _ORDER}
     agreed = harsh = lenient = grounded_total = grounded_cited = 0
     disagreements: list[dict] = []
+    failures: list[dict] = []
     for case, grade in zip(cases, grades, strict=True):
-        if grade is not None:
-            confusion[case.label.value][grade.value.value] += 1
         if case.sources:
             grounded_total += 1
             if grade is not None and verify(grade.claims, case.sources)[0]:
                 grounded_cited += 1
-        if grade is not None and grade.value is case.label:
+        if grade is None:
+            failures.append({"id": case.id, "question": case.question})
+            continue
+        confusion[case.label.value][grade.value.value] += 1
+        if grade.value is case.label:
             agreed += 1
             continue
-        if grade is not None:
-            if _RANK[grade.value] < _RANK[case.label]:
-                harsh += 1
-            else:
-                lenient += 1
+        if _RANK[grade.value] < _RANK[case.label]:
+            harsh += 1
+        else:
+            lenient += 1
         disagreements.append(
             {
                 "id": case.id,
                 "question": case.question,
                 "answer": case.answer,
                 "label": case.label.value,
-                "grade": grade.value.value if grade else "error",
-                "explanation": grade.explanation if grade else "Grading failed.",
+                "grade": grade.value.value,
+                "explanation": grade.explanation,
             }
         )
-    total = len(cases)
+    graded = len(cases) - len(failures)
     return EvalScore(
-        total,
+        len(cases),
+        len(failures),
         agreed,
-        agreed / total if total else 0.0,
+        agreed / graded if graded else 0.0,
         confusion,
         harsh,
         lenient,
         disagreements,
+        failures,
         grounded_total,
         grounded_cited,
     )
@@ -272,8 +300,8 @@ def score(cases: Sequence[EvalCase], grades: Sequence[Grade | None]) -> EvalScor
 def agreement_line(result: EvalScore) -> str:
     target = round(TARGET_AGREEMENT * 100)
     return (
-        f"Agreement: {result.agreed}/{result.total} "
-        f"({result.agreement * 100:.1f}%) — target {target}%"
+        f"Agreement: {result.agreed} of {result.graded} graded "
+        f"({result.agreement * 100:.1f}%) · {result.failed} failed — target {target}%"
     )
 
 
@@ -289,6 +317,14 @@ def report_markdown(
         "",
         agreement_line(result),
         "",
+    ]
+    if result.failed:
+        lines += [
+            f"{result.failed} of {result.total} cases failed to grade, so this score is not "
+            "comparable with a run that graded every case.",
+            "",
+        ]
+    lines += [
         "| label \\ grade | correct | partial | incorrect |",
         "| --- | --- | --- | --- |",
     ]
@@ -319,6 +355,11 @@ def report_markdown(
             f"  - Label: {d['label']} · Grade: {d['grade']}",
             f"  - Explanation: {d['explanation']}",
         ]
+    lines += ["", "## Failed", ""]
+    if not result.failures:
+        lines.append("None.")
+    for f in result.failures:
+        lines.append(f"- {f['id']}: {f['question']}")
     lines += [
         "",
         f"Labels come from {writer_model}, the writer model that generated each case: "
