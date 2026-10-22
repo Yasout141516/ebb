@@ -2,7 +2,8 @@
 
 import re
 from bisect import bisect_right
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from functools import cache
 from typing import Any
 from urllib.parse import urlparse
 
@@ -84,12 +85,20 @@ def display_label(source: Source, page: int | None) -> str:
     return source.title
 
 
-def _find(source_text: str, quote: str) -> int | None:
-    """Where the quote starts in `source_text`, matching a hyphen at a line break either
-    joined or kept; None if it isn't there."""
-    wanted = normalise(quote)
+_Forms = Callable[[bool], tuple[str, list[int]]]
+
+
+def _forms(text: str) -> _Forms:
+    """`text` normalised with a line-break hyphen joined or kept, each built once, when first
+    asked for."""
+    return cache(lambda join: _normalise_with_map(text, join))
+
+
+def _find(forms: _Forms, wanted: str) -> int | None:
+    """Where the normalised quote `wanted` starts in the source whose `forms` are given,
+    matching a hyphen at a line break either joined or kept; None if it isn't there."""
     for join in (True, False):
-        text, index = _normalise_with_map(source_text, join)
+        text, index = forms(join)
         at = text.find(wanted)
         if at >= 0 and index:
             return index[at]
@@ -105,13 +114,13 @@ def _page_at(source: Source, original: int) -> int | None:
 
 def page_of(source: Source, quote: str) -> int | None:
     """The page holding the quote's first character, or None without page data."""
-    original = _find(source.text, quote)
+    original = _find(_forms(source.text), normalise(quote))
     return None if original is None else _page_at(source, original)
 
 
-def _too_short(quote: str) -> bool:
-    words = normalise(quote)
-    return len(words.split(" ")) < MIN_QUOTE_WORDS or len(words) < MIN_QUOTE_CHARS
+def _too_short(wanted: str) -> bool:
+    """Whether the normalised quote `wanted` is too short to place."""
+    return len(wanted.split(" ")) < MIN_QUOTE_WORDS or len(wanted) < MIN_QUOTE_CHARS
 
 
 def verify(
@@ -119,22 +128,25 @@ def verify(
 ) -> tuple[tuple[Citation, ...], tuple[str, ...]]:
     """Keep the claims whose quote is in the named source; say why the rest failed."""
     by_label = {s.label: s for s in sources}
+    # Each source is normalised at most once per form, however many claims cite it.
+    forms = {s.label: _forms(s.text) for s in sources}
     valid: list[Citation] = []
     failures: list[str] = []
     for claim in claims:
         source = by_label.get(claim.source)
         quote = claim.quote.strip()
+        wanted = normalise(quote)
         if source is None:
             failures.append(f"{claim.source} is not one of the sources you were given")
-        elif not normalise(quote):
+        elif not wanted:
             failures.append(f"the quote from {claim.source} is empty")
         elif len(quote) > MAX_QUOTE:
             failures.append(f"the quote from {claim.source} is longer than {MAX_QUOTE} characters")
-        elif _too_short(quote):
+        elif _too_short(wanted):
             failures.append(
                 f"the quote from {claim.source} is too short to show where it came from"
             )
-        elif (original := _find(source.text, quote)) is None:
+        elif (original := _find(forms[source.label], wanted)) is None:
             failures.append(f"the quote from {claim.source} is not in that source")
         else:
             page = _page_at(source, original)
