@@ -7,12 +7,6 @@ from psycopg_pool import ConnectionPool
 from ebb.config import ConfigError
 
 
-def _drop_advisory_locks(conn: psycopg.Connection) -> None:
-    # Runs when a connection comes back to the pool: a session lock leaked by an
-    # interrupt between taking and releasing it must not outlive its holder.
-    conn.execute("select pg_advisory_unlock_all()")
-
-
 def make_pool(url: str, max_size: int = 8, timeout: int = 5) -> ConnectionPool:
     # One direct connection first: fails fast with a clear message instead of the
     # pool retrying in the background until its own timeout.
@@ -29,6 +23,5 @@ def make_pool(url: str, max_size: int = 8, timeout: int = 5) -> ConnectionPool:
         min_size=1,
         max_size=max_size,
         kwargs={"autocommit": True, "row_factory": dict_row, "prepare_threshold": 0},
-        reset=_drop_advisory_locks,
         open=True,
     )

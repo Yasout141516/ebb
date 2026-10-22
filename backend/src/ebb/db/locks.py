@@ -1,7 +1,7 @@
 """Session-level advisory locks. Each belongs to one connection, held for the whole block."""
 
 from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 
 import psycopg
 from psycopg_pool import ConnectionPool
@@ -16,18 +16,28 @@ def advisory_lock(pool: ConnectionPool, key: int | str, *, wait: bool) -> Iterat
     False at once if another connection holds it.
     """
     expression = "%s" if isinstance(key, int) else "hashtextextended(%s, 0)"
+    unlock = f"select pg_advisory_unlock({expression})"
     with pool.connection() as conn:
-        if wait:
-            conn.execute(f"select pg_advisory_lock({expression})", (key,))
-            held = True
-        else:
-            held = conn.execute(
-                f"select pg_try_advisory_lock({expression}) as held", (key,)
-            ).fetchone()["held"]
         try:
+            if wait:
+                conn.execute(f"select pg_advisory_lock({expression})", (key,))
+                held = True
+            else:
+                held = conn.execute(
+                    f"select pg_try_advisory_lock({expression}) as held", (key,)
+                ).fetchone()["held"]
             yield held
-        finally:
-            # A dead connection holds no lock; don't let it hide the error that got here.
-            if held:
-                with suppress(psycopg.OperationalError):
-                    conn.execute(f"select pg_advisory_unlock({expression})", (key,))
+        except BaseException:
+            # Left before the unlock ran: the lock may still be held by this session.
+            # Closing it makes Postgres drop it, and the pool discards a closed
+            # connection instead of reusing it.
+            conn.close()
+            raise
+        if held:
+            try:
+                conn.execute(unlock, (key,))
+            except psycopg.OperationalError:
+                conn.close()  # a dead connection holds no lock
+            except BaseException:
+                conn.close()
+                raise
