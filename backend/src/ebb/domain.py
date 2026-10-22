@@ -29,6 +29,11 @@ class Citation:
     label: str
     page: int | None
     quote: str
+    # `name` is the file name (chunk) or the domain (web), `heading` the chunk's heading and
+    # `title` the web page's title; `label` joins them for display.
+    name: str | None = None
+    heading: str | None = None
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,8 @@ class Source:
     heading: str | None = None
     page_start: int | None = None
     page_offsets: tuple[int, ...] = ()  # offset in text where page page_start + i begins
+    site: str | None = None  # a web source's domain
+    page_title: str | None = None  # a web source's page title
 
 
 @dataclass(frozen=True)

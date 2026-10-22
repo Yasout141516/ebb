@@ -115,7 +115,40 @@ def test_valid_citation_fields():
         page_offsets=(0, 40),
     )
     (c,), _ = verify([Claim("N1", " the target text here ")], [src])
-    assert c == Citation("chunk", "cid", "CSE321.pdf · p. 13", 13, "the target text here")
+    assert c == Citation(
+        "chunk", "cid", "CSE321.pdf · p. 13", 13, "the target text here", name="CSE321.pdf"
+    )
+
+
+def test_verify_fills_name_heading_for_chunks():
+    src = Source("N1", "chunk", "i", "notes.md", "Subnet masks split it.", "Subnet masks")
+    (c,), _ = verify([Claim("N1", "Subnet masks split")], [src])
+    assert (c.name, c.heading, c.title) == ("notes.md", "Subnet masks", None)
+
+
+def test_verify_fills_site_and_title_for_web():
+    (src,) = web_sources(
+        [WebPage("https://www.cloudflare.com/x", "What is DNS?", "DNS maps names")]
+    )
+    (c,), _ = verify([Claim("W1", "DNS maps names")], [src])
+    assert (c.name, c.heading, c.title) == ("cloudflare.com", None, "What is DNS?")
+    assert (src.site, src.page_title) == ("cloudflare.com", "What is DNS?")
+
+
+def test_from_dict_of_a_milestone3_citation_derives_fields():
+    web = {"kind": "web", "ref": "u", "label": "cloudflare.com · What is DNS?", "page": None}
+    c = from_dict({**web, "quote": "q"})
+    assert (c.name, c.heading, c.title) == ("cloudflare.com", None, "What is DNS?")
+    pdf = {"kind": "chunk", "ref": "i", "label": "a.pdf · p. 12", "page": 12, "quote": "q"}
+    assert (from_dict(pdf).name, from_dict(pdf).heading) == ("a.pdf", None)
+    md = {**pdf, "label": "n.md · § Subnet masks", "page": None}
+    assert (from_dict(md).name, from_dict(md).heading) == ("n.md", "Subnet masks")
+    assert from_dict({**pdf, "label": "n.txt", "page": None}).name == "n.txt"
+
+
+def test_milestone3_source_dict_loads_without_site_and_title():
+    old = {k: v for k, v in source_to_dict(N1).items() if k not in ("site", "page_title")}
+    assert source_from_dict(old) == N1
 
 
 def test_page_of_uses_offsets():
@@ -156,7 +189,13 @@ def test_note_and_web_sources():
     w = web_sources(pages)
     assert [s.label for s in w] == ["W1", "W2"]
     assert w[0] == Source(
-        "W1", "web", "https://www.cloudflare.com/x", "cloudflare.com · What?", "body"
+        "W1",
+        "web",
+        "https://www.cloudflare.com/x",
+        "cloudflare.com · What?",
+        "body",
+        site="cloudflare.com",
+        page_title="What?",
     )
 
 

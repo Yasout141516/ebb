@@ -19,6 +19,9 @@ from ebb.citations import (
     verify,
     web_sources,
 )
+from ebb.citations import (
+    from_dict as citation_from_dict,
+)
 from ebb.domain import (
     Answer,
     Citation,
@@ -99,13 +102,12 @@ def source_line(question: dict[str, Any]) -> str | None:
     citations = question.get("citations", [])
     if question.get("source", "general") == "general" or not citations:
         return None
-    first = citations[0]
-    if first["kind"] == "web":
-        return f"From the web · {first['label'].split(' · ')[0]}"  # "domain · page title"
-    if first["page"] is not None:
-        return f"From your notes · p. {first['page']}"
-    _, heading_mark, heading = first["label"].partition(" · § ")
-    return f"From your notes · § {heading}" if heading_mark else "From your notes"
+    first = citation_from_dict(citations[0])  # fills the fields a milestone 3 dict lacks
+    if first.kind == "web":
+        return f"From the web · {first.name}"
+    if first.page is not None:
+        return f"From your notes · p. {first.page}"
+    return f"From your notes · § {first.heading}" if first.heading else "From your notes"
 
 
 def _verified[T](

@@ -28,7 +28,7 @@ from ebb.domain import (
     Question,
 )
 from ebb.graph.build import build_graph, step_label
-from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE, WEB_NOTICE
+from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE, WEB_NOTICE, source_line
 from ebb.graph.state import (
     concept_to_dict,
     grade_from_dict,
@@ -1003,6 +1003,9 @@ def test_web_question_is_graded_with_its_page():
             "label": "example.org · Subnetting basics",
             "page": None,
             "quote": OTHER_PAGE_QUOTE,
+            "name": "example.org",
+            "heading": None,
+            "title": "Subnetting basics",
         }
     ]
     assert feedback["general_knowledge"] is False
@@ -1402,6 +1405,87 @@ def test_web_mode_and_unlabelled_steps():
         "Writing questions from the web…"
     )
     assert step_label("pick_concept", {}) is None
+
+
+def test_source_line_uses_structured_fields():
+    def line(source: str, **citation: Any) -> str | None:
+        cite = {"kind": "chunk", "ref": "r", "label": "x", "page": None, "quote": "q"}
+        return source_line({"source": source, "citations": [{**cite, **citation}]})
+
+    assert line("notes", page=12, name="a.pdf", heading=None, title=None) == (
+        "From your notes · p. 12"
+    )
+    assert line("notes", name="n.md", heading="Subnet masks", title=None) == (
+        "From your notes · § Subnet masks"
+    )
+    assert line("notes", name="n.txt", heading=None, title=None) == "From your notes"
+    assert line("web", kind="web", name="cloudflare.com", heading=None, title="DNS") == (
+        "From the web · cloudflare.com"
+    )
+
+
+def test_milestone3_checkpoint_with_label_only_citations_resumes():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=1)
+    session_id = store.create_session(USER, subject_id, "t-m3")
+    concept = store.list_concepts(USER, subject_id)[0]
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": "t-m3"}}
+    # Milestone 3 stored citations with a label and no name, heading or title.
+    cite = {"kind": "chunk", "ref": str(uuid4()), "page": None, "quote": QUOTE}
+    question = {
+        **question_to_dict(
+            Question(uuid4(), concept.id, "short", 1, "Why?", "Because.", (), "notes")
+        ),
+        "citations": [{**cite, "label": "networks.md · § Subnet masks"}],
+    }
+    old_source = {
+        "label": "N1",
+        "kind": "chunk",
+        "ref": cite["ref"],
+        "title": "networks.md",
+        "text": QUOTE,
+        "heading": "Subnet masks",
+        "page_start": None,
+        "page_offsets": [],
+    }
+    state = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-m3",
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(concept.id)],
+        "concept": concept_to_dict(concept),
+        "start": {"stage": concept.stage, "tide": None},
+        "batch": [question],
+        "sources": [old_source],
+        "has_notes": True,
+        "citation_failures": [],
+        "replacements_needed": 0,
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "tally": {"correct": 0, "partial": 0, "incorrect": 0},
+        "asked_prompts": [],
+        "asked_on_concept": 0,
+        "correct_streak": 0,
+        "generation_calls_on_concept": 0,
+        "difficulty": None,
+        "retry_question": False,
+        "grade": None,
+        "lesson": None,
+    }
+    store.save_questions(USER, session_id, [question_from_dict(question)])
+    graph.update_state(config, state, as_node="verify_citations")
+
+    result = graph.invoke(None, config)
+
+    shown = result["__interrupt__"][0].value["question"]
+    assert shown["source_line"] == "From your notes · § Subnet masks"
+    result = graph.invoke(Command(resume=always_right(result["__interrupt__"][0].value)), config)
+    assert "__interrupt__" in result  # the session goes on
 
 
 def test_milestone2_checkpoint_without_new_keys_resumes():
