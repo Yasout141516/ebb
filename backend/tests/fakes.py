@@ -1,6 +1,5 @@
 """Test doubles: an in-memory Store and a scripted Tutor. No network, no database."""
 
-import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
@@ -37,6 +36,7 @@ from ebb.store import (
     concept_after_dispute,
     new_concepts,
     restore,
+    search_words,
     snapshot,
 )
 from ebb.web import WebPage, WebSearchFailed
@@ -46,7 +46,7 @@ BATCH_PATTERN = [("short", 1), ("mcq", 1), ("mcq", 2), ("short", 3), ("mcq", 3)]
 
 
 def _words(text: str) -> set[str]:
-    return {w.lower() for w in re.findall(r"[^\W_]+", text) if len(w) >= 3}
+    return set(search_words(text))
 
 
 class MemoryStore:

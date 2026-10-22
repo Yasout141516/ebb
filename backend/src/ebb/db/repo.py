@@ -1,6 +1,5 @@
 """Postgres implementation of `Store`. Every query filters on user_id (review decision E1)."""
 
-import re
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import asdict
@@ -37,6 +36,7 @@ from ebb.store import (
     concept_after_dispute,
     new_concepts,
     restore,
+    search_words,
     snapshot,
 )
 
@@ -151,12 +151,6 @@ def _insert_document(
                 for chunk in document.chunks
             ],
         )
-
-
-def _search_words(text: str) -> list[str]:
-    """Distinct lowercase words of letters and digits, three characters or longer."""
-    words = (word.lower() for word in re.findall(r"[^\W_]+", text))
-    return list(dict.fromkeys(word for word in words if len(word) >= 3))
 
 
 class PgStore:
@@ -519,19 +513,21 @@ class PgStore:
     def search_chunks(
         self, user_id: UUID, subject_id: UUID, text: str, limit: int = 4
     ) -> list[Chunk]:
-        words = _search_words(text)
+        words = search_words(text)
         if not words:
             return []
         with self.pool.connection() as conn:
+            # Materialized, so each row's rank is computed once for the filter and the order.
             rows = conn.execute(
-                "select c.id, d.filename, c.content, c.heading, c.page_start, c.page_offsets"
+                "with ranked as materialized ("
+                " select c.id, d.filename, c.content, c.heading, c.page_start, c.page_offsets,"
+                " d.created_at, c.ordinal, ts_rank_cd(c.search_vector, q) as rank"
                 " from document_chunks c join documents d"
                 " on d.id = c.document_id and d.user_id = c.user_id"
                 " cross join websearch_to_tsquery('english', %s) q"
-                " where c.user_id = %s and c.subject_id = %s and c.search_vector @@ q"
-                " and ts_rank_cd(c.search_vector, q) >= %s"
-                " order by ts_rank_cd(c.search_vector, q) desc, d.created_at, c.ordinal"
-                " limit %s",
+                " where c.user_id = %s and c.subject_id = %s and c.search_vector @@ q)"
+                " select id, filename, content, heading, page_start, page_offsets from ranked"
+                " where rank >= %s order by rank desc, created_at, ordinal limit %s",
                 (" or ".join(words), user_id, subject_id, MIN_RANK, limit),
             ).fetchall()
         return [Chunk(**{**row, "page_offsets": tuple(row["page_offsets"])}) for row in rows]

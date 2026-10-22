@@ -1,5 +1,6 @@
 """The persistence interface the graph and CLI depend on. Every method is scoped by user_id."""
 
+import re
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import replace
@@ -67,6 +68,13 @@ def merge_note_concepts(
             if hit not in matched:
                 matched.append(hit)
     return matched, new_concepts(existing_names, unlinked)
+
+
+def search_words(text: str) -> list[str]:
+    """Distinct lowercase words of letters and digits, three characters or longer: what a
+    chunk search looks for, shared by every Store's search_chunks."""
+    words = (word.lower() for word in re.findall(r"[^\W_]+", text))
+    return list(dict.fromkeys(word for word in words if len(word) >= 3))
 
 
 def _iso(moment: datetime | None) -> str | None:
