@@ -8,19 +8,17 @@ import pytest
 
 from ebb.domain import (
     Answer,
-    ChunkDraft,
     Citation,
     Claim,
     Dispute,
     DisputeOutcome,
     DisputeReason,
     GradeValue,
-    NewDocument,
     Question,
 )
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.store import DocumentRefused, merge_note_concepts
-from tests.fakes import FakeTutor, MemoryStore, make_subject, seed_concept
+from tests.fakes import FakeTutor, MemoryStore, make_subject, new_document, seed_concept
 
 ALICE = UUID("00000000-0000-0000-0000-00000000000a")
 BOB = UUID("00000000-0000-0000-0000-00000000000b")
@@ -157,11 +155,6 @@ def test_fake_tutor_can_fail_to_extend():
     assert len(tutor.extend_calls) == 1
 
 
-def doc(name: str, *contents: str, sha: str | None = None) -> NewDocument:
-    chunks = tuple(ChunkDraft(i, text, f"Part {i}", 1, 1, (0,)) for i, text in enumerate(contents))
-    return NewDocument(name, "txt", 100, None, sha or f"sha-{name}", chunks)
-
-
 SUBNET = "Subnet masks split a network into subnets; the broadcast address closes each subnet."
 ARP = "ARP maps IP addresses to MAC addresses on a local network."
 TCP = "The TCP three-way handshake opens a connection with SYN, SYN-ACK and ACK."
@@ -172,7 +165,7 @@ def test_memory_store_add_document_saves_chunks_and_new_concepts():
     subject_id = store.create_subject(ALICE, "Networks", [("DNS", "Names.")])
 
     added = store.add_document(
-        ALICE, subject_id, doc("a.txt", "one", "two"), [("DNS", "dup"), ("ARP", "Maps.")]
+        ALICE, subject_id, new_document("a.txt", "one", "two"), [("DNS", "dup"), ("ARP", "Maps.")]
     )
 
     assert added == 1
@@ -180,19 +173,19 @@ def test_memory_store_add_document_saves_chunks_and_new_concepts():
     assert (saved.filename, saved.chunk_count) == ("a.txt", 2)
     assert [c.name for c in store.list_concepts(ALICE, subject_id)] == ["DNS", "ARP"]
     with pytest.raises(LookupError):
-        store.add_document(BOB, subject_id, doc("b.txt", "x"), [])
+        store.add_document(BOB, subject_id, new_document("b.txt", "x"), [])
 
 
 def test_memory_store_refuses_a_sixth_and_a_repeated_document():
     store = MemoryStore()
     subject_id = store.create_subject(ALICE, "Networks", [])
     for n in range(5):
-        store.add_document(ALICE, subject_id, doc(f"{n}.txt", "x"), [])
+        store.add_document(ALICE, subject_id, new_document(f"{n}.txt", "x"), [])
 
     with pytest.raises(DocumentRefused) as full:
-        store.add_document(ALICE, subject_id, doc("6.txt", "x"), [])
+        store.add_document(ALICE, subject_id, new_document("6.txt", "x"), [])
     with pytest.raises(DocumentRefused) as same:
-        store.add_document(ALICE, subject_id, doc("7.txt", "x", sha="sha-0.txt"), [])
+        store.add_document(ALICE, subject_id, new_document("7.txt", "x", sha="sha-0.txt"), [])
 
     assert (full.value.reason, same.value.reason) == ("full", "duplicate")
     assert store.has_document(ALICE, subject_id, "sha-0.txt")
@@ -203,7 +196,10 @@ def test_memory_store_create_subject_with_notes():
     store = MemoryStore()
 
     subject_id = store.create_subject_with_notes(
-        ALICE, "Networks", [doc("a.txt", "one")], [("DNS", "N."), ("dns", "dup"), ("ARP", "M.")]
+        ALICE,
+        "Networks",
+        [new_document("a.txt", "one")],
+        [("DNS", "N."), ("dns", "dup"), ("ARP", "M.")],
     )
 
     assert [c.name for c in store.list_concepts(ALICE, subject_id)] == ["DNS", "ARP"]
@@ -213,7 +209,7 @@ def test_memory_store_create_subject_with_notes():
 def test_memory_store_search_needs_two_shared_words_and_is_scoped():
     store = MemoryStore()
     subject_id = store.create_subject(ALICE, "Networks", [])
-    store.add_document(ALICE, subject_id, doc("net.txt", SUBNET, ARP, TCP), [])
+    store.add_document(ALICE, subject_id, new_document("net.txt", SUBNET, ARP, TCP), [])
 
     found = store.search_chunks(ALICE, subject_id, "Subnetting: a network using subnet masks")
 
@@ -243,8 +239,8 @@ def test_merge_note_concepts():
 def test_memory_store_count_documents():
     store = MemoryStore()
     subject_id = store.create_subject(ALICE, "Networks", [])
-    store.add_document(ALICE, subject_id, doc("a.txt", "x"), [])
-    store.add_document(ALICE, subject_id, doc("b.txt", "y"), [])
+    store.add_document(ALICE, subject_id, new_document("a.txt", "x"), [])
+    store.add_document(ALICE, subject_id, new_document("b.txt", "y"), [])
 
     assert store.count_documents(ALICE, subject_id) == 2
     assert store.count_documents(BOB, subject_id) == 0

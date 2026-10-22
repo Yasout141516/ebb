@@ -24,7 +24,6 @@ from ebb.domain import (
     Grade,
     GradeValue,
     Lesson,
-    NewDocument,
     Option,
     Question,
 )
@@ -39,7 +38,14 @@ from ebb.graph.state import (
 )
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.web import WebPage
-from tests.fakes import FakeTutor, FakeWebSearch, MemoryStore, make_subject, seed_concept
+from tests.fakes import (
+    FakeTutor,
+    FakeWebSearch,
+    MemoryStore,
+    make_subject,
+    new_document,
+    seed_concept,
+)
 
 NOW = datetime(2026, 10, 15, 9, 0, tzinfo=UTC)
 USER = UUID("00000000-0000-0000-0000-0000000000aa")
@@ -395,9 +401,7 @@ UNCOVERED = ("Routing tables", "Routers pick next hops.")
 
 def notes_subject(store: MemoryStore, *concepts: tuple[str, str]) -> UUID:
     store.ensure_profile(USER)
-    document = NewDocument(
-        "CSE321.pdf", "pdf", 1000, 20, "sha-pdf", (ChunkDraft(0, NOTE, None, 12, 12, (0,)),)
-    )
+    document = new_document("CSE321.pdf", ChunkDraft(0, NOTE, None, 12, 12, (0,)), page_count=20)
     return store.create_subject_with_notes(USER, "Networks", [document], concepts or [COVERED])
 
 
@@ -469,8 +473,7 @@ def test_covered_concept_gets_cited_questions():
 def test_heading_source_line_for_notes_without_pages():
     store, tutor = MemoryStore(), FakeTutor(cite=[[("N1", QUOTE)]])
     store.ensure_profile(USER)
-    chunk = ChunkDraft(0, NOTE, "Subnet masks", None, None, ())
-    document = NewDocument("networks.md", "md", 300, None, "sha-md", (chunk,))
+    document = new_document("networks.md", ChunkDraft(0, NOTE, "Subnet masks", None, None, ()))
     subject_id = store.create_subject_with_notes(USER, "Networks", [document], [COVERED])
 
     _, payloads = run(tutor, store, subject_id, lambda p: {"quit": True})

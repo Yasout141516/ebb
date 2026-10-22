@@ -29,7 +29,7 @@ from ebb.domain import (
 )
 from ebb.graph.build import build_graph
 from ebb.store import DocumentRefused
-from tests.fakes import FakeTutor
+from tests.fakes import FakeTutor, new_document
 
 pytestmark = pytest.mark.db
 
@@ -398,16 +398,11 @@ def test_session_lock_on_a_dead_connection_keeps_the_original_error(store, pg_po
     assert lock_is_free(pg_pool, "t-1")
 
 
-def doc(name: str, *contents: str, sha: str | None = None) -> NewDocument:
-    chunks = tuple(ChunkDraft(i, text, f"Part {i}", 1, 1, (0,)) for i, text in enumerate(contents))
-    return NewDocument(name, "txt", 100, None, sha or f"sha-{name}", chunks)
-
-
 def test_add_document_saves_chunks_and_new_concepts(store):
     subject_id = store.create_subject(ALICE, "Networks", [("DNS", "Names.")])
 
     added = store.add_document(
-        ALICE, subject_id, doc("a.txt", "one", "two"), [("DNS", "dup"), ("ARP", "Maps.")]
+        ALICE, subject_id, new_document("a.txt", "one", "two"), [("DNS", "dup"), ("ARP", "Maps.")]
     )
 
     assert added == 1
@@ -419,17 +414,17 @@ def test_add_document_saves_chunks_and_new_concepts(store):
 def test_add_document_to_another_users_subject_is_refused(store):
     subject_id = store.create_subject(ALICE, "Networks", [])
     with pytest.raises(LookupError):
-        store.add_document(BOB, subject_id, doc("a.txt", "one"), [])
+        store.add_document(BOB, subject_id, new_document("a.txt", "one"), [])
     assert store.list_documents(ALICE, subject_id) == []
 
 
 def test_fifth_document_ok_sixth_refused(store):
     subject_id = store.create_subject(ALICE, "Networks", [])
     for n in range(5):
-        store.add_document(ALICE, subject_id, doc(f"{n}.txt", "x"), [])
+        store.add_document(ALICE, subject_id, new_document(f"{n}.txt", "x"), [])
 
     with pytest.raises(DocumentRefused) as refused:
-        store.add_document(ALICE, subject_id, doc("6.txt", "x"), [])
+        store.add_document(ALICE, subject_id, new_document("6.txt", "x"), [])
 
     assert refused.value.reason == "full"
     assert len(store.list_documents(ALICE, subject_id)) == 5
@@ -437,10 +432,10 @@ def test_fifth_document_ok_sixth_refused(store):
 
 def test_same_file_twice_refused(store):
     subject_id = store.create_subject(ALICE, "Networks", [])
-    store.add_document(ALICE, subject_id, doc("a.txt", "x", sha="same"), [])
+    store.add_document(ALICE, subject_id, new_document("a.txt", "x", sha="same"), [])
 
     with pytest.raises(DocumentRefused) as refused:
-        store.add_document(ALICE, subject_id, doc("b.txt", "y", sha="same"), [])
+        store.add_document(ALICE, subject_id, new_document("b.txt", "y", sha="same"), [])
 
     assert refused.value.reason == "duplicate"
     assert store.has_document(ALICE, subject_id, "same")
@@ -451,12 +446,12 @@ def test_same_file_twice_refused(store):
 def test_concurrent_adds_respect_the_limit(store):
     subject_id = store.create_subject(ALICE, "Networks", [])
     for n in range(4):
-        store.add_document(ALICE, subject_id, doc(f"{n}.txt", "x"), [])
+        store.add_document(ALICE, subject_id, new_document(f"{n}.txt", "x"), [])
     outcomes: list[str] = []
 
     def add(name: str) -> None:
         try:
-            store.add_document(ALICE, subject_id, doc(name, "x"), [])
+            store.add_document(ALICE, subject_id, new_document(name, "x"), [])
             outcomes.append("ok")
         except DocumentRefused as refused:
             outcomes.append(refused.reason)
@@ -476,7 +471,7 @@ def test_create_subject_with_notes_stores_everything_in_order(store):
     subject_id = store.create_subject_with_notes(
         ALICE,
         "Networks",
-        [doc("a.txt", "one")],
+        [new_document("a.txt", "one")],
         [("DNS", "Names."), ("dns", "dup"), ("ARP", "Maps.")],
     )
 
@@ -503,7 +498,7 @@ TCP = "The TCP three-way handshake opens a connection with SYN, SYN-ACK and ACK.
 
 def test_search_finds_the_matching_chunk_and_ignores_others(store):
     subject_id = store.create_subject(ALICE, "Networks", [])
-    store.add_document(ALICE, subject_id, doc("net.txt", SUBNET, ARP, TCP), [])
+    store.add_document(ALICE, subject_id, new_document("net.txt", SUBNET, ARP, TCP), [])
 
     found = store.search_chunks(
         ALICE, subject_id, "Subnetting: dividing a network using subnet masks"
@@ -517,7 +512,7 @@ def test_search_finds_the_matching_chunk_and_ignores_others(store):
 
 def test_search_returns_nothing_for_an_uncovered_concept(store):
     subject_id = store.create_subject(ALICE, "Networks", [])
-    store.add_document(ALICE, subject_id, doc("net.txt", SUBNET, ARP, TCP), [])
+    store.add_document(ALICE, subject_id, new_document("net.txt", SUBNET, ARP, TCP), [])
 
     assert store.search_chunks(ALICE, subject_id, "Quantum entanglement") == []
     assert store.search_chunks(ALICE, subject_id, "a to") == []
@@ -525,7 +520,7 @@ def test_search_returns_nothing_for_an_uncovered_concept(store):
 
 def test_documents_are_scoped_to_the_user(store):
     subject_id = store.create_subject(ALICE, "Networks", [])
-    store.add_document(ALICE, subject_id, doc("net.txt", SUBNET), [])
+    store.add_document(ALICE, subject_id, new_document("net.txt", SUBNET), [])
 
     assert store.list_documents(BOB, subject_id) == []
     assert store.search_chunks(BOB, subject_id, "subnet masks broadcast") == []
@@ -535,8 +530,8 @@ def test_documents_are_scoped_to_the_user(store):
 def test_count_documents(store):
     subject_id = store.create_subject(ALICE, "Networks", [])
     assert store.count_documents(ALICE, subject_id) == 0
-    store.add_document(ALICE, subject_id, doc("a.txt", "x"), [])
-    store.add_document(ALICE, subject_id, doc("b.txt", "y"), [])
+    store.add_document(ALICE, subject_id, new_document("a.txt", "x"), [])
+    store.add_document(ALICE, subject_id, new_document("b.txt", "y"), [])
 
     assert store.count_documents(ALICE, subject_id) == 2
     assert store.count_documents(BOB, subject_id) == 0

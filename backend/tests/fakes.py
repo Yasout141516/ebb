@@ -10,6 +10,7 @@ from ebb import mastery
 from ebb.domain import (
     Answer,
     Chunk,
+    ChunkDraft,
     Claim,
     Concept,
     Dispute,
@@ -47,6 +48,10 @@ BATCH_PATTERN = [("short", 1), ("mcq", 1), ("mcq", 2), ("short", 3), ("mcq", 3)]
 
 def _words(text: str) -> set[str]:
     return set(search_words(text))
+
+
+def _to_claims(pairs: Sequence[tuple[str, str]]) -> tuple[Claim, ...]:
+    return tuple(Claim(source, quote) for source, quote in pairs)
 
 
 class MemoryStore:
@@ -434,8 +439,7 @@ class FakeTutor:
 
     @staticmethod
     def _claims(scripted: list[list[tuple[str, str]]] | None, call: int) -> tuple[Claim, ...]:
-        pairs = scripted[call] if scripted and call < len(scripted) else []
-        return tuple(Claim(source, quote) for source, quote in pairs)
+        return _to_claims(scripted[call] if scripted and call < len(scripted) else [])
 
     def _out[T](self, value: T) -> Generated[T]:
         return Generated(value, "fake-model", self.fell_back)
@@ -492,8 +496,7 @@ class FakeTutor:
         for index, (kind, difficulty) in enumerate(pattern):
             if self.cite_each is not None:
                 each = self.cite_each[call] if call < len(self.cite_each) else []
-                pairs = each[index] if index < len(each) else []
-                claims = tuple(Claim(source, quote) for source, quote in pairs)
+                claims = _to_claims(each[index] if index < len(each) else [])
             self.counter += 1
             options: tuple[Option, ...] = ()
             if kind == "mcq":
@@ -623,6 +626,19 @@ class FakeWebSearch:
         if self.fail:
             raise WebSearchFailed("search down")
         return list(self.pages)
+
+
+def new_document(
+    filename: str, *chunks: str | ChunkDraft, sha: str | None = None, page_count: int | None = None
+) -> NewDocument:
+    """A notes file of `chunks`, of the kind its name ends in. A plain text is chunk i,
+    headed "Part i", on page 1. The sha256 is made from the name unless given."""
+    drafts = tuple(
+        c if isinstance(c, ChunkDraft) else ChunkDraft(i, c, f"Part {i}", 1, 1, (0,))
+        for i, c in enumerate(chunks)
+    )
+    kind = filename.rpartition(".")[2]
+    return NewDocument(filename, kind, 100, page_count, sha or f"sha-{filename}", drafts)
 
 
 def make_subject(store: MemoryStore, user_id: UUID, concepts: int = 4) -> UUID:

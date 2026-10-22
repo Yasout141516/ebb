@@ -9,10 +9,10 @@ from typer.testing import CliRunner
 
 from ebb import cli
 from ebb.config import ConfigError, Settings
-from ebb.domain import ChunkDraft, NewDocument
+from ebb.domain import ChunkDraft
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.ui import format_day
-from tests.fakes import FakeTutor, FakeWebSearch, MemoryStore, seed_concept
+from tests.fakes import FakeTutor, FakeWebSearch, MemoryStore, new_document, seed_concept
 
 runner = CliRunner()
 # Captured at import time, before any test patches cli._tutor or cli._ask.
@@ -851,8 +851,7 @@ def test_question_shows_its_source_line(fakes):
     text = f"A subnet mask splits an address. {quote} and the last is the broadcast address."
     tutor.cite = [[("N1", quote)]]
     user = next(iter(store.profiles))
-    chunk = ChunkDraft(0, text, None, 12, 12, (0,))
-    document = NewDocument("CSE321.pdf", "pdf", 1000, 20, "sha", (chunk,))
+    document = new_document("CSE321.pdf", ChunkDraft(0, text, None, 12, 12, (0,)), page_count=20)
     concept = ("Subnet masks", "How a subnet mask splits an address.")
     store.create_subject_with_notes(user, "Networks", [document], [concept])
 
