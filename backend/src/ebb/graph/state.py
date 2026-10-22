@@ -15,6 +15,7 @@ from uuid import UUID
 from ebb.citations import from_dict as citation_from_dict
 from ebb.citations import to_dict as citation_to_dict
 from ebb.domain import Citation, Claim, Concept, Grade, GradeValue, Option, Question
+from ebb.routing import candidate_run
 
 
 class QuizState(TypedDict, total=False):
@@ -91,7 +92,6 @@ STATE_DEFAULTS: dict[str, Any] = {
     "web_notice_shown": False,
     "sources": [],
     "earlier_prompts": None,
-    "run": {"mode": "notes", "candidates": [], "replacing": 0},
     "citation_retries": 0,
     "citation_failures": [],
     "citation_failing": None,
@@ -117,11 +117,9 @@ def fill_defaults(values: Mapping[str, Any]) -> dict[str, Any]:
             filled["current_question_id"] = filled["batch"][0]["id"]
     # generation_mode, candidates and replacements_needed became `run`. Once a node has
     # written `run` the old ones are stale, since nothing clears them.
-    mode = filled.pop("generation_mode", "notes")
-    candidates = filled.pop("candidates", [])
-    replacing = filled.pop("replacements_needed", 0)
-    if "run" not in values:
-        filled["run"] = {"mode": mode, "candidates": candidates, "replacing": replacing}
+    filled["run"] = candidate_run(values)
+    for old in ("generation_mode", "candidates", "replacements_needed"):
+        filled.pop(old, None)
     # A lesson was a string, with its citations beside it.
     citations = filled.pop("lesson_citations", None)
     if isinstance(filled.get("lesson"), str):

@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Any, Literal
 
 from ebb.domain import Concept
-from ebb.graph.state import fill_defaults
 from ebb.mastery import is_due, tide
 
 STREAK_TO_FINISH = 2
@@ -91,10 +90,17 @@ def after_generate(state: Mapping[str, Any]) -> Literal["verify_citations", "sum
     return "summarize" if state["fatal"] else "verify_citations"
 
 
-def _run(state: Mapping[str, Any]) -> dict[str, Any]:
-    """The candidate run. Routers get the raw state, so a checkpoint saved before `run`
-    is read through fill_defaults, which builds it from the old keys."""
-    return fill_defaults(state)["run"]
+def candidate_run(state: Mapping[str, Any]) -> dict[str, Any]:
+    """The state's `run` ({mode, candidates, replacing}). A checkpoint saved before it has
+    the old keys instead; `run` is built from them only while it is absent, so a stale old
+    value is never read once a node has written `run`. Routers get the raw state."""
+    if "run" in state:
+        return state["run"]
+    return {
+        "mode": state.get("generation_mode", "notes"),
+        "candidates": list(state.get("candidates", [])),
+        "replacing": state.get("replacements_needed", 0),
+    }
 
 
 def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["search_web"]:
@@ -103,7 +109,7 @@ def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["sea
     session hasn't searched for this concept or seen a search fail."""
     if state["citation_failures"]:
         return "generate_questions"
-    run = _run(state)
+    run = candidate_run(state)
     if (
         web
         and run["mode"] == "notes"
@@ -119,7 +125,7 @@ def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["sea
 
 def after_search(state: Mapping[str, Any]) -> NextStep:
     """Pages found switch generation to web mode; otherwise the batch goes on without them."""
-    if _run(state)["mode"] == "web":
+    if candidate_run(state)["mode"] == "web":
         return "generate_questions"
     if state["batch"]:
         return "ask_question"

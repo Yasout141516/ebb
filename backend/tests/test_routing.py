@@ -197,10 +197,8 @@ def test_after_verify_searches_the_web_for_dropped_repeats():
     [
         ({}, False),  # no Tavily key
         ({"run": {"mode": "notes", "candidates": [], "replacing": 0}}, True),
-        (
-            {"run": {"mode": "web", "candidates": [], "replacing": 1}},
-            True,
-        ),  # web questions never search again
+        # web questions never search again
+        ({"run": {"mode": "web", "candidates": [], "replacing": 1}}, True),
         ({"web_searched": ["c1"]}, True),
         ({"web_failed": True}, True),
     ],

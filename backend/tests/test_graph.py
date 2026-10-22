@@ -1402,9 +1402,8 @@ def test_grade_label_without_notes_is_grading():
 
 
 def test_web_mode_and_unlabelled_steps():
-    assert step_label(
-        "generate_questions", {"run": {"mode": "web", "candidates": [], "replacing": 1}}
-    ) == ("Writing questions from the web…")
+    web_run = {"mode": "web", "candidates": [], "replacing": 1}
+    assert step_label("generate_questions", {"run": web_run}) == "Writing questions from the web…"
     assert step_label("pick_concept", {}) is None
 
 
