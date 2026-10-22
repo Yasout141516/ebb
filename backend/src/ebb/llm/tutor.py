@@ -19,6 +19,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.runnables import Runnable
 from pydantic import ValidationError
 
+from ebb.citations import MAX_CITATIONS, MAX_QUOTE
 from ebb.config import ConfigError, Settings
 from ebb.domain import (
     Claim,
@@ -184,19 +185,21 @@ def _neutralise(text: str) -> str:
     return text.replace("<<<", "‹‹‹").replace(">>>", "›››")
 
 
-_CITE_ITEM = (
-    "each {item} may carry up to 3 citations, each {{source: label, quote: exact words copied "
-    "from that source, at most 200 characters}}"
-)
+def _cite_item(item: str) -> str:
+    return (
+        f"each {item} may carry up to {MAX_CITATIONS} citations, each {{source: label, quote: "
+        f"exact words copied from that source, at most {MAX_QUOTE} characters}}"
+    )
 
 
 _CITE_QUESTIONS = (
-    "Every question must cite the sources it is written from: "
-    + _CITE_ITEM.format(item="question")
-    + "."
+    "Every question must cite the sources it is written from: " + _cite_item("question") + "."
 )
-_GRADE_AGAINST_SOURCES = (
-    "If the reference answer and the sources disagree, grade against the sources."
+# The tail of a grade or re-grade prompt that has sources.
+_CITE_GRADE = (
+    "If the reference answer and the sources disagree, grade against the sources. "
+    + _cite_item("grade").capitalize()
+    + "."
 )
 
 
@@ -285,7 +288,16 @@ def _with_sources(
 
 
 def _claims(drafts: Sequence[CitationDraft]) -> tuple[Claim, ...]:
-    return tuple(Claim(d.source, d.quote) for d in drafts[:3])
+    return tuple(Claim(d.source, d.quote) for d in drafts[:MAX_CITATIONS])
+
+
+def _grade_from(out: GradeResult | RegradeResult) -> Grade:
+    """The model's grade, capped at partial if it names a misconception."""
+    return cap_for_misconception(
+        Grade(
+            GradeValue(out.grade), out.explanation, out.misconception, claims=_claims(out.citations)
+        )
+    )
 
 
 _REASONS = {
@@ -492,21 +504,14 @@ class LangChainTutor:
             ),
             sources,
             failures,
-            _GRADE_AGAINST_SOURCES + " " + _CITE_ITEM.format(item="grade").capitalize() + ".",
+            _CITE_GRADE,
             _previous_grade(previous),
         )
         return self._run(
             lambda m: m.with_structured_output(GradeResult),
             prompt,
             creative=False,
-            parse=lambda out: cap_for_misconception(
-                Grade(
-                    GradeValue(out.grade),
-                    out.explanation,
-                    out.misconception,
-                    claims=_claims(out.citations),
-                )
-            ),
+            parse=_grade_from,
         )
 
     def teach(
@@ -528,7 +533,7 @@ class LangChainTutor:
             ),
             sources,
             failures,
-            _CITE_ITEM.format(item="lesson").capitalize() + ", for facts taken from a source.",
+            _cite_item("lesson").capitalize() + ", for facts taken from a source.",
             _previous_lesson(previous),
         )
         if not sources:
@@ -582,24 +587,14 @@ class LangChainTutor:
             ),
             sources,
             failures,
-            _GRADE_AGAINST_SOURCES + " " + _CITE_ITEM.format(item="grade").capitalize() + ".",
+            _CITE_GRADE,
             _previous_grade(previous),
         )
         return self._run(
             lambda m: m.with_structured_output(RegradeResult),
             prompt,
             creative=False,
-            parse=lambda out: (
-                cap_for_misconception(
-                    Grade(
-                        GradeValue(out.grade),
-                        out.explanation,
-                        out.misconception,
-                        claims=_claims(out.citations),
-                    )
-                ),
-                out.question_ambiguous,
-            ),
+            parse=lambda out: (_grade_from(out), out.question_ambiguous),
         )
 
     def write_eval_case(
