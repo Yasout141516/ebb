@@ -315,7 +315,8 @@ def test_render_turn_shows_source_line_hint_and_grade_label():
 def test_render_turn_after_a_dispute_skips_the_old_feedback():
     cited = {"kind": "chunk", "label": "a.md", "quote": "Quote."}
     result = {"outcome": "upheld", "explanation": "Still half.", "citations": [cited]}
-    payload = question_payload(dispute_result=result, lesson="Old lesson", notices=["oldnotice"])
+    backup = "Switched to a backup model while the main one is busy."
+    payload = question_payload(dispute_result=result, lesson="Old lesson", notices=[backup])
 
     text = recorded(render_turn, payload)
 
@@ -323,5 +324,5 @@ def test_render_turn_after_a_dispute_skips_the_old_feedback():
     assert "“Quote.”" in text
     assert "Half." not in text.replace("Still half.", "")
     assert "Old lesson" not in text
-    assert "oldnotice" not in text
+    assert backup in text  # the re-check's own notices
     assert "Why?" in text

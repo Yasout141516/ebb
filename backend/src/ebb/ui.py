@@ -210,14 +210,15 @@ def dispute_line(result: dict[str, Any]) -> str:
 def render_turn(console: Console, payload: dict[str, Any]) -> None:
     result = payload.get("dispute_result")
     if result:
-        # The grade, lesson and notices were shown before the dispute; only the verdict is new.
+        # The grade and lesson were shown before the dispute; only the verdict is new, and
+        # the notices are the re-check's own.
         console.print(escape(dispute_line(result)))
         render_citations(console, result.get("citations", []), False)
     else:
         render_feedback(
             console, payload["feedback"], payload["lesson"], payload.get("lesson_citations", [])
         )
-        render_notices(console, payload["notices"])
+    render_notices(console, payload["notices"])
     render_question(console, payload)
 
 

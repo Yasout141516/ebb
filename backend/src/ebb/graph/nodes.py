@@ -602,19 +602,20 @@ def make_nodes(
         user_id, _ = ids(state)
         graded = state.get("last_graded")
         request = state["dispute"]
-        refused = {"dispute": None, "dispute_result": {"outcome": "refused"}}
+        # The turn's notices were shown with its grade; from here on they are the re-check's.
+        refused = {"dispute": None, "dispute_result": {"outcome": "refused"}, "notices": []}
         if graded is None or graded["disputed"] or request["reason"] not in DisputeReason:
             return refused
         # Resumed after the store committed, the stored dispute is applied as it was: the
         # model isn't asked again, so a busy or different answer can't undo it.
         dispute = store.get_dispute(user_id, UUID(request["id"]))
-        notices = list(state["notices"])
+        notices: list[str] = []
         if dispute is None:
             try:
                 dispute, generated = recheck(graded, request)
             except AllProvidersExhausted:
-                return {"dispute": None, "dispute_result": {"outcome": "failed"}}
-            notices = _notices(state, generated)
+                return {**refused, "dispute_result": {"outcome": "failed"}}
+            notices = [FALLBACK_NOTICE] if generated.fell_back else []
         try:
             # A stored dispute comes back unchanged, with the concept as it is now.
             recorded, concept = store.resolve_dispute(user_id, dispute, now())

@@ -983,6 +983,28 @@ def test_dispute_raises_the_grade_and_the_stage():
     assert result["stage_after"] == 3
 
 
+def test_dispute_payload_carries_the_recheck_notices_only():
+    class BackupRecheck(FakeTutor):
+        def regrade(self, *args, **kwargs):
+            return replace(super().regrade(*args, **kwargs), fell_back=True)
+
+    class BackupGrade(FakeTutor):
+        def grade(self, *args, **kwargs):
+            return replace(super().grade(*args, **kwargs), fell_back=True)
+
+    store, tutor = MemoryStore(), BackupRecheck(regrades=[("correct", False)])
+    subject_id, _ = due_subject(store)
+    _, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+    assert payloads[1]["notices"] == []
+    assert payloads[2]["notices"] == [FALLBACK_NOTICE]  # the re-check used the backup
+
+    store, tutor = MemoryStore(), BackupGrade(regrades=[("correct", False)])
+    subject_id, _ = due_subject(store)
+    _, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+    assert payloads[1]["notices"] == [FALLBACK_NOTICE]
+    assert payloads[2]["notices"] == []  # shown with the grade; the re-check didn't fall back
+
+
 def test_dispute_can_lower_the_grade():
     store, tutor = MemoryStore(), FakeTutor(regrades=[("incorrect", False)])
     subject_id, concept = due_subject(store)
