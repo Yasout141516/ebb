@@ -175,6 +175,10 @@ def make_nodes(
         answered = store.answered_prompts(user_id, UUID(state["concept"]["id"]), 40)
         return list(dict.fromkeys([*answered, *state["asked_prompts"]]))
 
+    def pending_prompts(state: QuizState) -> list[str]:
+        """The prompts of this concept's questions still waiting to be asked."""
+        return [q["prompt"] for q in state["batch"]]
+
     def record_result(state: QuizState) -> list[dict[str, Any]]:
         results = list(state["results"])
         concept = state["concept"]
@@ -318,7 +322,8 @@ def make_nodes(
         try:
             generated = tutor.generate_questions(
                 concept,
-                earlier_prompts(state),
+                # Web questions join the batch, so they must not repeat what is waiting in it.
+                list(dict.fromkeys([*earlier_prompts(state), *pending_prompts(state)])),
                 _candidate_sources(state),
                 failures,
                 web_count=web_count,
@@ -370,8 +375,14 @@ def make_nodes(
                 replace(q, source="notes" if cited else "general", claims=(), citations=cited)
                 for q, cited in checked
             ]
-        earlier = earlier_prompts(state)
-        kept = [q for q in final if not too_close(q.prompt, earlier)]
+        # A repeat of an earlier question, of one still waiting in the batch, or of one
+        # kept just before it from these candidates.
+        seen = [*earlier_prompts(state), *pending_prompts(state)]
+        kept: list[Question] = []
+        for question in final:
+            if not too_close(question.prompt, seen):
+                kept.append(question)
+                seen.append(question.prompt)
         store.save_questions(user_id, UUID(state["session_id"]), kept)
         update: dict[str, Any] = {
             "batch": [*state["batch"], *(question_to_dict(q) for q in kept)],

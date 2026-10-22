@@ -798,6 +798,39 @@ def test_repeat_triggers_one_search_and_a_web_question():
     assert WEB_NOTICE not in [n for p in payloads for n in p["notices"]]
 
 
+PARAPHRASE = "Into what does subnetting divide a network?"  # too close to WEB_PROMPT
+
+
+def test_near_duplicates_within_a_batch_are_dropped():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    tutor = FakeTutor(prompts=[WEB_PROMPT, PARAPHRASE])
+
+    final, payloads = run(tutor, store, subject_id, lambda p: {"quit": True})
+
+    prompts = [q.prompt for q in store.questions.values()]
+    assert WEB_PROMPT in prompts and PARAPHRASE not in prompts
+    assert len(prompts) == 4
+    assert payloads[0]["notices"] == [WEB_NOTICE]  # the duplicate counts as a repeat
+
+
+def test_web_questions_avoid_and_skip_the_pending_batch():
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    answered_before(store, subject_id, REPEAT)
+    tutor = FakeTutor(
+        prompts=[REPEAT, WEB_PROMPT], web_prompts=[PARAPHRASE], cite=[[], [("W1", PAGE_QUOTE)]]
+    )
+
+    final, _ = run(tutor, store, subject_id, lambda p: {"quit": True}, FakeWebSearch([PAGE]))
+
+    assert tutor.web_count_calls == [None, 1]
+    assert WEB_PROMPT in tutor.avoid_calls[1]  # still waiting in the batch
+    assert all(q.source != "web" for q in store.questions.values())
+    assert len(store.questions) == 1 + 4
+    assert final["replacements_needed"] == 0
+
+
 def test_web_question_with_bad_citations_is_dropped():
     store = MemoryStore()
     subject_id = make_subject(store, USER, concepts=1)
