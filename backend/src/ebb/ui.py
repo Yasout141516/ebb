@@ -256,6 +256,14 @@ PRIVACY_LINE = (
 )
 
 
+def format_megabytes(size_bytes: int) -> str:
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def _pages_prefix(page_count: int | None) -> str:
+    return "" if page_count is None else f"{page_count} pages · "
+
+
 def notes_report(
     filename: str,
     page_count: int | None,
@@ -264,8 +272,7 @@ def notes_report(
     fresh: Sequence[tuple[str, str]],
 ) -> list[str]:
     """What adding one file found, as plain lines (escape them before printing)."""
-    pages = "" if page_count is None else f"{page_count} pages · "
-    lines = [f"{filename} · {pages}{chunk_count} passages"]
+    lines = [f"{filename} · {_pages_prefix(page_count)}{chunk_count} passages"]
     summary = f"{len(matched) + len(fresh)} concepts in these notes — "
     if matched:
         summary += f"{len(matched)} already here ({', '.join(matched)}), "
@@ -276,8 +283,7 @@ def notes_report(
 
 def source_lines(documents: Sequence[Document]) -> list[str]:
     """One line per stored file for `ebb status`."""
-    lines = []
-    for document in documents:
-        pages = "" if document.page_count is None else f"{document.page_count} pages · "
-        lines.append(f"{document.filename} · {pages}{document.size_bytes / (1024 * 1024):.1f} MB")
-    return lines
+    return [
+        f"{d.filename} · {_pages_prefix(d.page_count)}{format_megabytes(d.size_bytes)}"
+        for d in documents
+    ]

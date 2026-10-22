@@ -11,6 +11,7 @@ from pypdf.errors import PyPdfError
 
 from ebb.chunking import chunk_notes
 from ebb.domain import NewDocument
+from ebb.ui import format_megabytes
 
 MAX_BYTES = 20 * 1024 * 1024
 MIN_CHARS_PER_PAGE = 50
@@ -67,7 +68,7 @@ def read_notes(path: Path) -> ExtractedNotes:
     size = path.stat().st_size
     if size > MAX_BYTES:
         raise NotesError(
-            f"{path.name} is {size / (1024 * 1024):.1f} MB — over the 20 MB limit. "
+            f"{path.name} is {format_megabytes(size)} — over the 20 MB limit. "
             "Split it into chapters, or upload just the pages you're studying."
         )
     try:
