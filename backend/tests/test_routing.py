@@ -180,8 +180,7 @@ def repeats(**overrides):
     base = {
         "citation_failures": [],
         "concept": {"id": "c1"},
-        "generation_mode": "notes",
-        "replacements_needed": 1,
+        "run": {"mode": "notes", "candidates": [], "replacing": 1},
         "web_searched": [],
         "web_failed": False,
     }
@@ -197,8 +196,11 @@ def test_after_verify_searches_the_web_for_dropped_repeats():
     ("overrides", "web"),
     [
         ({}, False),  # no Tavily key
-        ({"replacements_needed": 0}, True),
-        ({"generation_mode": "web"}, True),  # web questions never search again
+        ({"run": {"mode": "notes", "candidates": [], "replacing": 0}}, True),
+        (
+            {"run": {"mode": "web", "candidates": [], "replacing": 1}},
+            True,
+        ),  # web questions never search again
         ({"web_searched": ["c1"]}, True),
         ({"web_failed": True}, True),
     ],
@@ -208,14 +210,27 @@ def test_after_verify_skips_the_search(overrides, web):
     assert after_verify(repeats(batch=[], **overrides), web=web) == "generate_questions"
 
 
+def run(mode):
+    return {"mode": mode, "candidates": [], "replacing": 0}
+
+
+def test_routers_read_a_checkpoint_saved_with_the_old_keys():
+    old = repeats()
+    del old["run"]
+    old |= {"generation_mode": "notes", "replacements_needed": 1}
+    assert after_verify(old, web=True) == "search_web"
+    assert after_search({**state(), "generation_mode": "web"}) == "generate_questions"
+    assert after_search(state()) == "ask_question"  # no run and no old keys
+
+
 def test_after_search_writes_web_questions_when_pages_were_found():
-    assert after_search(state(generation_mode="web")) == "generate_questions"
+    assert after_search(state(run=run("web"))) == "generate_questions"
 
 
 def test_after_search_without_pages_continues_with_the_batch():
-    assert after_search(state(generation_mode="notes")) == "ask_question"
-    assert after_search(state(batch=[], generation_mode="notes")) == "generate_questions"
-    empty = state(batch=[], generation_mode="notes", generation_calls_on_concept=2)
+    assert after_search(state(run=run("notes"))) == "ask_question"
+    assert after_search(state(batch=[], run=run("notes"))) == "generate_questions"
+    empty = state(batch=[], run=run("notes"), generation_calls_on_concept=2)
     assert after_search(empty) == "next_concept"
 
 

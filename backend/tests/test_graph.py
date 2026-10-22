@@ -905,7 +905,7 @@ def test_web_questions_avoid_and_skip_the_pending_batch():
     assert WEB_PROMPT in tutor.avoid_calls[1]  # still waiting in the batch
     assert all(q.source != "web" for q in store.questions.values())
     assert len(store.questions) == 1 + 4
-    assert final["replacements_needed"] == 0
+    assert final["run"]["replacing"] == 0
 
 
 def test_web_question_with_bad_citations_is_dropped():
@@ -923,8 +923,8 @@ def test_web_question_with_bad_citations_is_dropped():
     assert all(q.prompt != WEB_PROMPT and q.source != "web" for q in store.questions.values())
     assert len(store.questions) == 1 + 4
     assert payloads[0]["question"]["source"] == "general"
-    assert final["generation_mode"] == "notes"
-    assert final["replacements_needed"] == 0
+    assert final["run"]["mode"] == "notes"
+    assert final["run"]["replacing"] == 0
 
 
 def test_no_web_key_drops_repeats_with_one_notice():
@@ -1038,7 +1038,7 @@ def test_failed_web_generation_keeps_the_batch():
     assert final["fatal"] is None
     assert EXHAUSTED_NOTICE not in payloads[0]["notices"]
     assert len(store.questions) == 1 + 4
-    assert final["generation_mode"] == "notes"
+    assert final["run"]["mode"] == "notes"
 
 
 # --- disputes --------------------------------------------------------------------------
@@ -1402,9 +1402,9 @@ def test_grade_label_without_notes_is_grading():
 
 
 def test_web_mode_and_unlabelled_steps():
-    assert step_label("generate_questions", {"generation_mode": "web"}) == (
-        "Writing questions from the web…"
-    )
+    assert step_label(
+        "generate_questions", {"run": {"mode": "web", "candidates": [], "replacing": 1}}
+    ) == ("Writing questions from the web…")
     assert step_label("pick_concept", {}) is None
 
 
@@ -1479,7 +1479,7 @@ def test_milestone3_checkpoint_with_label_only_citations_resumes():
         "sources": [old_source],
         "has_notes": True,
         "citation_failures": [],
-        "replacements_needed": 0,
+        "run": {"mode": "notes", "candidates": [], "replacing": 0},
         "results": [],
         "quit": False,
         "caught_up": False,
@@ -1649,3 +1649,18 @@ def test_payload_lesson_is_text_and_citations():
     assert [c["quote"] for c in payloads[1]["lesson"]["citations"]] == [OTHER_QUOTE]
     assert "lesson_citations" not in payloads[1]
     assert payloads[0]["lesson"] is None
+
+
+def test_old_checkpoint_with_generation_mode_resumes():
+    graph, config, _, saved = old_checkpoint_graph()
+    # Saved by milestone 3 while replacements for a repeat were being written from the web.
+    saved |= {"generation_mode": "web", "replacements_needed": 1, "candidates": []}
+    graph.update_state(config, saved, as_node="search_web")
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=reply("right")), config)
+
+    assert shown["question"]["prompt"] == "First?"  # the web run found nothing to add
+    assert "__interrupt__" in result
+    values = graph.get_state(config).values
+    assert values["run"] == {"mode": "notes", "candidates": [], "replacing": 0}

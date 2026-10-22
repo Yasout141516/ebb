@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from ebb.domain import Concept
+from ebb.graph.state import fill_defaults
 from ebb.mastery import is_due, tide
 
 STREAK_TO_FINISH = 2
@@ -90,16 +91,23 @@ def after_generate(state: Mapping[str, Any]) -> Literal["verify_citations", "sum
     return "summarize" if state["fatal"] else "verify_citations"
 
 
+def _run(state: Mapping[str, Any]) -> dict[str, Any]:
+    """The candidate run. Routers get the raw state, so a checkpoint saved before `run`
+    is read through fill_defaults, which builds it from the old keys."""
+    return fill_defaults(state)["run"]
+
+
 def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["search_web"]:
     """Failures left in state mean the candidates go back for another try. Repeats dropped
     from a notes batch are replaced from the web, if `web` search is set up and this
     session hasn't searched for this concept or seen a search fail."""
     if state["citation_failures"]:
         return "generate_questions"
+    run = _run(state)
     if (
         web
-        and state.get("generation_mode", "notes") == "notes"
-        and state.get("replacements_needed", 0) > 0
+        and run["mode"] == "notes"
+        and run["replacing"] > 0
         and state["concept"]["id"] not in state.get("web_searched", [])
         and not state.get("web_failed", False)
     ):
@@ -111,7 +119,7 @@ def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["sea
 
 def after_search(state: Mapping[str, Any]) -> NextStep:
     """Pages found switch generation to web mode; otherwise the batch goes on without them."""
-    if state.get("generation_mode", "notes") == "web":
+    if _run(state)["mode"] == "web":
         return "generate_questions"
     if state["batch"]:
         return "ask_question"

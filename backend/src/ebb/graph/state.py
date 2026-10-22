@@ -45,12 +45,13 @@ class QuizState(TypedDict, total=False):
     generation_calls_on_concept: int
     sources: list[dict[str, Any]]  # the concept's retrieved note chunks, as Source dicts
     earlier_prompts: list[str]  # earlier sessions' answered prompts on the concept
-    candidates: list[dict[str, Any]]  # generated questions waiting for verify_citations
     citation_retries: int
     citation_failures: list[str]  # why the last candidates' citations failed; empty when done
     citation_failing: list[int]  # indexes of the candidates those failures are about
-    generation_mode: Literal["notes", "web"]  # "web" while replacements for repeats are written
-    replacements_needed: int  # repeats dropped from the last notes batch
+    # The candidate questions being written: {mode, candidates, replacing}. `mode` is "web"
+    # while replacements for repeats are written from the web; `candidates` wait for
+    # verify_citations; `replacing` counts the repeats dropped from the last notes batch.
+    run: dict[str, Any]
     web_sources: list[dict[str, Any]]  # the concept's web pages, as Source dicts
     # current question
     question: dict[str, Any] | None
@@ -74,6 +75,11 @@ class QuizState(TypedDict, total=False):
     pending_question_id: str | None
     retry_question: bool
     lesson_citations: list[dict[str, Any]]
+    # Keys of sessions saved before `run`. LangGraph drops keys on load that aren't declared
+    # here; fill_defaults moves them into `run`, and nothing writes them.
+    generation_mode: Literal["notes", "web"]
+    candidates: list[dict[str, Any]]
+    replacements_needed: int
 
 
 # Keys added after milestone 1, with what a session saved before them gets. `None` for
@@ -85,12 +91,10 @@ STATE_DEFAULTS: dict[str, Any] = {
     "web_notice_shown": False,
     "sources": [],
     "earlier_prompts": None,
-    "candidates": [],
+    "run": {"mode": "notes", "candidates": [], "replacing": 0},
     "citation_retries": 0,
     "citation_failures": [],
     "citation_failing": None,
-    "generation_mode": "notes",
-    "replacements_needed": 0,
     "web_sources": [],
     "last_graded": None,
     "dispute_result": None,
@@ -111,6 +115,13 @@ def fill_defaults(values: Mapping[str, Any]) -> dict[str, Any]:
             filled["current_question_id"] = pending
         elif retry and filled.get("batch"):
             filled["current_question_id"] = filled["batch"][0]["id"]
+    # generation_mode, candidates and replacements_needed became `run`. Once a node has
+    # written `run` the old ones are stale, since nothing clears them.
+    mode = filled.pop("generation_mode", "notes")
+    candidates = filled.pop("candidates", [])
+    replacing = filled.pop("replacements_needed", 0)
+    if "run" not in values:
+        filled["run"] = {"mode": mode, "candidates": candidates, "replacing": replacing}
     # A lesson was a string, with its citations beside it.
     citations = filled.pop("lesson_citations", None)
     if isinstance(filled.get("lesson"), str):

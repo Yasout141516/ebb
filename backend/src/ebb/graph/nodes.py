@@ -89,7 +89,11 @@ def _sources(state: QuizState, web: bool) -> list[Source]:
 
 
 def _web_mode(state: QuizState) -> bool:
-    return state["generation_mode"] == "web"
+    return state["run"]["mode"] == "web"
+
+
+def _fresh_run() -> dict[str, Any]:
+    return {"mode": "notes", "candidates": [], "replacing": 0}
 
 
 def _citation_reset() -> dict[str, Any]:
@@ -264,7 +268,7 @@ def make_nodes(
             "web_failed": False,
             "web_notice_shown": False,
             "sources": [],
-            "candidates": [],
+            "run": _fresh_run(),
             **_citation_reset(),
             "studied_concept_ids": [],
             "results": [],
@@ -299,8 +303,7 @@ def make_nodes(
             "generation_calls_on_concept": 0,
             "difficulty": None,
             "current_question_id": None,
-            "generation_mode": "notes",
-            "replacements_needed": 0,
+            "run": _fresh_run(),
             "web_sources": [],
         }
 
@@ -343,8 +346,8 @@ def make_nodes(
         # A citation retry rewrites part of the same batch, and web questions fill in the
         # last one, so neither is another generation call.
         calls = state["generation_calls_on_concept"] + (0 if failures or web_mode else 1)
-        web_count = state["replacements_needed"] if web_mode else None
-        candidates = state["candidates"]
+        web_count = state["run"]["replacing"] if web_mode else None
+        candidates = state["run"]["candidates"]
         # A retry rewrites only the questions whose citations failed; the rest are kept as
         # they are. A session saved before this was tracked (None) rewrites them all.
         failing = state["citation_failing"]
@@ -368,7 +371,7 @@ def make_nodes(
                 return {"citation_retries": MAX_RETRIES}
             if web_mode:
                 # The batch goes on without replacements, as when the search finds nothing.
-                return {"candidates": []}
+                return {"run": {**state["run"], "candidates": []}}
             return {
                 "fatal": EXHAUSTED_NOTICE,
                 "generation_calls_on_concept": calls,
@@ -382,7 +385,7 @@ def make_nodes(
                 merged[index] = rewritten
             fresh = merged
         return {
-            "candidates": fresh,
+            "run": {**state["run"], "candidates": fresh},
             "generation_calls_on_concept": calls,
             "notices": _notices(state, generated),
         }
@@ -395,7 +398,7 @@ def make_nodes(
         checked: list[tuple[Question, tuple[Citation, ...]]] = []
         failures: list[str] = []
         failing: list[int] = []
-        for index, candidate in enumerate(state["candidates"]):
+        for index, candidate in enumerate(state["run"]["candidates"]):
             question = question_from_dict(candidate)
             citations, failed = verify(question.claims, sources) if sources else ((), ())
             n = len(failing) + 1  # numbered as the retry lists the failing questions
@@ -429,15 +432,14 @@ def make_nodes(
         # kept just before it from these candidates.
         kept = _dedupe(final, known_prompts(state))
         store.save_questions(user_id, UUID(state["session_id"]), kept)
+        # Only repeats from a notes batch are replaced; web ones are simply dropped.
+        replacing = 0 if web_mode else len(final) - len(kept)
         update: dict[str, Any] = {
             "batch": [*state["batch"], *(question_to_dict(q) for q in kept)],
-            "candidates": [],
+            "run": {"mode": "notes", "candidates": [], "replacing": replacing},
             **_citation_reset(),
-            "generation_mode": "notes",
-            # Only repeats from a notes batch are replaced; web ones are simply dropped.
-            "replacements_needed": 0 if web_mode else len(final) - len(kept),
         }
-        if update["replacements_needed"] and web is None:
+        if replacing and web is None:
             update |= _web_notice(state)
         return update
 
@@ -450,18 +452,19 @@ def make_nodes(
         if subject is None:
             raise LookupError(f"subject {subject_id} not found")
         concept = state["concept"]
+        nothing = {**state["run"], "replacing": 0}  # no replacements to write
         searched = {"web_searched": [*state["web_searched"], concept["id"]]}
         try:
             # Only these two names leave the machine.
             pages = web.search(f"{subject.name} {concept['name']}")
         except WebSearchFailed:
-            return {**searched, "web_failed": True, "replacements_needed": 0, **_web_notice(state)}
+            return {**searched, "web_failed": True, "run": nothing, **_web_notice(state)}
         if not pages:
-            return {**searched, "replacements_needed": 0}
+            return {**searched, "run": nothing}
         return {
             **searched,
             "web_sources": [source_to_dict(s) for s in web_sources(pages)],
-            "generation_mode": "web",
+            "run": {**state["run"], "mode": "web"},
         }
 
     def ask_question(state: QuizState) -> dict[str, Any]:

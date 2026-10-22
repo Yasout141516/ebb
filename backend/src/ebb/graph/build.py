@@ -54,7 +54,7 @@ _LABELS = {
 
 def step_label(name: str, state: Mapping[str, Any]) -> str | None:
     """What the learner is told while node `name` runs; None for a node with no label."""
-    if name == "generate_questions" and state["generation_mode"] == "web":
+    if name == "generate_questions" and state["run"]["mode"] == "web":
         return "Writing questions from the web…"
     if name == "grade_answer" and not state["has_notes"]:
         return "Grading…"
