@@ -12,7 +12,7 @@ from uuid import UUID
 
 from ebb.citations import from_dict as citation_from_dict
 from ebb.citations import to_dict as citation_to_dict
-from ebb.domain import Claim, Concept, Grade, GradeValue, Option, Question
+from ebb.domain import Citation, Claim, Concept, Grade, GradeValue, Option, Question
 
 
 class QuizState(TypedDict, total=False):
@@ -103,6 +103,14 @@ def concept_from_dict(d: dict[str, Any]) -> Concept:
     )
 
 
+def _claims(items: list[dict[str, Any]]) -> tuple[Claim, ...]:
+    return tuple(Claim(c["source"], c["quote"]) for c in items)
+
+
+def _citations(items: list[dict[str, Any]]) -> tuple[Citation, ...]:
+    return tuple(citation_from_dict(c) for c in items)
+
+
 # Dicts saved by milestone 2 lack source, claims and citations, hence the defaults below.
 
 
@@ -132,7 +140,7 @@ def question_from_dict(d: dict[str, Any]) -> Question:
         options=tuple(Option(o["text"], o["is_correct"], o["why"]) for o in d["options"]),
         source=d.get("source", "general"),
         claims=_claims(d.get("claims", [])),
-        citations=tuple(citation_from_dict(c) for c in d.get("citations", [])),
+        citations=_citations(d.get("citations", [])),
     )
 
 
@@ -154,9 +162,5 @@ def grade_from_dict(d: dict[str, Any]) -> Grade:
         d["explanation"],
         d["misconception"],
         claims=_claims(d.get("claims", [])),
-        citations=tuple(citation_from_dict(c) for c in d.get("citations", [])),
+        citations=_citations(d.get("citations", [])),
     )
-
-
-def _claims(items: list[dict[str, Any]]) -> tuple[Claim, ...]:
-    return tuple(Claim(c["source"], c["quote"]) for c in items)
