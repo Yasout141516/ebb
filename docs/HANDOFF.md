@@ -26,12 +26,16 @@ Code makes every decision; the LLM only generates questions, grades short answer
 
 ## Where things stand
 
-<!-- CONTROLLER: finalise this section at merge time (merge commit, test count, DB migration). -->
-
-- Milestone 3 lives on branch `m3-notes-citations` in the worktree
-  `E:\ebb\.claude\worktrees\m3-notes-citations`. The final whole-branch review found no critical
-  issues; its fixes (PDF ligatures, damaged PDFs, eval failures and retries, the repeat `un-`
-  prefix, these docs) are committed on the branch. It is not merged to `main` and not pushed.
+- **Milestone 3 is finished but not merged.** It lives on branch `m3-notes-citations` in the
+  worktree `E:\ebb\.claude\worktrees\m3-notes-citations`: 17 planned tasks (14 from the plan +
+  Task 16 providers switch + Task 17 misconception cap), each with its own review, then a
+  whole-branch review, its fix wave, `/code-review` (8 fixes) and `/simplify` (11 refactor
+  commits). 575 tests pass, ruff is clean. **Not merged to `main`, not pushed** — both need the
+  owner's OK. The SDD ledger with every ruling is in
+  `.superpowers/sdd/2026-10-18-uploads-citations-disputes/progress.md` (git-ignored, in the
+  worktree).
+- **Owner's decision 2026-10-22: Groq only for now.** Mistral is abandoned until its account has
+  an active plan; the owner was advised to comment out `MISTRAL_API_KEY` in `.env`.
 - The real-data test used **`ebb_m3`**, a copy of the owner's database (created from template
   `ebb`), so the unmerged migration `003` never touched the real `ebb` database. After the
   merge, and only with the owner's OK: migrate `ebb` to `003`, then drop `ebb_m3`.
@@ -114,8 +118,12 @@ cd backend; $env:EBB_REQUIRE_DB=1; $env:LANGGRAPH_STRICT_MSGPACK='true'; uv run 
   the end) in an isolated git worktree, then `finishing-a-development-branch` (local merge to
   `main`, then push).
 - In brainstorming, give **options to choose from** (via questions), not "my defaults".
-- Also runs `/code-review` and `/simplify` before finishing a milestone; both were done for M1
-  and M2 (run `/simplify` after review fixes, not in parallel with a reviewer).
+- Also runs `/code-review` and `/simplify` before finishing a milestone; both were done for M1,
+  M2 and M3 (run `/simplify` after review fixes, not in parallel with a reviewer).
+- Free tiers only; two LLM providers at most (decided 2026-10-21). Gemini was removed for
+  frequent 503 overloads and answer quality.
+- When the owner steps away: pause cleanly (commit or WIP-commit, update the ledger), and shut
+  Docker down if asked (`docker stop ebb-db-1`, `docker desktop stop`) — never delete volumes.
 - Wants the **latest stable versions** of tools and libraries (Python 3.14, Postgres 18.6,
   uv 0.13, LangGraph 1.2, …). Check versions online before pinning; some GitHub Actions only
   publish full tags (e.g. `astral-sh/setup-uv@v10.3.0`, not `@v10`).
@@ -125,9 +133,15 @@ cd backend; $env:EBB_REQUIRE_DB=1; $env:LANGGRAPH_STRICT_MSGPACK='true'; uv run 
 
 ## Next steps (milestone 4)
 
-1. Finish milestone 3 first: merge `m3-notes-citations` to `main` with the owner's OK, migrate
-   the real `ebb` database to `003`, drop `ebb_m3`, push with the owner's OK.
-2. Resume the milestone 4 brainstorm (`superpowers:brainstorming`), paused on 2026-10-20 until
+1. Finish milestone 3 first (`superpowers:finishing-a-development-branch`): with the owner's OK,
+   merge `m3-notes-citations` into `main` locally, run the full suite on `main`, migrate the real
+   `ebb` database to `003` (back it up first, e.g. `create database ebb_pre003 template ebb`),
+   drop `ebb_m3`, then push and watch CI (`gh run watch --exit-status`). Remove the worktree
+   afterwards. Give the owner the "Rulings I made" list from the SDD ledger before merging.
+2. When Mistral's account is active: re-test it, then rebuild the eval set with Mistral as the
+   writer (`cd backend; uv run ebb eval build --force`, then `eval run`) and commit the new
+   results.
+3. Resume the milestone 4 brainstorm (`superpowers:brainstorming`), paused on 2026-10-20 until
    milestone 3 merges. The owner's decisions so far — don't ask again:
    - Runs only on the owner's PC: `docker compose up` starts the database, the API and the
      website on localhost:3000. No online deploy until sign-in (milestone 6).
@@ -142,7 +156,8 @@ cd backend; $env:EBB_REQUIRE_DB=1; $env:LANGGRAPH_STRICT_MSGPACK='true'; uv run 
      Flashcards/Exam buttons hidden — not yet confirmed), then the study workspace, the
      dashboard, streaming (NFR-1), and the "Before the milestone 4 API" items in
      `docs/superpowers/m2-followups.md`.
-3. Open decisions carried from the plan: the backend host for milestone 6 (Cloud Run vs Render,
+4. Open decisions carried from the plan: the backend host for milestone 6 (Cloud Run vs Render,
    see `docs/plan-reviews.md`).
-4. Check `docs/superpowers/m3-followups.md` (Mistral, the eval, safety) and the m2-followups
-   first section when they touch milestone 4 code.
+5. Check `docs/superpowers/m3-followups.md` (Mistral, the eval, safety, and the graph
+   refactors deferred from `/simplify`) and the m2-followups first section when they touch
+   milestone 4 code — several are listed "before the milestone 4 API".

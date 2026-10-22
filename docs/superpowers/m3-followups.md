@@ -95,6 +95,36 @@ later. Earlier items: [m1-followups.md](m1-followups.md), [m2-followups.md](m2-f
   "1 passages" plurals; web labels with an empty host or title fall back awkwardly.
 - `_today()` is called twice in `eval run` (heading vs file name across midnight).
 
+## Graph refactors deferred from `/simplify` (before the milestone 4 API)
+
+Found by the `/simplify` review and left out because they reshape the graph right before a
+merge. Worth doing before the API wraps the graph.
+
+- **One place that fills state defaults.** New keys are read with `state.get(key, default)` in
+  many nodes (for checkpoints saved by milestone 2); normalise once at the resume boundary
+  instead.
+- **One retry mechanism.** Question batches retry through a graph loop (`citation_retries`,
+  `citation_failures`, `citation_failing`), grades and lessons inside `_verified` with
+  per-call `keep` lambdas; unify them, ideally with the tutor returning only a citation fix.
+- **A typed regrade result** instead of the `(Grade, bool)` tuple.
+- **One candidate-run object** instead of the notes/web `generation_mode` flag threaded through
+  `generate_questions`, `verify_citations` and `search_web`.
+- **Summary tallies from the store** instead of correcting `tally` and `results` copies after a
+  dispute.
+- **Structured citation labels** (domain, title, heading, page) instead of `source_line`
+  parsing the label string that `citations.py` built.
+- **One `current_question_id`** instead of `pending_question_id` plus `retry_question`, and the
+  lesson as `{text, citations}` instead of a separate `lesson_citations` key.
+
+## Small leftovers from `/code-review` and its fixes
+
+- A quote that crosses two line-break hyphens of different kinds (one real compound, one split
+  word) matches neither form.
+- A rewritten question's type and difficulty aren't enforced, so a retry can change a batch's
+  multiple-choice/short mix.
+- `ebb new` from a typed topic doesn't drop duplicate concept names (`create_subject` doesn't
+  use `_insert_concepts`); switching would change behaviour, so it was left.
+
 ## Schema and tests (low priority)
 
 - `grade_disputes` has no check tying `new_grade` null to outcome voided; no `subject_id` index

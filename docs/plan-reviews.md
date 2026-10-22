@@ -282,3 +282,12 @@ before milestone 6, and land E1 and E9 before any data from a second user exists
   `TAVILY_API_KEY` repeats are dropped. Brave Search was dropped because it needs a card.
 - **Chunking settled** (the open item in the eng review): about 1,200 characters per chunk, at
   most 2,000, with about 200 characters of overlap.
+- **Groq only for now (owner's decision, 2026-10-22).** The Mistral account has no active plan
+  (every chat call returns 429 code 1300), so Groq runs without a working fallback until it is
+  activated. The committed eval set was written by Groq `qwen/qwen3.8-27b` instead of Mistral.
+- **A reported misconception caps an LLM grade at partial** (owner's decision after the first
+  real eval, 2026-10-21; enforced in code for grades and re-checks).
+- **Citation details settled during review:** a citation retry rewrites only the questions whose
+  citations failed and keeps the rest (the design said the whole batch); a retried grade keeps
+  its first value; a verified quote needs at least 3 words and 12 characters; a notes file may
+  yield 1–12 concepts (the design said 3–12).
