@@ -69,22 +69,23 @@ def _notices(state: QuizState, generated: Generated[Any]) -> list[str]:
 
 def _web_notice(state: QuizState) -> dict[str, Any]:
     """The notice that repeats were skipped without replacements, once per session."""
-    if state.get("web_notice_shown", False):
+    if state["web_notice_shown"]:
         return {}
     return {"notices": _with_notice(state, WEB_NOTICE), "web_notice_shown": True}
 
 
-# Keys added after milestone 2 are read with a default: a session saved before them may resume.
+# Every node gets its state through fill_defaults (see build._wrap), so keys added after
+# milestone 1 can be indexed here even when a session saved before them resumes.
 
 
 def _sources(state: QuizState, web: bool) -> list[Source]:
     """The concept's web pages if `web`, else its retrieved notes. Candidates are written
     from the web pages in web mode; a question is graded and taught from what it came from."""
-    return [source_from_dict(s) for s in state.get("web_sources" if web else "sources", [])]
+    return [source_from_dict(s) for s in state["web_sources" if web else "sources"]]
 
 
 def _web_mode(state: QuizState) -> bool:
-    return state.get("generation_mode", "notes") == "web"
+    return state["generation_mode"] == "web"
 
 
 def _citation_reset() -> dict[str, Any]:
@@ -143,7 +144,7 @@ def _grade_dict(
 ) -> dict[str, Any]:
     """A grade with no citations of its own shows the question's."""
     final = replace(grade, claims=(), citations=tuple(own) or question.citations)
-    return grade_to_dict(final, state.get("has_notes", False) and not final.citations)
+    return grade_to_dict(final, state["has_notes"] and not final.citations)
 
 
 def _corrected_tally(tally: dict[str, int], dispute: Dispute) -> dict[str, int]:
@@ -224,7 +225,7 @@ def make_nodes(
         """Earlier sessions' prompts on this concept first, then this session's, then those
         still waiting in the batch, without repeats. A session saved before the earlier
         prompts were kept in state asks the store for them."""
-        earlier = state.get("earlier_prompts")
+        earlier = state["earlier_prompts"]
         if earlier is None:
             earlier = answered_prompts(state)
         pending = [q["prompt"] for q in state["batch"]]
@@ -323,7 +324,7 @@ def make_nodes(
 
     def retrieve_notes(state: QuizState) -> dict[str, Any]:
         sources: list[dict[str, Any]] = []
-        if state.get("has_notes", False):
+        if state["has_notes"]:
             user_id, subject_id = ids(state)
             concept = state["concept"]
             chunks = store.search_chunks(
@@ -335,16 +336,20 @@ def make_nodes(
 
     def generate_questions(state: QuizState) -> dict[str, Any]:
         concept = concept_from_dict(state["concept"])
-        failures = state.get("citation_failures", [])
+        failures = state["citation_failures"]
         web_mode = _web_mode(state)
         # A citation retry rewrites part of the same batch, and web questions fill in the
         # last one, so neither is another generation call.
         calls = state["generation_calls_on_concept"] + (0 if failures or web_mode else 1)
-        web_count = state.get("replacements_needed", 0) if web_mode else None
-        candidates = state.get("candidates", [])
+        web_count = state["replacements_needed"] if web_mode else None
+        candidates = state["candidates"]
         # A retry rewrites only the questions whose citations failed; the rest are kept as
-        # they are. A session saved before this was tracked rewrites them all.
-        failing = state.get("citation_failing", list(range(len(candidates)))) if failures else []
+        # they are. A session saved before this was tracked (None) rewrites them all.
+        failing = state["citation_failing"]
+        if not failures:
+            failing = []
+        elif failing is None:
+            failing = list(range(len(candidates)))
         try:
             generated = tutor.generate_questions(
                 concept,
@@ -384,11 +389,11 @@ def make_nodes(
         user_id, _ = ids(state)
         web_mode = _web_mode(state)
         sources = _sources(state, web_mode)
-        retries = state.get("citation_retries", 0)
+        retries = state["citation_retries"]
         checked: list[tuple[Question, tuple[Citation, ...]]] = []
         failures: list[str] = []
         failing: list[int] = []
-        for index, candidate in enumerate(state.get("candidates", [])):
+        for index, candidate in enumerate(state["candidates"]):
             question = question_from_dict(candidate)
             citations, failed = verify(question.claims, sources) if sources else ((), ())
             n = len(failing) + 1  # numbered as the retry lists the failing questions
@@ -443,7 +448,7 @@ def make_nodes(
         if subject is None:
             raise LookupError(f"subject {subject_id} not found")
         concept = state["concept"]
-        searched = {"web_searched": [*state.get("web_searched", []), concept["id"]]}
+        searched = {"web_searched": [*state["web_searched"], concept["id"]]}
         try:
             # Only these two names leave the machine.
             pages = web.search(f"{subject.name} {concept['name']}")
@@ -461,7 +466,7 @@ def make_nodes(
         # Runs again from the top when resumed, so nothing before interrupt() may have side effects.
         batch = state["batch"]
         # After a dispute the question it interrupted is shown again, whatever the grade now is.
-        pending = state.get("pending_question_id")
+        pending = state["pending_question_id"]
         index = next((i for i, q in enumerate(batch) if q["id"] == pending), None)
         if index is None and state["retry_question"]:
             index = 0
@@ -473,7 +478,7 @@ def make_nodes(
         question = batch[index]
         grade = state["grade"]
         feedback = None if grade is None else {"citations": [], "general_knowledge": False, **grade}
-        graded = state.get("last_graded")
+        graded = state["last_graded"]
         reply = interrupt(
             {
                 "concept": state["concept"]["name"],
@@ -488,10 +493,10 @@ def make_nodes(
                 },
                 "feedback": feedback,
                 "lesson": state["lesson"],
-                "lesson_citations": state.get("lesson_citations", []),
+                "lesson_citations": state["lesson_citations"],
                 "notices": state["notices"],
                 "can_dispute": graded is not None and not graded["disputed"],
-                "dispute_result": state.get("dispute_result"),
+                "dispute_result": state["dispute_result"],
             }
         )
         if "dispute" in reply:
@@ -656,7 +661,7 @@ def make_nodes(
 
     def regrade(state: QuizState) -> dict[str, Any]:
         user_id, _ = ids(state)
-        graded = state.get("last_graded")
+        graded = state["last_graded"]
         request = state["dispute"]
         # The turn's notices were shown with its grade; from here on they are the re-check's.
         refused = {"dispute": None, "dispute_result": {"outcome": "refused"}, "notices": []}

@@ -5,6 +5,8 @@ warn on — and will soon block — custom classes, and turn tuples into lists, 
 domain objects are converted at the node boundary with the helpers below.
 """
 
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Literal, TypedDict
@@ -67,6 +69,34 @@ class QuizState(TypedDict, total=False):
     dispute: dict[str, Any] | None  # {id, reason, explanation} waiting for regrade
     dispute_result: dict[str, Any] | None  # shown above the re-shown question
     pending_question_id: str | None  # the question to show again after a dispute
+
+
+# Keys added after milestone 1, with what a session saved before them gets. `None` for
+# earlier_prompts means "ask the store"; for citation_failing, "all the candidates".
+STATE_DEFAULTS: dict[str, Any] = {
+    "has_notes": False,
+    "web_searched": [],
+    "web_failed": False,
+    "web_notice_shown": False,
+    "sources": [],
+    "earlier_prompts": None,
+    "candidates": [],
+    "citation_retries": 0,
+    "citation_failures": [],
+    "citation_failing": None,
+    "generation_mode": "notes",
+    "replacements_needed": 0,
+    "web_sources": [],
+    "lesson_citations": [],
+    "last_graded": None,
+    "dispute_result": None,
+    "pending_question_id": None,
+}
+
+
+def fill_defaults(values: Mapping[str, Any]) -> dict[str, Any]:
+    """A copy of `values` with every absent key of STATE_DEFAULTS filled in."""
+    return {**deepcopy(STATE_DEFAULTS), **values}
 
 
 def _dt(value: datetime | None) -> str | None:

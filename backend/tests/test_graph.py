@@ -27,7 +27,7 @@ from ebb.domain import (
     Option,
     Question,
 )
-from ebb.graph.build import build_graph
+from ebb.graph.build import build_graph, step_label
 from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE, WEB_NOTICE
 from ebb.graph.state import (
     concept_to_dict,
@@ -1361,3 +1361,41 @@ def test_resume_while_regrading_needs_no_model():
     state = graph.get_state(config).values
     assert state["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}  # corrected once
     assert state["concept"]["stage"] == 3
+
+
+def step_labels(store: MemoryStore, subject_id: UUID, tutor: FakeTutor) -> list[str]:
+    """The labels streamed from the start of a session to its first question."""
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": str(uuid4())}}
+    start = {"user_id": str(USER), "subject_id": str(subject_id), "thread_id": "t-1"}
+    events = graph.stream(start, config, stream_mode="custom")
+    return [event["label"] for event in events]
+
+
+def test_step_events_name_each_labelled_step_in_order():
+    store = MemoryStore()
+
+    labels = step_labels(store, make_subject(store, USER, concepts=1), FakeTutor())
+
+    assert labels == ["Writing questions…", "Checking citations against your notes…"]
+
+
+def test_step_events_start_with_reading_the_notes_when_there_are_some():
+    store = MemoryStore()
+
+    labels = step_labels(store, notes_subject(store), FakeTutor(cite=[[("N1", QUOTE)]]))
+
+    assert labels == [
+        "Reading your notes…",
+        "Writing questions…",
+        "Checking citations against your notes…",
+    ]
+
+
+def test_grade_label_without_notes_is_grading():
+    assert step_label("grade_answer", {"has_notes": False}) == "Grading…"
+    assert step_label("grade_answer", {"has_notes": True}) == "Grading against your notes…"
+    assert step_label("generate_questions", {"generation_mode": "web"}) == (
+        "Writing questions from the web…"
+    )
+    assert step_label("pick_concept", {}) is None
