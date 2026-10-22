@@ -98,6 +98,8 @@ def _retryable(error: BaseException) -> bool:
 
 EXHAUSTED_NOTICE = "The tutor couldn't respond — your progress is saved. Try again in a minute."
 REFUSED_NOTICE = "The tutor won't help with that topic."
+# A refusal while finding the concepts in uploaded notes.
+NOTES_REFUSED_NOTICE = "The tutor won't help with these notes."
 
 
 class TutorUnavailable(Exception):
@@ -118,7 +120,9 @@ class TutorRefused(TutorUnavailable):
 
 def _is_refusal(raw: BaseMessage) -> bool:
     """Groq's API ends a reply its content filters withheld with finish_reason
-    "content_filter"; OpenAI-style APIs put a model's refusal in `refusal`."""
+    "content_filter"; OpenAI-style APIs put a model's refusal in `refusal`, which
+    langchain_groq doesn't copy into `additional_kwargs` today (checked for other providers
+    and later versions)."""
     return (
         bool(raw.additional_kwargs.get("refusal"))
         or raw.response_metadata.get("finish_reason") == "content_filter"

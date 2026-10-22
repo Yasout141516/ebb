@@ -185,7 +185,10 @@ def test_new_prints_the_refusal_and_exits_1(fakes):
     assert store.subjects == {}
 
 
-def test_add_prints_the_refusal_and_exits_1(fakes, tmp_path):
+NOTES_REFUSED = "The tutor won't help with these notes."
+
+
+def test_add_prints_the_notes_refusal_and_exits_1(fakes, tmp_path):
     store, tutor = fakes
     runner.invoke(cli.app, ["new", "Networks"])
     tutor.refuse = {"concepts_from_notes"}
@@ -193,8 +196,20 @@ def test_add_prints_the_refusal_and_exits_1(fakes, tmp_path):
     result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
 
     assert result.exit_code == 1
-    assert REFUSED in result.output
+    assert NOTES_REFUSED in flat(result.output)
+    assert REFUSED not in flat(result.output)
     assert store.documents == {}
+
+
+def test_new_with_notes_prints_the_notes_refusal_and_exits_1(fakes, tmp_path):
+    store, tutor = fakes
+    tutor.refuse = {"concepts_from_notes"}
+
+    result = runner.invoke(cli.app, ["new", "Networks", "--notes", str(note_file(tmp_path))])
+
+    assert result.exit_code == 1
+    assert NOTES_REFUSED in flat(result.output)
+    assert store.subjects == {} and store.documents == {}
 
 
 def test_study_refused_generation_shows_the_notice_and_ends_normally(fakes):

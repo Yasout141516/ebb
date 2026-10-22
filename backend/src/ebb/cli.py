@@ -159,9 +159,10 @@ def _ask(payload: dict[str, Any]) -> dict[str, Any]:
         return reply
 
 
-def _exhausted(error: TutorUnavailable) -> NoReturn:
-    """A tutor call outside the graph failed or was refused: its notice, then exit 1."""
-    console.print(f"[red]{escape(error.notice)}[/red]")
+def _exhausted(error: TutorUnavailable, notice: str | None = None) -> NoReturn:
+    """A tutor call outside the graph failed or was refused: the notice (the error's own
+    unless given), then exit 1."""
+    console.print(f"[red]{escape(notice or error.notice)}[/red]")
     cause = str(error).strip()
     if cause:
         console.print(f"[dim]{escape(cause.splitlines()[0])}[/dim]")
@@ -193,7 +194,7 @@ def _find_concepts(
 ) -> tuple[list[str], list[tuple[str, str]]]:
     """Ask for the concepts in one file; returns (matched names, new (name, description))."""
     from ebb.chunking import digest
-    from ebb.llm.tutor import TutorUnavailable
+    from ebb.llm.tutor import NOTES_REFUSED_NOTICE, TutorRefused, TutorUnavailable
 
     # Placeholders: the prompt only uses names and descriptions, so these ids are never stored.
     placeholder = uuid4()
@@ -201,6 +202,8 @@ def _find_concepts(
     with console.status("Finding the concepts in your notes…"):
         try:
             generated = tutor.concepts_from_notes(subject, existing, digest(document.chunks))
+        except TutorRefused as error:
+            _exhausted(error, NOTES_REFUSED_NOTICE)
         except TutorUnavailable as error:
             _exhausted(error)
         except ConfigError as error:
