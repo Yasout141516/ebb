@@ -77,22 +77,22 @@ def _web_notice(state: QuizState) -> dict[str, Any]:
 # Keys added after milestone 2 are read with a default: a session saved before them may resume.
 
 
-def _sources(state: QuizState, key: str) -> list[Source]:
-    return [source_from_dict(s) for s in state.get(key, [])]
+def _sources(state: QuizState, web: bool) -> list[Source]:
+    """The concept's web pages if `web`, else its retrieved notes. Candidates are written
+    from the web pages in web mode; a question is graded and taught from what it came from."""
+    return [source_from_dict(s) for s in state.get("web_sources" if web else "sources", [])]
 
 
 def _web_mode(state: QuizState) -> bool:
     return state.get("generation_mode", "notes") == "web"
 
 
-def _candidate_sources(state: QuizState) -> list[Source]:
-    """What the candidates are written from: the notes, or the web pages in web mode."""
-    return _sources(state, "web_sources" if _web_mode(state) else "sources")
-
-
-def sources_for(state: QuizState, question: Question) -> list[Source]:
-    """The sources `question` was written from, for grading and teaching it."""
-    return _sources(state, "web_sources" if question.source == "web" else "sources")
+# What resets the citation retry for the next candidates.
+_CITATION_RESET: dict[str, Any] = {
+    "citation_retries": 0,
+    "citation_failures": [],
+    "citation_failing": [],
+}
 
 
 def source_line(question: dict[str, Any]) -> str | None:
@@ -160,6 +160,47 @@ def _corrected_tally(tally: dict[str, int], dispute: Dispute) -> dict[str, int]:
     return corrected
 
 
+def _corrected_results(
+    results: list[dict[str, Any]], concept: Concept, dispute: Dispute, moment: datetime
+) -> list[dict[str, Any]]:
+    """`results` with the last entry for `concept` corrected by `dispute`. Entries saved
+    before results carried concept ids are never matched."""
+    results = list(results)
+    index = next(
+        (
+            i
+            for i in reversed(range(len(results)))
+            if results[i].get("concept_id") == str(concept.id)
+        ),
+        None,
+    )
+    if index is None:
+        return results
+    tally = _corrected_tally(results[index]["tally"], dispute)
+    if sum(tally.values()) == 0:
+        del results[index]  # its only answer was voided; record_result skips such concepts
+        return results
+    results[index] = {
+        **results[index],
+        "tally": tally,
+        "stage_after": concept.stage,
+        "tide_after": tide(concept, moment),
+        "next_review_at": concept_to_dict(concept)["next_review_at"],
+    }
+    return results
+
+
+def _dedupe(questions: Sequence[Question], known: Sequence[str]) -> list[Question]:
+    """`questions` without those repeating a known prompt or a question kept before them."""
+    seen = list(known)
+    kept: list[Question] = []
+    for question in questions:
+        if not too_close(question.prompt, seen):
+            kept.append(question)
+            seen.append(question.prompt)
+    return kept
+
+
 def _dispute_result(dispute: Dispute, concept: Concept) -> dict[str, Any]:
     return {
         "outcome": dispute.outcome.value,
@@ -178,15 +219,19 @@ def make_nodes(
     def ids(state: QuizState) -> tuple[UUID, UUID]:
         return UUID(state["user_id"]), UUID(state["subject_id"])
 
-    def earlier_prompts(state: QuizState) -> list[str]:
-        """Earlier sessions' prompts on this concept first, then this session's, without repeats."""
+    def answered_prompts(state: QuizState) -> list[str]:
         user_id, _ = ids(state)
-        answered = store.answered_prompts(user_id, UUID(state["concept"]["id"]), 40)
-        return list(dict.fromkeys([*answered, *state["asked_prompts"]]))
+        return store.answered_prompts(user_id, UUID(state["concept"]["id"]), 40)
 
-    def pending_prompts(state: QuizState) -> list[str]:
-        """The prompts of this concept's questions still waiting to be asked."""
-        return [q["prompt"] for q in state["batch"]]
+    def known_prompts(state: QuizState) -> list[str]:
+        """Earlier sessions' prompts on this concept first, then this session's, then those
+        still waiting in the batch, without repeats. A session saved before the earlier
+        prompts were kept in state asks the store for them."""
+        earlier = state.get("earlier_prompts")
+        if earlier is None:
+            earlier = answered_prompts(state)
+        pending = [q["prompt"] for q in state["batch"]]
+        return list(dict.fromkeys([*earlier, *state["asked_prompts"], *pending]))
 
     def record_result(state: QuizState) -> list[dict[str, Any]]:
         results = list(state["results"])
@@ -208,35 +253,6 @@ def make_nodes(
         )
         return results
 
-    def corrected_results(
-        results: list[dict[str, Any]], concept: Concept, dispute: Dispute
-    ) -> list[dict[str, Any]]:
-        """`results` with the last entry for `concept` corrected by `dispute`. Entries saved
-        before results carried concept ids are never matched."""
-        results = list(results)
-        index = next(
-            (
-                i
-                for i in reversed(range(len(results)))
-                if results[i].get("concept_id") == str(concept.id)
-            ),
-            None,
-        )
-        if index is None:
-            return results
-        tally = _corrected_tally(results[index]["tally"], dispute)
-        if sum(tally.values()) == 0:
-            del results[index]  # its only answer was voided; record_result skips such concepts
-            return results
-        results[index] = {
-            **results[index],
-            "tally": tally,
-            "stage_after": concept.stage,
-            "tide_after": tide(concept, now()),
-            "next_review_at": concept_to_dict(concept)["next_review_at"],
-        }
-        return results
-
     def load_learner(state: QuizState) -> dict[str, Any]:
         user_id, subject_id = ids(state)
         session_id = store.create_session(user_id, subject_id, state["thread_id"])
@@ -248,9 +264,7 @@ def make_nodes(
             "web_notice_shown": False,
             "sources": [],
             "candidates": [],
-            "citation_retries": 0,
-            "citation_failures": [],
-            "citation_failing": [],
+            **_CITATION_RESET,
             "studied_concept_ids": [],
             "results": [],
             "quit": False,
@@ -319,12 +333,8 @@ def make_nodes(
                 user_id, subject_id, f"{concept['name']} {concept['description']}"
             )
             sources = [source_to_dict(s) for s in note_sources(chunks)]
-        return {
-            "sources": sources,
-            "citation_retries": 0,
-            "citation_failures": [],
-            "citation_failing": [],
-        }
+        # Fetched once per concept; this session's answers are in asked_prompts.
+        return {"sources": sources, "earlier_prompts": answered_prompts(state), **_CITATION_RESET}
 
     def generate_questions(state: QuizState) -> dict[str, Any]:
         concept = concept_from_dict(state["concept"])
@@ -342,8 +352,8 @@ def make_nodes(
             generated = tutor.generate_questions(
                 concept,
                 # Web questions join the batch, so they must not repeat what is waiting in it.
-                list(dict.fromkeys([*earlier_prompts(state), *pending_prompts(state)])),
-                _candidate_sources(state),
+                known_prompts(state),
+                _sources(state, web_mode),
                 failures,
                 web_count=web_count,
                 rewrite=[question_from_dict(candidates[i]) for i in failing],
@@ -376,7 +386,7 @@ def make_nodes(
     def verify_citations(state: QuizState) -> dict[str, Any]:
         user_id, _ = ids(state)
         web_mode = _web_mode(state)
-        sources = _candidate_sources(state)
+        sources = _sources(state, web_mode)
         retries = state.get("citation_retries", 0)
         checked: list[tuple[Question, tuple[Citation, ...]]] = []
         failures: list[str] = []
@@ -413,19 +423,12 @@ def make_nodes(
             ]
         # A repeat of an earlier question, of one still waiting in the batch, or of one
         # kept just before it from these candidates.
-        seen = [*earlier_prompts(state), *pending_prompts(state)]
-        kept: list[Question] = []
-        for question in final:
-            if not too_close(question.prompt, seen):
-                kept.append(question)
-                seen.append(question.prompt)
+        kept = _dedupe(final, known_prompts(state))
         store.save_questions(user_id, UUID(state["session_id"]), kept)
         update: dict[str, Any] = {
             "batch": [*state["batch"], *(question_to_dict(q) for q in kept)],
             "candidates": [],
-            "citation_retries": 0,
-            "citation_failures": [],
-            "citation_failing": [],
+            **_CITATION_RESET,
             "generation_mode": "notes",
             # Only repeats from a notes batch are replaced; web ones are simply dropped.
             "replacements_needed": 0 if web_mode else len(final) - len(kept),
@@ -524,7 +527,7 @@ def make_nodes(
         if question.type == "mcq":
             graded = grade_mcq(question, state["answer"])
             return {"grade": _grade_dict(state, graded, (), question), "model_used": "code"}
-        sources = sources_for(state, question)
+        sources = _sources(state, question.source == "web")
         try:
             generated, citations = _verified(
                 lambda failures, previous: tutor.grade(
@@ -577,7 +580,7 @@ def make_nodes(
     def disputable(state: QuizState) -> dict[str, Any]:
         """What regrade needs of the answer just graded. Its sources are kept here, so a
         dispute raised after moving on to another concept still has them."""
-        sources = sources_for(state, question_from_dict(state["question"]))
+        sources = _sources(state, state["question"].get("source") == "web")
         return {
             "attempt_id": state["attempt_id"],
             "concept_id": state["concept"]["id"],
@@ -591,7 +594,7 @@ def make_nodes(
     def teach(state: QuizState) -> dict[str, Any]:
         question = question_from_dict(state["question"])
         grade = grade_from_dict(state["grade"])
-        sources = sources_for(state, question)
+        sources = _sources(state, question.source == "web")
         try:
             generated, citations = _verified(
                 lambda failures, previous: tutor.teach(
@@ -688,7 +691,7 @@ def make_nodes(
             update["concept"] = concept_to_dict(concept)
             update["tally"] = _corrected_tally(state["tally"], recorded)
         else:
-            update["results"] = corrected_results(state["results"], concept, recorded)
+            update["results"] = _corrected_results(state["results"], concept, recorded, now())
         return update
 
     def next_concept(state: QuizState) -> dict[str, Any]:

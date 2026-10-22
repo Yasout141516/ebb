@@ -42,6 +42,7 @@ class QuizState(TypedDict, total=False):
     correct_streak: int
     generation_calls_on_concept: int
     sources: list[dict[str, Any]]  # the concept's retrieved note chunks, as Source dicts
+    earlier_prompts: list[str]  # earlier sessions' answered prompts on the concept
     candidates: list[dict[str, Any]]  # generated questions waiting for verify_citations
     citation_retries: int
     citation_failures: list[str]  # why the last candidates' citations failed; empty when done

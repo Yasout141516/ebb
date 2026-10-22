@@ -702,12 +702,29 @@ class CountingStore(MemoryStore):
     def __init__(self) -> None:
         super().__init__()
         self.searches = 0
+        self.prompt_lookups = 0
 
     def search_chunks(
         self, user_id: UUID, subject_id: UUID, text: str, limit: int = 4
     ) -> list[Chunk]:
         self.searches += 1
         return super().search_chunks(user_id, subject_id, text, limit)
+
+    def answered_prompts(self, user_id: UUID, concept_id: UUID, limit: int = 40) -> list[str]:
+        self.prompt_lookups += 1
+        return super().answered_prompts(user_id, concept_id, limit)
+
+
+def test_earlier_prompts_are_looked_up_once_per_concept():
+    store, tutor = CountingStore(), FakeTutor(batch_size=1)
+    subject_id = make_subject(store, USER, concepts=1)
+    answers = iter([reply("right"), {"quit": True}])
+
+    _, payloads = run(tutor, store, subject_id, lambda p: next(answers))
+
+    assert len(tutor.avoid_calls) == 2  # two batches, one lookup
+    assert store.prompt_lookups == 1
+    assert payloads[0]["question"]["prompt"] in tutor.avoid_calls[1]
 
 
 def test_resume_keeps_the_retrieved_sources():
