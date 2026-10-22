@@ -44,6 +44,7 @@ from ebb.llm.schemas import (
     NoteConceptList,
     QuestionBatch,
     RegradeResult,
+    RewrittenQuestions,
     WebQuestionBatch,
 )
 
@@ -117,7 +118,10 @@ class Tutor(Protocol):
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
         web_count: int | None = None,
-    ) -> Generated[list[Question]]: ...
+        rewrite: Sequence[Question] = (),
+    ) -> Generated[list[Question]]:
+        """With `rewrite`, a citation retry: only those questions, rewritten in order."""
+        ...
 
     def grade(
         self,
@@ -125,7 +129,10 @@ class Tutor(Protocol):
         answer: str,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
-    ) -> Generated[Grade]: ...
+        previous: Grade | None = None,
+    ) -> Generated[Grade]:
+        """`previous` is the grade a citation retry keeps, fixing only its citations."""
+        ...
 
     def teach(
         self,
@@ -134,6 +141,7 @@ class Tutor(Protocol):
         grade: Grade,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
+        previous: Lesson | None = None,
     ) -> Generated[Lesson]: ...
 
     def concepts_from_notes(
@@ -149,6 +157,7 @@ class Tutor(Protocol):
         explanation: str,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
+        previous: Grade | None = None,
     ) -> Generated[tuple[Grade, bool]]: ...
 
     def write_eval_case(
@@ -214,15 +223,64 @@ def _failures_section(failures: Sequence[str]) -> str:
     )
 
 
+def _claims_text(claims: Sequence[Claim]) -> str:
+    return "; ".join(f'[{c.source}] "{c.quote}"' for c in claims) or "(none)"
+
+
+def _previous_section(kind: str, fields: Sequence[tuple[str, str]], keep: str) -> str:
+    """What a citation retry must keep: the last answer, fenced off as data."""
+    body = "\n".join(f"{name}: {value}" for name, value in fields)
+    return (
+        f"\nYour previous {kind} is between the markers below. {keep}\n"
+        f"<<<PREVIOUS\n{_neutralise(body)}\nPREVIOUS>>>\n"
+    )
+
+
+def _previous_grade(grade: Grade | None) -> str:
+    if grade is None:
+        return ""
+    fields = [("grade", grade.value.value), ("explanation", grade.explanation)]
+    if grade.misconception:
+        fields.append(("misconception", grade.misconception))
+    fields.append(("citations", _claims_text(grade.claims)))
+    return _previous_section(
+        "grade", fields, "Keep its grade and explanation; only fix its citations."
+    )
+
+
+def _previous_lesson(lesson: Lesson | None) -> str:
+    if lesson is None:
+        return ""
+    fields = [("lesson", lesson.text), ("citations", _claims_text(lesson.claims))]
+    return _previous_section("lesson", fields, "Keep the lesson; only fix its citations.")
+
+
+def _questions_text(questions: Sequence[Question]) -> str:
+    """The questions a citation retry rewrites, numbered as its failures name them."""
+    entries = []
+    for n, q in enumerate(questions, 1):
+        lines = [f"Question {n} ({q.type}, difficulty {q.difficulty}): {q.prompt}"]
+        lines += [f"  option: {o.text}" + (" (correct)" if o.is_correct else "") for o in q.options]
+        lines.append(f"  reference answer: {q.reference_answer}")
+        lines.append(f"  citations: {_claims_text(q.claims)}")
+        entries.append("\n".join(lines))
+    return _neutralise("\n\n".join(entries))
+
+
 def _with_sources(
-    text: str, sources: Sequence[Source], failures: Sequence[str], instructions: str
+    text: str,
+    sources: Sequence[Source],
+    failures: Sequence[str],
+    instructions: str,
+    previous: str = "",
 ) -> str:
-    """The template as written; with sources, also the sources, citing rules and failures."""
+    """The template as written; with sources, also the sources and citing rules, and on a
+    retry what to keep and the failures."""
     if not sources:
         return text
     text += _sources_section(sources) + f"\n{instructions}\n"
     if failures:
-        text += _failures_section(failures)
+        text += previous + _failures_section(failures)
     return text
 
 
@@ -368,11 +426,13 @@ class LangChainTutor:
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
         web_count: int | None = None,
+        rewrite: Sequence[Question] = (),
     ) -> Generated[list[Question]]:
         avoid_text = "\n".join(f"- {p}" for p in avoid) or "(none)"
+        count = len(rewrite) if rewrite else web_count
 
         def to_questions(batch: QuestionBatch | WebQuestionBatch) -> list[Question]:
-            drafts = batch.questions if web_count is None else batch.questions[:web_count]
+            drafts = batch.questions if count is None else batch.questions[:count]
             return [
                 Question(
                     id=uuid4(),
@@ -387,7 +447,15 @@ class LangChainTutor:
                 for draft in drafts
             ]
 
-        if web_count is None:
+        if rewrite:
+            template, schema = "rewrite_questions", RewrittenQuestions
+            values = {
+                "name": concept.name,
+                "description": concept.description,
+                "count": str(len(rewrite)),
+                "questions": _questions_text(rewrite),
+            }
+        elif web_count is None:
             template, schema = "generate_questions", QuestionBatch
             values = {"name": concept.name, "description": concept.description}
         else:
@@ -413,6 +481,7 @@ class LangChainTutor:
         answer: str,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
+        previous: Grade | None = None,
     ) -> Generated[Grade]:
         prompt = _with_sources(
             _prompt(
@@ -424,6 +493,7 @@ class LangChainTutor:
             sources,
             failures,
             _GRADE_AGAINST_SOURCES + " " + _CITE_ITEM.format(item="grade").capitalize() + ".",
+            _previous_grade(previous),
         )
         return self._run(
             lambda m: m.with_structured_output(GradeResult),
@@ -446,6 +516,7 @@ class LangChainTutor:
         grade: Grade,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
+        previous: Lesson | None = None,
     ) -> Generated[Lesson]:
         prompt = _with_sources(
             _prompt(
@@ -458,6 +529,7 @@ class LangChainTutor:
             sources,
             failures,
             _CITE_ITEM.format(item="lesson").capitalize() + ", for facts taken from a source.",
+            _previous_lesson(previous),
         )
         if not sources:
             return self._run(
@@ -495,6 +567,7 @@ class LangChainTutor:
         explanation: str,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
+        previous: Grade | None = None,
     ) -> Generated[tuple[Grade, bool]]:
         prompt = _with_sources(
             _prompt(
@@ -510,6 +583,7 @@ class LangChainTutor:
             sources,
             failures,
             _GRADE_AGAINST_SOURCES + " " + _CITE_ITEM.format(item="grade").capitalize() + ".",
+            _previous_grade(previous),
         )
         return self._run(
             lambda m: m.with_structured_output(RegradeResult),

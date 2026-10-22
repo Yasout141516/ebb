@@ -105,6 +105,10 @@ class WebQuestionBatch(BaseModel):
         return value
 
 
+class RewrittenQuestions(WebQuestionBatch):
+    """Questions rewritten because their citations failed, as many as were sent."""
+
+
 class GradeResult(BaseModel):
     grade: Literal["correct", "partial", "incorrect"]
     explanation: str

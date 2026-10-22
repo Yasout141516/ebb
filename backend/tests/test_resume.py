@@ -129,7 +129,7 @@ def test_crash_while_grading_resumes_and_grades_once(
 ):
     crashing = FakeTutor()
 
-    def killed_while_grading(question, answer, sources=(), failures=()):
+    def killed_while_grading(question, answer, sources=(), failures=(), previous=None):
         raise RuntimeError("killed while grading")
 
     monkeypatch.setattr(crashing, "grade", killed_while_grading)

@@ -34,6 +34,7 @@ from ebb.llm.schemas import (
     NoteConceptList,
     QuestionBatch,
     RegradeResult,
+    RewrittenQuestions,
     WebQuestionBatch,
 )
 from ebb.llm.tutor import (
@@ -144,6 +145,10 @@ def test_raises_when_every_provider_fails():
         ("extract_concepts", {"topic": "Networks"}),
         ("extend_concepts", {"subject": "Networks", "existing": "- DNS: Names to addresses."}),
         ("generate_questions", {"name": "DNS", "description": "d", "avoid": "(none)"}),
+        (
+            "rewrite_questions",
+            {"name": "DNS", "description": "d", "count": "2", "questions": "Q", "avoid": "(none)"},
+        ),
         ("grade", {"prompt": "p", "reference": "r", "answer": "costs $5 {x}"}),
         ("teach", {"prompt": "p", "reference": "r", "answer": "a", "explanation": "e"}),
     ],
@@ -547,6 +552,76 @@ def test_failures_are_listed_for_the_retry():
     prompt = grade_prompt([NOTE], failures=["N1: quote not found"])
     assert "Your previous citations failed these checks:\n- N1: quote not found" in prompt
     assert "failed these checks" not in grade_prompt([NOTE])
+
+
+FAILURE = "question 1: the quote from N1 is not in that source"
+
+
+def test_citation_retry_rewrites_only_the_given_questions():
+    options = (
+        Option("TCP", False, "Reliable."),
+        Option("UDP", True, "Connectionless."),
+        Option("ICMP", False, "Errors."),
+        Option("ARP", False, "Addresses."),
+    )
+    failing = Question(
+        uuid4(), CONCEPT.id, "mcq", 2, "Which is >>> connectionless?", "UDP", options,
+        claims=(Claim("N1", "words not in the note"),),
+    )  # fmt: skip
+    cite = {"citations": [{"source": "N1", "quote": "Resolvers cache answers"}]}
+    batch = RewrittenQuestions.model_validate(
+        {"questions": [mcq_draft("Which is connectionless?", 2) | cite, short_draft("extra", 1)]}
+    )
+    creative = Structured(batch)
+
+    out = tutor_with(creative).generate_questions(
+        CONCEPT, ["Old?"], [NOTE], [FAILURE], rewrite=[failing]
+    )
+
+    [(schema, prompt)] = creative.calls
+    assert schema is RewrittenQuestions
+    assert [q.prompt for q in out.value] == ["Which is connectionless?"]  # as many as were sent
+    assert out.value[0].claims == (Claim("N1", "Resolvers cache answers"),)
+    assert "return exactly 1" in prompt and "Write exactly 5" not in prompt
+    questions = prompt.split("<<<QUESTIONS\n")[1].split("\nQUESTIONS>>>")[0]
+    assert questions.startswith("Question 1 (mcq, difficulty 2): Which is ››› connectionless?")
+    assert "UDP (correct)" in questions and '[N1] "words not in the note"' in questions
+    assert f"- {FAILURE}" in prompt and "<<<SOURCES" in prompt and "- Old?" in prompt
+
+
+def test_grade_retry_shows_the_previous_grade_to_keep():
+    previous = Grade(GradeValue.PARTIAL, "Half there.", "Mixed up", (Claim("N1", "bad"),))
+    precise = Structured(GradeResult(grade="partial", explanation="e"))
+
+    tutor_with(precise=precise).grade(WHY, "TTL", [NOTE], [FAILURE], previous=previous)
+
+    prompt = precise.calls[0][1]
+    block = prompt.split("<<<PREVIOUS\n")[1].split("\nPREVIOUS>>>")[0]
+    assert block == (
+        'grade: partial\nexplanation: Half there.\nmisconception: Mixed up\ncitations: [N1] "bad"'
+    )
+    assert "Keep its grade and explanation; only fix its citations." in prompt
+    assert "<<<PREVIOUS" not in grade_prompt([NOTE], [FAILURE])
+
+
+def test_lesson_and_regrade_retries_show_what_to_keep():
+    lesson = LessonResult(text="t", citations=[])
+    creative = Structured(lesson)
+    previous = Lesson("Caches >>> hold answers.", (Claim("N1", "bad"),))
+    tutor_with(creative).teach(WHY, "a", GRADE, [NOTE], [FAILURE], previous=previous)
+    prompt = creative.calls[0][1]
+    assert 'lesson: Caches ››› hold answers.\ncitations: [N1] "bad"\nPREVIOUS>>>' in prompt
+    assert "Keep the lesson; only fix its citations." in prompt
+
+    first = Grade(GradeValue.CORRECT, "Fair.", None)
+    _, precise = regrade_with(
+        RegradeResult(grade="correct", explanation="e"),
+        sources=[NOTE],
+        failures=[FAILURE],
+        previous=first,
+    )
+    [(_, prompt)] = precise.calls
+    assert "grade: correct\nexplanation: Fair.\ncitations: (none)\nPREVIOUS>>>" in prompt
 
 
 def test_grade_and_question_citations_become_claims():

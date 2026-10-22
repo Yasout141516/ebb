@@ -45,6 +45,7 @@ class QuizState(TypedDict, total=False):
     candidates: list[dict[str, Any]]  # generated questions waiting for verify_citations
     citation_retries: int
     citation_failures: list[str]  # why the last candidates' citations failed; empty when done
+    citation_failing: list[int]  # indexes of the candidates those failures are about
     generation_mode: Literal["notes", "web"]  # "web" while replacements for repeats are written
     replacements_needed: int  # repeats dropped from the last notes batch
     web_sources: list[dict[str, Any]]  # the concept's web pages, as Source dicts

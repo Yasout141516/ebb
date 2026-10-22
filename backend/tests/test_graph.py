@@ -23,6 +23,7 @@ from ebb.domain import (
     Concept,
     Grade,
     GradeValue,
+    Lesson,
     NewDocument,
     Option,
     Question,
@@ -492,6 +493,59 @@ def test_bad_citation_retries_then_passes():
     assert final["generation_calls_on_concept"] == 1
 
 
+def test_citation_retry_rewrites_only_the_failing_questions():
+    good, bad = [("N1", QUOTE)], [("N1", "these words are not in the notes")]
+    store = MemoryStore()
+    tutor = FakeTutor(cite_each=[[good, good, bad, good, good], [good]])
+    subject_id = notes_subject(store)
+
+    final, _ = run(tutor, store, subject_id, lambda p: {"quit": True})
+
+    first, rewritten = tutor.generated
+    assert tutor.rewrite_calls[1] == [first[2]]
+    assert tutor.failures_calls[1] == ["question 1: the quote from N1 is not in that source"]
+    assert len(rewritten) == 1
+    kept = [first[0], first[1], first[3], first[4]]
+    assert set(store.questions) == {q.id for q in [*kept, *rewritten]}
+    for question in kept:  # the verified four are saved exactly as first written
+        saved = store.questions[question.id]
+        assert (saved.prompt, saved.type, saved.difficulty) == (
+            question.prompt,
+            question.type,
+            question.difficulty,
+        )
+        assert [c.quote for c in saved.citations] == [QUOTE]
+    assert all(q.source == "notes" for q in store.questions.values())
+    assert final["generation_calls_on_concept"] == 1
+
+
+def test_grade_retry_keeps_the_grade_and_takes_the_new_citations():
+    class ChangingRetry(FakeTutor):
+        def grade(self, question, answer, sources=(), failures=(), previous=None):
+            generated = super().grade(question, answer, sources, failures, previous)
+            if previous is None:
+                return generated
+            changed = replace(generated.value, value=GradeValue.CORRECT, explanation="Changed.")
+            return replace(generated, value=changed)
+
+    store = MemoryStore()
+    tutor = ChangingRetry(
+        cite=[[("N1", QUOTE)]], grade_cites=[[("N9", "x")], [("N1", OTHER_QUOTE)]]
+    )
+    subject_id = notes_subject(store)
+
+    _, payloads = run(tutor, store, subject_id, quit_after(1, lambda p: reply("meh")))
+
+    first = tutor.grade_previous[1]
+    assert tutor.grade_previous[0] is None
+    assert (first.value, first.claims) == (GradeValue.PARTIAL, (Claim("N9", "x"),))
+    feedback = payloads[1]["feedback"]
+    assert (feedback["value"], feedback["explanation"]) == ("partial", "Graded partial.")
+    assert [c["quote"] for c in feedback["citations"]] == [OTHER_QUOTE]
+    [attempt] = store.attempts.values()
+    assert attempt.grade is GradeValue.PARTIAL
+
+
 def test_three_bad_citations_fall_back_to_general():
     store, tutor = MemoryStore(), FakeTutor(cite=[[("N9", "x")]] * 3)
     subject_id = notes_subject(store)
@@ -599,10 +653,10 @@ def test_grade_citation_retries_stop_after_two():
 
 def test_failed_grade_retry_keeps_the_first_grade():
     class FailingRetry(FakeTutor):
-        def grade(self, question, answer, sources=(), failures=()):
+        def grade(self, question, answer, sources=(), failures=(), previous=None):
             if failures:
                 raise AllProvidersExhausted("busy")
-            return super().grade(question, answer, sources, failures)
+            return super().grade(question, answer, sources, failures, previous)
 
     store = MemoryStore()
     tutor = FailingRetry(cite=[[("N1", QUOTE)]], grade_cites=[[("N9", "x")]])
@@ -637,6 +691,8 @@ def test_lesson_without_valid_citations_shows_none_of_its_own():
     _, payloads = run(tutor, store, subject_id, quit_after(1, always_wrong))
 
     assert tutor.teach_attempts == 1 + MAX_RETRIES
+    lesson = Lesson("Here is the idea, with an example.", (Claim("N9", "x"),))
+    assert tutor.teach_previous == [None, lesson, lesson]  # each retry sees the last lesson
     assert payloads[1]["lesson"] == "Here is the idea, with an example."
     assert payloads[1]["lesson_citations"] == []
     assert [c["quote"] for c in payloads[1]["feedback"]["citations"]] == [QUOTE]  # the question's
@@ -1184,7 +1240,17 @@ def test_regrade_unavailable_keeps_the_grade():
 
 def test_regrade_checks_the_grades_sources_and_cites_them():
     class CitingTutor(FakeTutor):
-        def regrade(self, question, answer, grade, reason, explanation, sources=(), failures=()):
+        def regrade(
+            self,
+            question,
+            answer,
+            grade,
+            reason,
+            explanation,
+            sources=(),
+            failures=(),
+            previous=None,
+        ):
             self.regrade_sources = [s.label for s in sources]
             generated = super().regrade(question, answer, grade, reason, explanation)
             new, ambiguous = generated.value

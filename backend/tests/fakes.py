@@ -383,6 +383,7 @@ class FakeTutor:
         extensions: list[list[str]] | None = None,
         fail_extend: bool = False,
         cite: list[list[tuple[str, str]]] | None = None,
+        cite_each: list[list[list[tuple[str, str]]]] | None = None,
         grade_cites: list[list[tuple[str, str]]] | None = None,
         teach_cites: list[list[tuple[str, str]]] | None = None,
         web_prompts: list[str] | None = None,
@@ -407,8 +408,14 @@ class FakeTutor:
         self.avoid_calls: list[list[str]] = []
         self.counter = 0
         self.cite = cite  # claims per generate call, applied to every question in that batch
+        self.cite_each = cite_each  # claims per generate call, per question; overrides cite
         self.grade_cites = grade_cites  # claims per grade call
         self.teach_cites = teach_cites  # claims per teach call
+        self.generated: list[list[Question]] = []  # what each generate call returned
+        self.rewrite_calls: list[list[Question]] = []
+        self.grade_previous: list[Grade | None] = []
+        self.teach_previous: list[Lesson | None] = []
+        self.regrade_previous: list[Grade | None] = []
         self.web_prompts = web_prompts  # prompts returned in web mode
         self.prompts = prompts  # prompts returned for normal batches
         self.sources_calls: list[list[Source]] = []
@@ -458,22 +465,35 @@ class FakeTutor:
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
         web_count: int | None = None,
+        rewrite: Sequence[Question] = (),
     ) -> Generated[list[Question]]:
+        """A rewrite keeps each question's type, difficulty and prompt: only its claims change."""
         self.generate_attempts += 1
         self.avoid_calls.append(list(avoid))
         self.sources_calls.append(list(sources))
         self.failures_calls.append(list(failures))
         self.web_count_calls.append(web_count)
+        self.rewrite_calls.append(list(rewrite))
         if self.fail_generate or self.generate_attempts == self.fail_generate_on_call:
             raise AllProvidersExhausted("generation down")
         self.generate_calls.append(concept.name)
-        claims = self._claims(self.cite, self.generate_attempts - 1)
-        pattern = BATCH_PATTERN[: self.batch_size] if web_count is None else None
-        if pattern is None:
+        call = self.generate_attempts - 1
+        claims = self._claims(self.cite, call)
+        if rewrite:
+            pattern = [(q.type, q.difficulty) for q in rewrite]
+        elif web_count is None:
+            pattern = BATCH_PATTERN[: self.batch_size]
+        else:
             pattern = [BATCH_PATTERN[n % len(BATCH_PATTERN)] for n in range(web_count)]
         scripted = self.prompts if web_count is None else self.web_prompts
+        if rewrite:
+            scripted = [q.prompt for q in rewrite]
         questions = []
         for index, (kind, difficulty) in enumerate(pattern):
+            if self.cite_each is not None:
+                each = self.cite_each[call] if call < len(self.cite_each) else []
+                pairs = each[index] if index < len(each) else []
+                claims = tuple(Claim(source, quote) for source, quote in pairs)
             self.counter += 1
             options: tuple[Option, ...] = ()
             if kind == "mcq":
@@ -501,6 +521,7 @@ class FakeTutor:
                     claims=claims,
                 )
             )
+        self.generated.append(questions)
         return self._out(questions)
 
     def grade(
@@ -509,7 +530,9 @@ class FakeTutor:
         answer: str,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
+        previous: Grade | None = None,
     ) -> Generated[Grade]:
+        self.grade_previous.append(previous)
         if self.fail_grade_times > 0:
             self.fail_grade_times -= 1
             raise AllProvidersExhausted("grading down")
@@ -527,7 +550,9 @@ class FakeTutor:
         grade: Grade,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
+        previous: Lesson | None = None,
     ) -> Generated[Lesson]:
+        self.teach_previous.append(previous)
         if self.fail_teach:
             raise AllProvidersExhausted("teaching down")
         claims = self._claims(self.teach_cites, self.teach_attempts)
@@ -556,8 +581,10 @@ class FakeTutor:
         explanation: str,
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
+        previous: Grade | None = None,
     ) -> Generated[tuple[Grade, bool]]:
         self.regrade_calls.append((answer, reason, explanation))
+        self.regrade_previous.append(previous)
         if self.fail_regrade:
             raise AllProvidersExhausted("regrade down")
         call = len(self.regrade_calls) - 1
