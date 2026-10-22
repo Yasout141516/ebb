@@ -47,6 +47,14 @@ def test_verify_tolerates_pdf_line_breaks_and_typography():
     assert len(cites) == 1 and fails == ()
 
 
+def test_verify_folds_ligatures_in_stored_chunks():
+    # Chunks stored before extraction folded ligatures still verify: casefold() turns "ﬁ" into "fi".
+    text = "Intro page. Beneﬁts of MVC are ﬂexible."
+    src = Source("N1", "chunk", "id", "a.pdf", text, page_start=4, page_offsets=(0, 12))
+    cites, fails = verify([Claim("N1", "Benefits of MVC are flexible")], [src])
+    assert fails == () and [c.page for c in cites] == [5]
+
+
 def test_quote_split_across_chunks_fails():
     cites, fails = verify([Claim("N1", "network and host. ARP resolves")], [N1, N2])
     assert cites == () and len(fails) == 1

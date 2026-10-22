@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +16,33 @@ MAX_BYTES = 20 * 1024 * 1024
 MAX_FILES = 5
 MIN_CHARS_PER_PAGE = 50
 KINDS = {".pdf": "pdf", ".txt": "txt", ".md": "md"}
+
+# pypdf keeps typographic ligatures ("ﬁ"), and Postgres full-text search doesn't match them
+# to "fi". Only these are folded: full NFKC would also turn "2¹⁰" into "210".
+_LIGATURES = str.maketrans(
+    {
+        "ﬀ": "ff",
+        "ﬁ": "fi",
+        "ﬂ": "fl",
+        "ﬃ": "ffi",
+        "ﬄ": "ffl",
+        "ﬅ": "st",
+        "ﬆ": "st",
+    }
+)
+
+# pypdf raises these, not only PyPdfError, on damaged real-world files.
+_DAMAGED_PDF = (
+    PyPdfError,
+    ValueError,
+    KeyError,
+    TypeError,
+    AttributeError,
+    IndexError,
+    zlib.error,
+    RecursionError,
+    OSError,
+)
 
 
 class NotesError(Exception):
@@ -74,11 +102,15 @@ def read_notes(path: Path) -> ExtractedNotes:
     )
 
 
+def fold_ligatures(text: str) -> str:
+    return text.translate(_LIGATURES)
+
+
 def _pdf_pages(path: Path, data: bytes) -> tuple[str, ...]:
     try:
         reader = pypdf.PdfReader(io.BytesIO(data))
-        return tuple(page.extract_text() or "" for page in reader.pages)
-    except PyPdfError:
+        return tuple(fold_ligatures(page.extract_text() or "") for page in reader.pages)
+    except _DAMAGED_PDF:
         raise NotesError(f"Can't open {path}.") from None
 
 
