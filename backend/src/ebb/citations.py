@@ -12,18 +12,23 @@ from ebb.web import WebPage
 MAX_CITATIONS = 3
 MAX_QUOTE = 200
 MAX_RETRIES = 2
+# A quote shorter than this doesn't show where in the source it came from.
+MIN_QUOTE_WORDS = 3
+MIN_QUOTE_CHARS = 12
 
 _TYPOGRAPHY = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"', "–": "-", "—": "-"})
 _HYPHEN_BREAK = re.compile(r"-[ \t]*\r?\n\s*")
 
 
-def _normalise_with_map(text: str) -> tuple[str, list[int]]:
-    """Normalise `text` and return, for each output character, its index in `text`."""
+def _normalise_with_map(text: str, join: bool = True) -> tuple[str, list[int]]:
+    """Normalise `text` and return, for each output character, its index in `text`.
+    A hyphen at a line break is dropped so a split word joins ("net-\\nwork" is "network"),
+    or with `join` false kept so a compound stays whole ("well-\\nknown" is "well-known")."""
     text = text.translate(_TYPOGRAPHY)
     kept = list(range(len(text)))
-    # Drop each "-<line break><indent>" run so the two halves of a word join.
+    # Drop each "-<line break><indent>" run, or all of it but the hyphen.
     for match in reversed(list(_HYPHEN_BREAK.finditer(text))):
-        del kept[match.start() : match.end()]
+        del kept[match.start() + (0 if join else 1) : match.end()]
     chars: list[str] = []
     index: list[int] = []
     for i in kept:
@@ -79,16 +84,34 @@ def display_label(source: Source, page: int | None) -> str:
     return source.title
 
 
-def page_of(source: Source, quote: str) -> int | None:
-    """The page holding the quote's first character, or None without page data."""
+def _find(source_text: str, quote: str) -> int | None:
+    """Where the quote starts in `source_text`, matching a hyphen at a line break either
+    joined or kept; None if it isn't there."""
+    wanted = normalise(quote)
+    for join in (True, False):
+        text, index = _normalise_with_map(source_text, join)
+        at = text.find(wanted)
+        if at >= 0 and index:
+            return index[at]
+    return None
+
+
+def _page_at(source: Source, original: int) -> int | None:
+    """The page holding character `original` of the source, or None without page data."""
     if source.page_start is None or not source.page_offsets:
         return None
-    text, index = _normalise_with_map(source.text)
-    at = text.find(normalise(quote))
-    if at < 0 or not index:
-        return None
-    original = index[at]
     return source.page_start + max(bisect_right(source.page_offsets, original) - 1, 0)
+
+
+def page_of(source: Source, quote: str) -> int | None:
+    """The page holding the quote's first character, or None without page data."""
+    original = _find(source.text, quote)
+    return None if original is None else _page_at(source, original)
+
+
+def _too_short(quote: str) -> bool:
+    words = normalise(quote)
+    return len(words.split(" ")) < MIN_QUOTE_WORDS or len(words) < MIN_QUOTE_CHARS
 
 
 def verify(
@@ -96,7 +119,6 @@ def verify(
 ) -> tuple[tuple[Citation, ...], tuple[str, ...]]:
     """Keep the claims whose quote is in the named source; say why the rest failed."""
     by_label = {s.label: s for s in sources}
-    normalised: dict[str, str] = {}
     valid: list[Citation] = []
     failures: list[str] = []
     for claim in claims:
@@ -108,12 +130,14 @@ def verify(
             failures.append(f"the quote from {claim.source} is empty")
         elif len(quote) > MAX_QUOTE:
             failures.append(f"the quote from {claim.source} is longer than {MAX_QUOTE} characters")
+        elif _too_short(quote):
+            failures.append(
+                f"the quote from {claim.source} is too short to show where it came from"
+            )
+        elif (original := _find(source.text, quote)) is None:
+            failures.append(f"the quote from {claim.source} is not in that source")
         else:
-            haystack = normalised.setdefault(source.label, normalise(source.text))
-            if normalise(quote) not in haystack:
-                failures.append(f"the quote from {claim.source} is not in that source")
-                continue
-            page = page_of(source, quote)
+            page = _page_at(source, original)
             valid.append(
                 Citation(source.kind, source.ref, display_label(source, page), page, quote)
             )

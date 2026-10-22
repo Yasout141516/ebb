@@ -55,6 +55,35 @@ def test_verify_folds_ligatures_in_stored_chunks():
     assert fails == () and [c.page for c in cites] == [5]
 
 
+def test_hyphen_at_a_line_break_matches_joined_or_kept():
+    # "net-\nwork" is one word split by the line; "well-\nknown" is a real compound.
+    text = "A well-\nknown fact about every net-\nwork is that it has an address."
+    src = Source("N1", "chunk", "id", "a.pdf", text, page_start=1, page_offsets=(0, 30))
+    quotes = [
+        "A well-known fact about every",
+        "A wellknown fact about every",
+        "about every network is that",
+        "about every net-work is that",
+    ]
+    cites, fails = verify([Claim("N1", q) for q in quotes[:3]], [src])
+    assert fails == () and len(cites) == 3
+    cites, fails = verify([Claim("N1", quotes[3])], [src])
+    assert fails == () and len(cites) == 1
+    assert [page_of(src, q) for q in quotes] == [1, 1, 1, 1]
+    assert page_of(src, "network is that it has") == 2
+    assert page_of(src, "net-work is that it has") == 2
+
+
+def test_short_quotes_fail():
+    quotes = ["Subnet masks", "an address into", "masks split an"]
+    cites, fails = verify([Claim("N1", q) for q in quotes], [N1])
+    # Two words fail; three words of at least 12 characters pass; four short words fail.
+    assert [c.quote for c in cites] == ["an address into", "masks split an"]
+    assert fails == ("the quote from N1 is too short to show where it came from",)
+    cites, fails = verify([Claim("N1", "a b c d")], [Source("N1", "chunk", "i", "a", "a b c d e")])
+    assert cites == () and fails == ("the quote from N1 is too short to show where it came from",)
+
+
 def test_quote_split_across_chunks_fails():
     cites, fails = verify([Claim("N1", "network and host. ARP resolves")], [N1, N2])
     assert cites == () and len(fails) == 1
@@ -71,7 +100,7 @@ def test_empty_and_overlong_quotes_fail():
 
 
 def test_at_most_three_citations_kept():
-    cites, fails = verify([Claim("N1", "Subnet masks")] * 5, [N1])
+    cites, fails = verify([Claim("N1", "Subnet masks split")] * 5, [N1])
     assert len(cites) == MAX_CITATIONS and fails == ()
 
 
@@ -81,12 +110,12 @@ def test_valid_citation_fields():
         "chunk",
         "cid",
         "CSE321.pdf",
-        "x" * 45 + "target text",
+        "x" * 45 + "the target text here",
         page_start=12,
         page_offsets=(0, 40),
     )
-    (c,), _ = verify([Claim("N1", " target text ")], [src])
-    assert c == Citation("chunk", "cid", "CSE321.pdf · p. 13", 13, "target text")
+    (c,), _ = verify([Claim("N1", " the target text here ")], [src])
+    assert c == Citation("chunk", "cid", "CSE321.pdf · p. 13", 13, "the target text here")
 
 
 def test_page_of_uses_offsets():
