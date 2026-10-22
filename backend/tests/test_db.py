@@ -10,7 +10,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from ebb import citations
+from ebb import citations, mastery
 from ebb.db.migrate import migrate
 from ebb.db.repo import PgStore
 from ebb.domain import (
@@ -29,7 +29,7 @@ from ebb.domain import (
 )
 from ebb.graph.build import build_graph
 from ebb.store import DocumentRefused
-from tests.fakes import FakeTutor, new_document
+from tests.fakes import FakeTutor, MemoryStore, new_document
 
 pytestmark = pytest.mark.db
 
@@ -889,3 +889,102 @@ def test_dispute_counts(store):
 
     assert store.dispute_counts(ALICE) == {"raised": 3, "changed": 1, "voided": 1, "upheld": 1}
     assert store.dispute_counts(BOB) == {"raised": 0, "changed": 0, "voided": 0, "upheld": 0}
+
+
+# --- the session summary, read from either store -----------------------------------------
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def summary_store(request):
+    if request.param == "memory":
+        store = MemoryStore()
+    else:
+        store = PgStore(request.getfixturevalue("pg_pool"))
+    store.ensure_profile(ALICE)
+    store.ensure_profile(BOB)
+    return store
+
+
+class Summarised:
+    """A subject of two concepts, A answered in an earlier session and then in this one."""
+
+    def __init__(self, store) -> None:
+        self.store = store
+        subject_id = store.create_subject(ALICE, "Networks", [("A", "a"), ("B", "b")])
+        self.a, self.b = store.list_concepts(ALICE, subject_id)
+        self.earlier = store.create_session(ALICE, subject_id, "earlier")
+        self.session = store.create_session(ALICE, subject_id, "now")
+        self.long_ago = NOW - timedelta(days=2)
+        self.answer(self.earlier, self.a, GradeValue.CORRECT, self.long_ago)  # A: stage 1
+
+    def answer(self, session_id, concept, grade, at) -> Answer:
+        question = Question(uuid4(), concept.id, "short", 1, f"{uuid4()}?", "-")
+        self.store.save_questions(ALICE, session_id, [question])
+        answer = answer_for(question, grade, at)
+        self.store.record_answer(ALICE, answer)
+        return answer
+
+    def summary(self, user_id=ALICE, session_id=None):
+        return self.store.session_summary(user_id, session_id or self.session, NOW)
+
+
+def test_summary_counts_this_sessions_answers_by_grade(summary_store):
+    s = Summarised(summary_store)
+    s.answer(s.session, s.b, GradeValue.PARTIAL, NOW + timedelta(minutes=3))
+    s.answer(s.session, s.a, GradeValue.CORRECT, NOW)  # due: stage 2
+    s.answer(s.session, s.a, GradeValue.PARTIAL, NOW + timedelta(minutes=1))
+    s.answer(s.session, s.a, GradeValue.INCORRECT, NOW + timedelta(minutes=2))  # back to 1
+
+    first, second = s.summary()
+
+    a, b = summary_store.list_concepts(ALICE, s.a.subject_id)
+    assert (first.concept_id, first.concept) == (a.id, "A")
+    assert (first.correct, first.partial, first.incorrect) == (1, 1, 1)
+    assert (first.stage_before, first.stage_after) == (1, 1)
+    assert first.tide_before == pytest.approx(0.7**2)  # stage 1, reviewed two days before NOW
+    assert first.tide_after == pytest.approx(mastery.tide(a, NOW))
+    assert first.next_review_at == a.next_review_at
+    assert (second.concept_id, second.concept) == (b.id, "B")  # A's first answer came first
+    assert (second.correct, second.partial, second.incorrect) == (0, 1, 0)
+    assert (second.stage_before, second.stage_after) == (0, 1)
+    assert second.tide_before is None
+
+
+def test_summary_skips_voided_answers_and_drops_a_concept_left_with_none(summary_store):
+    s = Summarised(summary_store)
+    s.answer(s.session, s.a, GradeValue.CORRECT, NOW)  # stage 2
+    voided = s.answer(s.session, s.a, GradeValue.INCORRECT, NOW + timedelta(minutes=1))
+    only = s.answer(s.session, s.b, GradeValue.PARTIAL, NOW + timedelta(minutes=2))
+    for answer in (only, voided):
+        summary_store.resolve_dispute(ALICE, dispute_for(answer, DisputeOutcome.VOIDED), NOW)
+
+    [row] = s.summary()
+
+    assert row.concept == "A"
+    assert (row.correct, row.partial, row.incorrect) == (1, 0, 0)
+    assert row.stage_after == 2  # restored by the void
+
+
+def test_summary_reflects_a_changed_dispute(summary_store):
+    s = Summarised(summary_store)
+    s.answer(s.session, s.a, GradeValue.CORRECT, NOW)
+    wrong = s.answer(s.session, s.a, GradeValue.INCORRECT, NOW + timedelta(minutes=1))
+    changed = dispute_for(wrong, DisputeOutcome.CHANGED, GradeValue.CORRECT)
+    _, after = summary_store.resolve_dispute(ALICE, changed, NOW)
+
+    [row] = s.summary()
+
+    assert (row.correct, row.partial, row.incorrect) == (2, 0, 0)
+    assert row.stage_after == after.stage
+
+
+def test_summary_ignores_answers_from_other_sessions(summary_store):
+    s = Summarised(summary_store)
+    s.answer(s.session, s.b, GradeValue.CORRECT, NOW)
+
+    [row] = s.summary()  # A's answer belongs to the earlier session
+
+    assert row.concept == "B"
+    assert [r.concept for r in s.summary(session_id=s.earlier)] == ["A"]
+    assert s.summary(user_id=BOB) == []
+    assert s.summary(session_id=uuid4()) == []

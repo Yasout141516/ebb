@@ -45,9 +45,9 @@ from ebb.graph.state import (
     grade_to_dict,
     question_from_dict,
     question_to_dict,
+    result_to_dict,
 )
 from ebb.llm.tutor import AllProvidersExhausted, Generated, Tutor
-from ebb.mastery import tide
 from ebb.repeats import too_close
 from ebb.routing import choose_question, pick_next_concept
 from ebb.store import Store
@@ -158,47 +158,6 @@ def _grade_dict(
     return grade_to_dict(final, state["has_notes"] and not final.citations)
 
 
-def _corrected_tally(tally: dict[str, int], dispute: Dispute) -> dict[str, int]:
-    """`tally` with the disputed answer moved to its new grade, or taken out if voided."""
-    corrected = dict(tally)
-    if dispute.outcome is DisputeOutcome.UPHELD:
-        return corrected
-    corrected[dispute.original_grade.value] -= 1
-    if dispute.new_grade is not None:
-        corrected[dispute.new_grade.value] += 1
-    return corrected
-
-
-def _corrected_results(
-    results: list[dict[str, Any]], concept: Concept, dispute: Dispute, moment: datetime
-) -> list[dict[str, Any]]:
-    """`results` with the last entry for `concept` corrected by `dispute`. Entries saved
-    before results carried concept ids are never matched."""
-    results = list(results)
-    index = next(
-        (
-            i
-            for i in reversed(range(len(results)))
-            if results[i].get("concept_id") == str(concept.id)
-        ),
-        None,
-    )
-    if index is None:
-        return results
-    tally = _corrected_tally(results[index]["tally"], dispute)
-    if sum(tally.values()) == 0:
-        del results[index]  # its only answer was voided; record_result skips such concepts
-        return results
-    results[index] = {
-        **results[index],
-        "tally": tally,
-        "stage_after": concept.stage,
-        "tide_after": tide(concept, moment),
-        "next_review_at": concept_to_dict(concept)["next_review_at"],
-    }
-    return results
-
-
 def _dedupe(questions: Sequence[Question], known: Sequence[str]) -> list[Question]:
     """`questions` without those repeating a known prompt or a question kept before them."""
     seen = list(known)
@@ -242,26 +201,6 @@ def make_nodes(
         pending = [q["prompt"] for q in state["batch"]]
         return list(dict.fromkeys([*earlier, *state["asked_prompts"], *pending]))
 
-    def record_result(state: QuizState) -> list[dict[str, Any]]:
-        results = list(state["results"])
-        concept = state["concept"]
-        if concept is None or sum(state["tally"].values()) == 0:
-            return results
-        current = concept_from_dict(concept)
-        results.append(
-            {
-                "concept": current.name,
-                "concept_id": concept["id"],
-                "tally": dict(state["tally"]),
-                "stage_before": state["start"]["stage"],
-                "stage_after": current.stage,
-                "tide_before": state["start"]["tide"],
-                "tide_after": tide(current, now()),
-                "next_review_at": concept["next_review_at"],
-            }
-        )
-        return results
-
     def load_learner(state: QuizState) -> dict[str, Any]:
         user_id, subject_id = ids(state)
         session_id = store.create_session(user_id, subject_id, state["thread_id"])
@@ -280,7 +219,6 @@ def make_nodes(
             "fatal": None,
             "notices": [],
             "concept": None,
-            "tally": {},
             "grade": None,
             "lesson": None,
             "current_question_id": None,
@@ -296,8 +234,6 @@ def make_nodes(
             return {"concept": None}
         return {
             "concept": concept_to_dict(concept),
-            "start": {"stage": concept.stage, "tide": tide(concept, moment)},
-            "tally": {"correct": 0, "partial": 0, "incorrect": 0},
             "studied_concept_ids": [*state["studied_concept_ids"], str(concept.id)],
             "batch": [],
             "asked_prompts": [],
@@ -558,7 +494,6 @@ def make_nodes(
         correct = grade.value is GradeValue.CORRECT
         return {
             "concept": concept_to_dict(after),
-            "tally": {**state["tally"], grade.value.value: state["tally"][grade.value.value] + 1},
             "correct_streak": state["correct_streak"] + 1 if correct else 0,
             "asked_on_concept": state["asked_on_concept"] + 1,
             "last_graded": None if state["model_used"] == "code" else disputable(state),
@@ -691,18 +626,17 @@ def make_nodes(
         }
         if graded["concept_id"] == state["concept"]["id"]:
             update["concept"] = concept_to_dict(concept)
-            update["tally"] = _corrected_tally(state["tally"], recorded)
-        else:
-            update["results"] = _corrected_results(state["results"], concept, recorded, now())
         return update
 
     def next_concept(state: QuizState) -> dict[str, Any]:
-        return {"results": record_result(state)}
+        return {}
 
     def summarize(state: QuizState) -> dict[str, Any]:
         user_id, _ = ids(state)
-        store.end_session(user_id, UUID(state["session_id"]), now())
-        return {"results": record_result(state)}
+        session_id, moment = UUID(state["session_id"]), now()
+        store.end_session(user_id, session_id, moment)
+        summary = store.session_summary(user_id, session_id, moment)
+        return {"results": [result_to_dict(r) for r in summary]}
 
     return {
         "load_learner": load_learner,

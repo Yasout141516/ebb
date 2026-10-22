@@ -72,6 +72,23 @@ class Concept:
 
 
 @dataclass(frozen=True)
+class ConceptResult:
+    """One concept's part of a session summary: its counted answers by grade, and where its
+    stage and tide stood before the session's first of them and stand now."""
+
+    concept_id: UUID
+    concept: str
+    correct: int
+    partial: int
+    incorrect: int
+    stage_before: int
+    stage_after: int
+    tide_before: float | None
+    tide_after: float | None
+    next_review_at: datetime | None
+
+
+@dataclass(frozen=True)
 class Option:
     text: str
     is_correct: bool

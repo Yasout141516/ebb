@@ -13,6 +13,7 @@ from ebb.domain import (
     Answer,
     Chunk,
     Concept,
+    ConceptResult,
     Dispute,
     DisputeOutcome,
     Document,
@@ -106,6 +107,34 @@ def restore(concept: Concept, before: Mapping[str, Any]) -> Concept:
     )
 
 
+def concept_result(
+    current: Concept,
+    counts: Mapping[GradeValue, int],
+    first: tuple[int, Mapping[str, Any] | None, datetime],
+    now: datetime,
+) -> ConceptResult:
+    """A session summary row for `current`. `first` is the session's first counted answer on
+    it: its stage_before column, its concept_before snapshot (if any) and its graded_at."""
+    stage, before, graded_at = first
+    if before is None:
+        stage_before, tide_before = stage, None
+    else:
+        earlier = restore(current, before)
+        stage_before, tide_before = earlier.stage, mastery.tide(earlier, graded_at)
+    return ConceptResult(
+        concept_id=current.id,
+        concept=current.name,
+        correct=counts.get(GradeValue.CORRECT, 0),
+        partial=counts.get(GradeValue.PARTIAL, 0),
+        incorrect=counts.get(GradeValue.INCORRECT, 0),
+        stage_before=stage_before,
+        stage_after=current.stage,
+        tide_before=tide_before,
+        tide_after=mastery.tide(current, now),
+        next_review_at=current.next_review_at,
+    )
+
+
 def concept_after_dispute(
     current: Concept, before: Concept, dispute: Dispute, graded: GradeValue, graded_at: datetime
 ) -> Concept:
@@ -176,6 +205,16 @@ class Store(Protocol):
         disputed, voided, has no snapshot, is not the concept's latest counted attempt, or
         doesn't match the dispute's original grade.
         """
+        ...
+
+    def session_summary(
+        self, user_id: UUID, session_id: UUID, now: datetime
+    ) -> list[ConceptResult]:
+        """One row per concept with an answer in this session that wasn't voided, ordered by
+        its first such answer: those answers counted by grade; stage and tide before from
+        the first one's concept_before snapshot (tide measured at its graded_at; an answer
+        without a snapshot gives its stage_before and no tide); stage, tide at `now` and
+        next review from the concept as it is."""
         ...
 
     def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:

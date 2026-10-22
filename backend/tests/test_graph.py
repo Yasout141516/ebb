@@ -1143,7 +1143,6 @@ def test_ambiguous_dispute_voids_the_answer():
     assert store.concept(concept.id) == concept  # restored to its state before the answer
     [attempt_id] = store.attempts
     assert attempt_id in store.voided
-    assert final["tally"] == {"correct": 0, "partial": 0, "incorrect": 0}
     assert final["results"] == []  # nothing left to summarise
 
 
@@ -1345,7 +1344,7 @@ def test_resume_while_regrading_resolves_once():
     assert len(store.disputes) == 1
     assert store.concept(concept.id).stage == 3
     state = graph.get_state(config).values
-    assert state["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}
+    assert summary_tally(store, state) == {"correct": 1, "partial": 0, "incorrect": 0}
     assert state["last_graded"]["disputed"] is True
     assert state["dispute"] is None
 
@@ -1363,8 +1362,14 @@ def test_resume_while_regrading_needs_no_model():
     assert len(tutor.regrade_calls) == 1
     assert store.concept(concept.id).stage == 3
     state = graph.get_state(config).values
-    assert state["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}  # corrected once
+    assert summary_tally(store, state) == {"correct": 1, "partial": 0, "incorrect": 0}  # once
     assert state["concept"]["stage"] == 3
+
+
+def summary_tally(store: MemoryStore, state: dict[str, Any]) -> dict[str, int]:
+    """The one concept's tally in the session summary the store gives now."""
+    [row] = store.session_summary(USER, UUID(state["session_id"]), NOW)
+    return {"correct": row.correct, "partial": row.partial, "incorrect": row.incorrect}
 
 
 def step_labels(store: MemoryStore, subject_id: UUID, tutor: FakeTutor) -> list[str]:
@@ -1559,7 +1564,8 @@ def test_milestone2_checkpoint_without_new_keys_resumes():
 
     assert "__interrupt__" in result  # the session goes on to the next question
     assert len(store.attempts) == 1
-    assert graph.get_state(config).values["tally"]["correct"] == 1
+    values = graph.get_state(config).values
+    assert summary_tally(store, values) == {"correct": 1, "partial": 0, "incorrect": 0}
 
 
 # --- one current question id; the lesson as one object ---------------------------------
@@ -1618,6 +1624,34 @@ def test_old_checkpoint_with_pending_question_id_resumes():
     assert shown["question"]["prompt"] == "Second?"  # the interrupted one, not the first
     assert "__interrupt__" in result  # the session goes on
     assert graph.get_state(config).values["current_question_id"] is None
+
+
+def test_old_checkpoint_with_tally_start_and_results_resumes_to_a_summary_from_the_store():
+    graph, config, _, saved = old_checkpoint_graph()
+    stale = {  # a concept studied earlier in the session, whose answers the store has lost
+        "concept": "Gone",
+        "concept_id": str(uuid4()),
+        "tally": {"correct": 5, "partial": 0, "incorrect": 0},
+        "stage_before": 0,
+        "stage_after": 1,
+        "tide_before": None,
+        "tide_after": None,
+        "next_review_at": None,
+    }
+    saved |= {"results": [stale], "tally": {"correct": 7, "partial": 0, "incorrect": 0}}
+    graph.update_state(config, saved, as_node="regrade")
+
+    graph.invoke(None, config)
+    result = graph.invoke(Command(resume=reply("right")), config)
+    final = graph.invoke(Command(resume={"quit": True}), config)
+
+    assert "__interrupt__" in result
+    [row] = final["results"]
+    assert row["concept"] == "Concept 1"
+    assert row["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}
+    assert (row["stage_before"], row["stage_after"]) == (0, 1)
+    assert row["tide_before"] is None
+    assert isinstance(row["next_review_at"], str)
 
 
 def test_old_checkpoint_with_retry_question_resumes():

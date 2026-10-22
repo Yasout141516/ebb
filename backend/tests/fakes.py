@@ -13,6 +13,7 @@ from ebb.domain import (
     ChunkDraft,
     Claim,
     Concept,
+    ConceptResult,
     Dispute,
     DisputeOutcome,
     DisputeReason,
@@ -36,6 +37,7 @@ from ebb.store import (
     RESUME_WINDOW,
     DocumentRefused,
     concept_after_dispute,
+    concept_result,
     new_concepts,
     restore,
     search_words,
@@ -194,6 +196,37 @@ class MemoryStore:
         self.concepts[current.id] = (owner, after)
         self.disputes[dispute.id] = (user_id, dispute)
         return dispute, after
+
+    def session_summary(
+        self, user_id: UUID, session_id: UUID, now: datetime
+    ) -> list[ConceptResult]:
+        counted: dict[UUID, list[Answer]] = {}
+        for answer in self.attempts.values():
+            if (
+                self.question_sessions[answer.question_id] == session_id
+                and self.sessions[session_id]["user_id"] == user_id
+                and self.concepts[answer.concept_id][0] == user_id
+                and answer.id not in self.voided
+            ):
+                counted.setdefault(answer.concept_id, []).append(answer)
+        position = {concept_id: n for n, concept_id in enumerate(self.concepts)}
+        by_first = sorted(
+            (
+                # attempts are in the order they were recorded, which settles equal times
+                (min(answers, key=lambda a: a.graded_at), answers)
+                for answers in counted.values()
+            ),
+            key=lambda pair: (pair[0].graded_at, position[pair[0].concept_id]),
+        )
+        return [
+            concept_result(
+                self.concepts[first.concept_id][1],
+                {grade: [a.grade for a in answers].count(grade) for grade in GradeValue},
+                (self.stages[first.id][0], self.snapshots.get(first.id), first.graded_at),
+                now,
+            )
+            for first, answers in by_first
+        ]
 
     def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:
         owner, dispute = self.disputes.get(dispute_id, (None, None))

@@ -18,6 +18,7 @@ from ebb.domain import (
     Chunk,
     Citation,
     Concept,
+    ConceptResult,
     Dispute,
     DisputeOutcome,
     DisputeReason,
@@ -34,6 +35,7 @@ from ebb.store import (
     RESUME_WINDOW,
     DocumentRefused,
     concept_after_dispute,
+    concept_result,
     new_concepts,
     restore,
     search_words,
@@ -396,6 +398,41 @@ class PgStore:
                 ),
             )
         return dispute, after
+
+    def session_summary(
+        self, user_id: UUID, session_id: UUID, now: datetime
+    ) -> list[ConceptResult]:
+        first = "order by a.graded_at, a.id"
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select c.id, c.subject_id, c.name, c.description, c.stage, c.next_review_at,"
+                " c.last_reviewed_at, c.review_count,"
+                " count(*) filter (where a.grade = 'correct') as correct,"
+                " count(*) filter (where a.grade = 'partial') as partial,"
+                " count(*) filter (where a.grade = 'incorrect') as incorrect,"
+                f" (array_agg(a.stage_before {first}))[1] as first_stage,"
+                f" (array_agg(a.concept_before {first}))[1] as first_before,"
+                " min(a.graded_at) as first_at"
+                " from attempts a"
+                " join questions q on q.id = a.question_id and q.user_id = a.user_id"
+                " join concepts c on c.id = a.concept_id and c.user_id = a.user_id"
+                " where a.user_id = %s and q.session_id = %s and a.voided_at is null"
+                " group by c.id order by first_at, c.position",
+                (user_id, session_id),
+            ).fetchall()
+        return [
+            concept_result(
+                Concept(**{k: row[k] for k in Concept.__dataclass_fields__}),
+                {
+                    GradeValue.CORRECT: row["correct"],
+                    GradeValue.PARTIAL: row["partial"],
+                    GradeValue.INCORRECT: row["incorrect"],
+                },
+                (row["first_stage"], row["first_before"], row["first_at"]),
+                now,
+            )
+            for row in rows
+        ]
 
     def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:
         with self.pool.connection() as conn:

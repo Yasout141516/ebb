@@ -14,7 +14,7 @@ from uuid import UUID
 
 from ebb.citations import from_dict as citation_from_dict
 from ebb.citations import to_dict as citation_to_dict
-from ebb.domain import Citation, Claim, Concept, Grade, GradeValue, Option, Question
+from ebb.domain import Citation, Claim, Concept, ConceptResult, Grade, GradeValue, Option, Question
 from ebb.routing import candidate_run
 
 
@@ -37,8 +37,6 @@ class QuizState(TypedDict, total=False):
     web_notice_shown: bool
     # current concept
     concept: dict[str, Any] | None
-    start: dict[str, Any]  # {"stage": int, "tide": float | None} when the concept was picked
-    tally: dict[str, int]
     batch: list[dict[str, Any]]
     asked_prompts: list[str]
     asked_on_concept: int
@@ -84,6 +82,10 @@ class QuizState(TypedDict, total=False):
     citation_retries: int
     citation_failures: list[str]
     citation_failing: list[int]
+    # Keys of sessions saved before the session summary was read from the store. fill_defaults
+    # drops them, and nothing writes them.
+    start: dict[str, Any]
+    tally: dict[str, int]
 
 
 # Keys added after milestone 1, with what a session saved before them gets. `None` for
@@ -124,6 +126,9 @@ def fill_defaults(values: Mapping[str, Any]) -> dict[str, Any]:
     # so the failures it was sent back with are of no use.
     for old in ("citation_retries", "citation_failures", "citation_failing"):
         filled.pop(old, None)
+    # The summary is read from the store at the end, so a saved tally and start are of no use.
+    for old in ("start", "tally"):
+        filled.pop(old, None)
     # A lesson was a string, with its citations beside it.
     citations = filled.pop("lesson_citations", None)
     if isinstance(filled.get("lesson"), str):
@@ -149,6 +154,20 @@ def concept_to_dict(c: Concept) -> dict[str, Any]:
         "next_review_at": _dt(c.next_review_at),
         "last_reviewed_at": _dt(c.last_reviewed_at),
         "review_count": c.review_count,
+    }
+
+
+def result_to_dict(r: ConceptResult) -> dict[str, Any]:
+    """A summary row as `ui.render_summary` reads it."""
+    return {
+        "concept": r.concept,
+        "concept_id": str(r.concept_id),
+        "tally": {"correct": r.correct, "partial": r.partial, "incorrect": r.incorrect},
+        "stage_before": r.stage_before,
+        "stage_after": r.stage_after,
+        "tide_before": r.tide_before,
+        "tide_after": r.tide_after,
+        "next_review_at": _dt(r.next_review_at),
     }
 
 
