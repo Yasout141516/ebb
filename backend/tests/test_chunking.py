@@ -1,5 +1,6 @@
-from ebb.chunking import MAX, OVERLAP, TARGET, chunk_notes, digest
-from ebb.domain import ChunkDraft
+from ebb.chunking import MAX, OVERLAP, TARGET, _overlap, chunk_notes, digest
+from ebb.citations import page_of
+from ebb.domain import ChunkDraft, Source
 from ebb.notes import ExtractedNotes
 
 
@@ -68,6 +69,26 @@ def test_pdf_chunk_spanning_pages_records_offsets():
     assert (spanning.page_start, spanning.page_end) == (3, 4)
     assert spanning.page_offsets[0] == 0
     assert spanning.page_offsets[1] == spanning.content.index("More about")
+
+
+def test_overlap_carried_from_an_earlier_page_keeps_its_page():
+    last = "Page one closes with this odd sentence."
+    pages = (
+        "\n\n".join([paragraph(1), paragraph(2) + last]),
+        "\n\n".join([paragraph(4), paragraph(5)]),
+    )
+    chunks = chunk_notes(notes("\n\n".join(pages), kind="pdf", pages=pages))
+    first, second = chunks[:2]
+    assert (first.page_start, first.page_end) == (1, 1)
+    assert second.content.startswith(_overlap(first.content))
+    assert last in second.content.split("Paragraph 4")[0]  # carried over from page 1
+    assert (second.page_start, second.page_end) == (1, 2)
+    assert second.page_offsets == (0, second.content.index("Paragraph 4"))
+    source = Source(
+        "N1", "chunk", "c", "n.pdf", second.content, None, second.page_start, second.page_offsets
+    )
+    assert page_of(source, last) == 1
+    assert page_of(source, "Paragraph 4 starts here") == 2
 
 
 def test_text_chunks_have_no_pages_or_heading():

@@ -19,6 +19,8 @@ _SEP = "\n\n"
 
 # (text, heading, 1-based page or None)
 _Unit = tuple[str, str | None, int | None]
+# (page, offset in some text) where that page starts in it
+_Starts = list[tuple[int, int]]
 
 
 def chunk_notes(notes: ExtractedNotes) -> tuple[ChunkDraft, ...]:
@@ -99,11 +101,22 @@ def _overlap(content: str) -> str:
     return tail[space + 1 :] if space != -1 else tail
 
 
+def _carry(draft: ChunkDraft) -> tuple[str, _Starts]:
+    """The overlap taken from the end of `draft`, with where each of its pages starts in it."""
+    text = _overlap(draft.content)
+    if draft.page_start is None:
+        return text, []
+    begin = len(draft.content) - len(text)
+    pages = [(draft.page_start + n, offset) for n, offset in enumerate(draft.page_offsets)]
+    first = max(page for page, offset in pages if offset <= begin)  # the first offset is 0
+    return text, [(first, 0), *((page, offset - begin) for page, offset in pages if offset > begin)]
+
+
 def _pack(units: Sequence[_Unit]) -> Iterator[ChunkDraft]:
     parts: list[tuple[str, int | None]] = []
     size = 0
     heading: str | None = None
-    carry = ""
+    carry: tuple[str, _Starts] = ("", [])
     ordinal = 0
     for text, unit_heading, page in units:
         changed = bool(parts) and unit_heading != heading
@@ -112,7 +125,7 @@ def _pack(units: Sequence[_Unit]) -> Iterator[ChunkDraft]:
             draft = _build(ordinal, parts, heading, carry)
             yield draft
             ordinal += 1
-            carry = "" if changed else _overlap(draft.content)
+            carry = ("", []) if changed else _carry(draft)
             parts, size = [], 0
         if not parts:
             heading = unit_heading
@@ -126,14 +139,15 @@ def _build(
     ordinal: int,
     parts: list[tuple[str, int | None]],
     heading: str | None,
-    carry: str,
+    carry: tuple[str, _Starts],
 ) -> ChunkDraft:
     own = _SEP.join(text for text, _ in parts)
     # The overlap is dropped rather than letting a chunk pass MAX.
-    prefix = carry if len(carry) + len(_SEP) + len(own) <= MAX else ""
+    prefix, carried = carry if len(carry[0]) + len(_SEP) + len(own) <= MAX else ("", [])
     content = f"{prefix}{_SEP}{own}" if prefix else own
     position = len(content) - len(own)
-    starts: list[tuple[int, int]] = []  # (page, offset in content)
+    # The overlap keeps the pages it came from: a chunk may start on an earlier page.
+    starts: _Starts = list(carried) if prefix else []
     for text, page in parts:
         if page is not None:
             starts.append((page, position))
