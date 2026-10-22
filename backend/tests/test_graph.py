@@ -1395,7 +1395,53 @@ def test_step_events_start_with_reading_the_notes_when_there_are_some():
 def test_grade_label_without_notes_is_grading():
     assert step_label("grade_answer", {"has_notes": False}) == "Grading…"
     assert step_label("grade_answer", {"has_notes": True}) == "Grading against your notes…"
+
+
+def test_web_mode_and_unlabelled_steps():
     assert step_label("generate_questions", {"generation_mode": "web"}) == (
         "Writing questions from the web…"
     )
     assert step_label("pick_concept", {}) is None
+
+
+def test_milestone2_checkpoint_without_new_keys_resumes():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=1)
+    session_id = store.create_session(USER, subject_id, "t-old")
+    concept = store.list_concepts(USER, subject_id)[0]
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": "t-old"}}
+    # A thread saved by milestone 2 right after retrieve_notes: none of the later keys exist.
+    old = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-old",
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(concept.id)],
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "concept": concept_to_dict(concept),
+        "start": {"stage": concept.stage, "tide": None},
+        "tally": {"correct": 0, "partial": 0, "incorrect": 0},
+        "batch": [],
+        "asked_prompts": [],
+        "asked_on_concept": 0,
+        "correct_streak": 0,
+        "generation_calls_on_concept": 0,
+        "difficulty": None,
+        "retry_question": False,
+        "grade": None,
+        "lesson": None,
+    }
+    graph.update_state(config, old, as_node="retrieve_notes")
+
+    result = graph.invoke(None, config)
+    assert result["__interrupt__"][0].value["concept"] == "Concept 1"
+    result = graph.invoke(Command(resume=always_right(result["__interrupt__"][0].value)), config)
+
+    assert "__interrupt__" in result  # the session goes on to the next question
+    assert len(store.attempts) == 1
+    assert graph.get_state(config).values["tally"]["correct"] == 1
