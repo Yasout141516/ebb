@@ -3,10 +3,13 @@
 import re
 from collections.abc import Sequence
 
-# Chosen against the test pairs: the two paraphrase pairs score 1.0 and 0.8, the two
-# different-question pairs score below 0.2, so anything between would pass; 0.6 sits
-# well clear of both sides.
+# Chosen against the test pairs: the two paraphrase pairs score 1.0 and 0.5 ("unusable"
+# and "usable" stay different words), the three different-question pairs score 0.33 or
+# less. A score of 0.5 from only two shared words ("subnet mask" against a four-word
+# question) is too little to call a repeat, so the lower bar needs three shared words.
 REPEAT_THRESHOLD = 0.6
+SHARED_THRESHOLD = 0.45
+MIN_SHARED = 3
 MIN_CONTAINED = 4
 
 # Question and instruction words carry no topic, so they are dropped with the usual stop words.
@@ -22,8 +25,6 @@ TOKEN = re.compile(r"[a-z0-9]+(?:[./][a-z0-9]+)*")
 
 
 def _stem(word: str) -> str:
-    if len(word) > 5 and word.startswith("un"):
-        word = word[2:]
     if word.endswith("sses"):
         return word[:-2]
     if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
@@ -39,7 +40,9 @@ def _words(prompt: str) -> frozenset[str]:
 def _close(a: frozenset[str], b: frozenset[str]) -> bool:
     if not a or not b:
         return False
-    if len(a & b) / len(a | b) >= REPEAT_THRESHOLD:
+    shared = len(a & b)
+    overlap = shared / len(a | b)
+    if overlap >= REPEAT_THRESHOLD or (shared >= MIN_SHARED and overlap >= SHARED_THRESHOLD):
         return True
     smaller, larger = sorted((a, b), key=len)
     return len(smaller) >= MIN_CONTAINED and smaller <= larger

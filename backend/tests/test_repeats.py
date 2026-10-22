@@ -28,6 +28,7 @@ def test_paraphrases_are_too_close(new, old):
             "How many usable hosts does a /26 subnet have?",
         ),
         ("What does ARP resolve?", "What does DNS resolve?"),
+        ("Which hosts are usable?", "Which hosts are unusable?"),
     ],
 )
 def test_different_questions_are_not(new, old):
