@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 from ebb import mastery
@@ -74,6 +74,7 @@ class MemoryStore:
         self.disputes: dict[UUID, tuple[UUID, Dispute]] = {}  # dispute id -> (user id, dispute)
         self.question_sessions: dict[UUID, UUID] = {}  # question id -> session id
         self.timezones: dict[UUID, str] = {}
+        self.ai_calls: dict[tuple[UUID, date], int] = {}
         self.locks: set[str] = set()
 
     def ensure_profile(self, user_id: UUID) -> None:
@@ -344,6 +345,13 @@ class MemoryStore:
 
     def set_timezone(self, user_id: UUID, name: str) -> None:
         self.timezones[user_id] = name
+
+    def take_ai_call(self, user_id: UUID, day: date, limit: int) -> bool:
+        used = self.ai_calls.get((user_id, day), 0)
+        if used >= limit:
+            return False
+        self.ai_calls[(user_id, day)] = used + 1
+        return True
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime

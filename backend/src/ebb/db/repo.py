@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -587,6 +587,18 @@ class PgStore:
     def set_timezone(self, user_id: UUID, name: str) -> None:
         with self.pool.connection() as conn:
             conn.execute("update profiles set timezone = %s where id = %s", (name, user_id))
+
+    def take_ai_call(self, user_id: UUID, day: date, limit: int) -> bool:
+        if limit < 1:
+            return False
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "insert into llm_usage (user_id, day, calls) values (%s, %s, 1)"
+                " on conflict (user_id, day) do update set calls = llm_usage.calls + 1"
+                " where llm_usage.calls < %s returning calls",
+                (user_id, day, limit),
+            ).fetchone()
+        return row is not None
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime

@@ -2,8 +2,9 @@
 
 import threading
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -1007,3 +1008,41 @@ def test_summary_ignores_answers_from_other_sessions(summary_store):
     assert [r.concept for r in s.summary(session_id=s.earlier)] == ["A"]
     assert s.summary(user_id=BOB) == []
     assert s.summary(session_id=uuid4()) == []
+
+
+# --- the daily AI-call cap -------------------------------------------------------------
+
+
+@pytest.fixture(params=["postgres", "memory"])
+def usage_store(request, store):
+    return store if request.param == "postgres" else MemoryStore()
+
+
+def test_take_ai_call_stops_at_the_limit(usage_store):
+    day = date(2026, 10, 15)
+
+    assert [usage_store.take_ai_call(ALICE, day, 2) for _ in range(3)] == [True, True, False]
+    assert usage_store.take_ai_call(BOB, day, 2) is True  # counted per user
+
+
+def test_take_ai_call_with_limit_zero_refuses_without_writing(usage_store):
+    assert usage_store.take_ai_call(ALICE, date(2026, 10, 15), 0) is False
+    assert usage_store.take_ai_call(ALICE, date(2026, 10, 15), 1) is True  # nothing was counted
+
+
+def test_take_ai_call_leaves_no_row_when_the_limit_is_zero(store, pg_pool):
+    store.take_ai_call(ALICE, date(2026, 10, 15), 0)
+
+    with pg_pool.connection() as conn:
+        assert conn.execute("select count(*) as n from llm_usage").fetchone()["n"] == 0
+
+
+def test_take_ai_call_counts_per_day_in_the_users_zone(usage_store):
+    zone = ZoneInfo("Asia/Dhaka")
+    before_midnight = datetime(2026, 10, 15, 23, 30, tzinfo=zone).astimezone(zone).date()
+    after_midnight = datetime(2026, 10, 16, 0, 30, tzinfo=zone).astimezone(zone).date()
+
+    assert before_midnight != after_midnight
+    assert usage_store.take_ai_call(ALICE, before_midnight, 1) is True
+    assert usage_store.take_ai_call(ALICE, before_midnight, 1) is False
+    assert usage_store.take_ai_call(ALICE, after_midnight, 1) is True

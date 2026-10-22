@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     ebb_fallback_model: str = "mistral-medium-latest"
     ebb_dev_user_id: UUID = UUID("00000000-0000-0000-0000-000000000001")
     ebb_timezone: str | None = None
+    ebb_daily_ai_calls: int = 300
 
 
 def resolve_timezone(name: str | None) -> ZoneInfo:

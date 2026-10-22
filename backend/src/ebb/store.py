@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
@@ -247,6 +247,11 @@ class Store(Protocol):
     def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None: ...
 
     def set_timezone(self, user_id: UUID, name: str) -> None: ...
+
+    def take_ai_call(self, user_id: UUID, day: date, limit: int) -> bool:
+        """Count one AI call for `day` and return True while fewer than `limit` have been made;
+        otherwise return False and change nothing."""
+        ...
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime

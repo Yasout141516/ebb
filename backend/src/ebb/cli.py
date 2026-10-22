@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
 
-    from ebb.llm.tutor import LangChainTutor, TutorUnavailable
+    from ebb.llm.tutor import LangChainTutor, Tutor, TutorUnavailable
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -94,6 +94,20 @@ def _tutor(settings: Settings, fallback: bool = True) -> LangChainTutor:
     from ebb.llm.tutor import LangChainTutor
 
     return _configured(lambda: LangChainTutor.from_settings(settings, fallback))
+
+
+def _capped(tutor: Tutor, settings: Settings, store: PgStore) -> Tutor:
+    """The learner-facing tutor behind the daily cap on AI calls."""
+    from ebb.llm.quota import CappedTutor
+
+    return CappedTutor(
+        tutor,
+        store,
+        settings.ebb_dev_user_id,
+        settings.ebb_daily_ai_calls,
+        _timezone(settings),
+        lambda: datetime.now(UTC),
+    )
 
 
 def _timezone(settings: Settings) -> ZoneInfo:
@@ -187,7 +201,7 @@ def _prepare(path: Path) -> NewDocument:
 
 
 def _find_concepts(
-    tutor: LangChainTutor,
+    tutor: Tutor,
     subject: str,
     known: list[tuple[str, str]],
     document: NewDocument,
@@ -240,7 +254,7 @@ def new(
     if notes:
         _new_from_notes(settings, store, topic, notes)
         return
-    tutor = _tutor(settings)
+    tutor = _capped(_tutor(settings), settings, store)
     with console.status("Mapping the topic…"):
         try:
             generated = tutor.extract_concepts(topic)
@@ -269,7 +283,7 @@ def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[
         if any(d.sha256 == document.sha256 for d in documents):
             _fail(f"{document.filename} is already in {topic}.")
         documents.append(document)
-    tutor = _tutor(settings)
+    tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
     known: list[tuple[str, str]] = []
     reports: list[tuple[NewDocument, list[str], list[tuple[str, str]]]] = []
@@ -313,7 +327,7 @@ def add(
         _fail(_full_copy(chosen))
     if store.has_document(user_id, chosen.id, document.sha256):
         _fail(_duplicate_copy(chosen, document))
-    tutor = _tutor(settings)
+    tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
     known = [(c.name, c.description) for c in store.list_concepts(user_id, chosen.id)]
     matched, fresh = _find_concepts(tutor, chosen.name, known, document)
@@ -415,7 +429,7 @@ def study(
     settings, store = _open_store()
     user_id = settings.ebb_dev_user_id
     tz = _timezone(settings)
-    tutor = _tutor(settings)
+    tutor = _capped(_tutor(settings), settings, store)
 
     store.set_timezone(user_id, tz.key)
     now = datetime.now(UTC)

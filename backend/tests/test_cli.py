@@ -943,3 +943,45 @@ def test_question_shows_its_source_line(fakes):
 
     assert result.exit_code == 0, result.output
     assert "From your notes · p. 12" in result.output
+
+
+DAILY_LIMIT = "Daily limit reached"
+
+
+def test_study_with_no_calls_left_shows_the_daily_limit_and_ends_normally(fakes):
+    """Inside the graph the cap follows the exhausted path: notice, summary, exit 0."""
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    settings = cli._open_store()[0]
+    settings.ebb_daily_ai_calls = 0
+
+    result = runner.invoke(cli.app, ["study"])
+
+    assert result.exit_code == 0, result.output
+    assert DAILY_LIMIT in flat(result.output)
+    assert "No answers this session." in result.output
+    assert tutor.generate_calls == []
+    assert next(iter(store.sessions.values()))["ended_at"] is not None
+
+
+def test_new_with_no_calls_left_shows_the_daily_limit_and_exits_1(fakes):
+    store, tutor = fakes
+    cli._open_store()[0].ebb_daily_ai_calls = 0
+
+    result = runner.invoke(cli.app, ["new", "Networks"])
+
+    assert result.exit_code == 1
+    assert DAILY_LIMIT in flat(result.output)
+    assert store.subjects == {}
+
+
+def test_add_with_no_calls_left_shows_the_daily_limit_and_exits_1(fakes, tmp_path):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    cli._open_store()[0].ebb_daily_ai_calls = 0
+
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+
+    assert result.exit_code == 1
+    assert DAILY_LIMIT in flat(result.output)
+    assert store.documents == {}
