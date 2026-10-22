@@ -24,6 +24,7 @@ from ebb.db.migrate import migrate, migration_lock
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
 from ebb.domain import Concept, NewDocument, ResumableSession, Subject
+from ebb.mastery import reviews_due
 from ebb.store import MAX_DOCUMENTS, DocumentRefused, Store, merge_note_concepts
 from ebb.ui import (
     DISPUTE_REASONS,
@@ -421,8 +422,9 @@ def study(
             thread_id = str(uuid4())
             config = _config(thread_id)
             held.enter_context(store.session_lock(user_id, thread_id))  # a new id: always ours
-            due = store.count_due(user_id, chosen.id, now)
-            console.print(escape(greeting(due, store.count_new(user_id, chosen.id))))
+            concepts = store.list_concepts(user_id, chosen.id)
+            new = sum(1 for c in concepts if c.stage == 0)
+            console.print(escape(greeting(len(reviews_due(concepts, now)), new)))
             payload = None
         console.print(
             f"Studying [bold]{escape(chosen.name)}[/bold]. Type q at any question to stop.\n"

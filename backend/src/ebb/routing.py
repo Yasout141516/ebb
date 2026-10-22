@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from ebb.domain import Concept
-from ebb.mastery import is_due, tide
+from ebb.mastery import reviews_due, tide
 
 STREAK_TO_FINISH = 2
 MAX_QUESTIONS_PER_CONCEPT = 4
@@ -19,7 +19,7 @@ def pick_next_concept(
 ) -> Concept | None:
     """Due reviews by lowest tide, then new concepts in list order; never a learned, not-due one."""
     candidates = [c for c in concepts if str(c.id) not in studied_ids]
-    due = [c for c in candidates if c.stage >= 1 and is_due(c, now)]
+    due = reviews_due(candidates, now)
     if due:
         # min() keeps the first of equal keys, so ties stay in list order.
         return min(due, key=lambda c: _tide_or_zero(c, now))

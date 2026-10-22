@@ -206,7 +206,7 @@ def test_add_concepts_drops_duplicates_and_appends(store):
         store.add_concepts(BOB, subject_id, [("Sneaky", "x")])
 
 
-def test_counts_and_next_review(store, pg_pool):
+def test_next_review(store, pg_pool):
     subject_id = store.create_subject(
         ALICE, "Networks", [("DNS", "d"), ("TCP", "d"), ("UDP", "d"), ("QUIC", "d")]
     )
@@ -215,10 +215,7 @@ def test_counts_and_next_review(store, pg_pool):
     seed_stage(pg_pool, tcp.id, 1, NOW + timedelta(days=2))
     seed_stage(pg_pool, udp.id, 4, NOW + timedelta(days=5))
 
-    assert store.count_due(ALICE, subject_id, NOW) == 1
-    assert store.count_new(ALICE, subject_id) == 1
     assert store.next_review_at(ALICE, subject_id) == NOW - timedelta(days=1)
-    assert store.count_due(BOB, subject_id, NOW) == 0
     assert store.next_review_at(BOB, subject_id) is None
 
 

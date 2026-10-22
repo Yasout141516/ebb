@@ -569,24 +569,6 @@ class PgStore:
             ).fetchall()
         return [Chunk(**{**row, "page_offsets": tuple(row["page_offsets"])}) for row in rows]
 
-    def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
-        with self.pool.connection() as conn:
-            row = conn.execute(
-                "select count(*) as n from concepts where user_id = %s and subject_id = %s"
-                " and stage >= 1 and next_review_at <= %s",
-                (user_id, subject_id, now),
-            ).fetchone()
-        return row["n"]
-
-    def count_new(self, user_id: UUID, subject_id: UUID) -> int:
-        with self.pool.connection() as conn:
-            row = conn.execute(
-                "select count(*) as n from concepts where user_id = %s and subject_id = %s"
-                " and stage = 0",
-                (user_id, subject_id),
-            ).fetchone()
-        return row["n"]
-
     def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None:
         with self.pool.connection() as conn:
             row = conn.execute(

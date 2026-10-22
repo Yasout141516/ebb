@@ -90,14 +90,11 @@ def test_add_concepts_drops_duplicates_and_appends():
         store.add_concepts(BOB, subject_id, [("Sneaky", "x")])
 
 
-def test_counts_subject_and_timezone():
+def test_next_review_subject_and_timezone():
     store, subject_id, _, question = setup()
     store.add_concepts(ALICE, subject_id, [("UDP", "u")])
     seed_concept(store, question.concept_id, stage=2, next_review_at=NOW - timedelta(days=1))
-    assert store.count_due(ALICE, subject_id, NOW) == 1
-    assert store.count_new(ALICE, subject_id) == 1
     assert store.next_review_at(ALICE, subject_id) == NOW - timedelta(days=1)
-    assert store.count_due(BOB, subject_id, NOW) == 0
     assert store.get_subject(ALICE, subject_id).name == "Networks"
     assert store.get_subject(BOB, subject_id) is None
     store.set_timezone(ALICE, "Europe/Berlin")

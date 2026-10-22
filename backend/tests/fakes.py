@@ -328,16 +328,6 @@ class MemoryStore:
         scored.sort(key=lambda pair: -pair[0])
         return [chunk for _, chunk in scored[:limit]]
 
-    def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
-        return sum(
-            1
-            for c in self.list_concepts(user_id, subject_id)
-            if c.stage >= 1 and mastery.is_due(c, now)
-        )
-
-    def count_new(self, user_id: UUID, subject_id: UUID) -> int:
-        return sum(1 for c in self.list_concepts(user_id, subject_id) if c.stage == 0)
-
     def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None:
         times = [
             c.next_review_at
