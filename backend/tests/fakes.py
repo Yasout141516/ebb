@@ -36,6 +36,7 @@ from ebb.store import (
     PRUNE_AFTER,
     RESUME_WINDOW,
     DocumentRefused,
+    SubjectExists,
     concept_after_dispute,
     concept_result,
     new_concepts,
@@ -79,6 +80,11 @@ class MemoryStore:
         self.profiles.add(user_id)
 
     def create_subject(self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]) -> UUID:
+        if any(
+            owner == user_id and s.name.lower() == name.lower()
+            for owner, s in self.subjects.values()
+        ):
+            raise SubjectExists(name)
         subject = Subject(uuid4(), name, datetime.now(UTC))
         self.subjects[subject.id] = (user_id, subject)
         for concept_name, description in concepts:
@@ -665,11 +671,13 @@ def new_document(
     return NewDocument(filename, kind, 100, page_count, sha or f"sha-{filename}", drafts)
 
 
-def make_subject(store: MemoryStore, user_id: UUID, concepts: int = 4) -> UUID:
+def make_subject(
+    store: MemoryStore, user_id: UUID, concepts: int = 4, name: str = "Networks"
+) -> UUID:
     store.ensure_profile(user_id)
     return store.create_subject(
         user_id,
-        "Networks",
+        name,
         [(f"Concept {n}", f"About concept {n}.") for n in range(1, concepts + 1)],
     )
 

@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from psycopg import Connection
+from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
@@ -34,6 +35,7 @@ from ebb.store import (
     PRUNE_AFTER,
     RESUME_WINDOW,
     DocumentRefused,
+    SubjectExists,
     concept_after_dispute,
     concept_result,
     new_concepts,
@@ -155,6 +157,17 @@ def _insert_document(
         )
 
 
+def _insert_subject(conn: Connection, user_id: UUID, name: str) -> UUID:
+    try:
+        return conn.execute(
+            "insert into subjects (user_id, name) values (%s, %s) returning id", (user_id, name)
+        ).fetchone()["id"]
+    except UniqueViolation as error:
+        if error.diag.constraint_name != "subjects_user_name_key":
+            raise
+        raise SubjectExists(name) from error
+
+
 class PgStore:
     def __init__(self, pool: ConnectionPool) -> None:
         self.pool = pool
@@ -167,11 +180,7 @@ class PgStore:
 
     def create_subject(self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]) -> UUID:
         with self.pool.connection() as conn, conn.transaction():
-            row = conn.execute(
-                "insert into subjects (user_id, name) values (%s, %s) returning id",
-                (user_id, name),
-            ).fetchone()
-            subject_id = row["id"]
+            subject_id = _insert_subject(conn, user_id, name)
             with conn.cursor() as cur:
                 cur.executemany(
                     "insert into concepts (user_id, subject_id, name, description, position)"
@@ -483,10 +492,7 @@ class PgStore:
         concepts: Sequence[tuple[str, str]],
     ) -> UUID:
         with self.pool.connection() as conn, conn.transaction():
-            subject_id = conn.execute(
-                "insert into subjects (user_id, name) values (%s, %s) returning id",
-                (user_id, name),
-            ).fetchone()["id"]
+            subject_id = _insert_subject(conn, user_id, name)
             for document in documents:
                 _insert_document(conn, user_id, subject_id, document)
             _insert_concepts(conn, user_id, subject_id, concepts)

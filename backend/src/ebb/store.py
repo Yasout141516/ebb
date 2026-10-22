@@ -38,6 +38,14 @@ class DocumentRefused(Exception):
         self.reason = reason
 
 
+class SubjectExists(Exception):
+    """The user already has a subject of this name, compared ignoring case."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
+
+
 def new_concepts(
     existing_names: Sequence[str], concepts: Sequence[tuple[str, str]]
 ) -> list[tuple[str, str]]:
@@ -155,9 +163,9 @@ def concept_after_dispute(
 class Store(Protocol):
     def ensure_profile(self, user_id: UUID) -> None: ...
 
-    def create_subject(
-        self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]
-    ) -> UUID: ...
+    def create_subject(self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]) -> UUID:
+        """Raises SubjectExists if the user has a subject of that name, ignoring case."""
+        ...
 
     def list_subjects(self, user_id: UUID) -> list[Subject]: ...
 
@@ -268,7 +276,7 @@ class Store(Protocol):
         concepts: Sequence[tuple[str, str]],
     ) -> UUID:
         """Create the subject, its documents with their chunks, and its concepts in one
-        transaction. Name clashes are the caller's to check."""
+        transaction. Raises SubjectExists if the user has a subject of that name."""
         ...
 
     def add_document(

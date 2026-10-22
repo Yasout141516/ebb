@@ -28,7 +28,7 @@ from ebb.domain import (
     Question,
 )
 from ebb.graph.build import build_graph
-from ebb.store import DocumentRefused
+from ebb.store import DocumentRefused, SubjectExists
 from tests.fakes import FakeTutor, MemoryStore, new_document
 
 pytestmark = pytest.mark.db
@@ -63,6 +63,7 @@ def test_migrations_apply_once(pg_pool):
         "001_init.sql",
         "002_spaced_review.sql",
         "003_notes_citations_disputes.sql",
+        "004_web_app.sql",
     ]
 
 
@@ -83,6 +84,27 @@ def test_newest_subject_first(store):
     store.create_subject(ALICE, "Older", [])
     store.create_subject(ALICE, "Newer", [])
     assert [s.name for s in store.list_subjects(ALICE)][0] == "Newer"
+
+
+def test_create_subject_refuses_a_name_differing_only_in_case(store):
+    store.create_subject(ALICE, "Networks", [])
+    with pytest.raises(SubjectExists) as raised:
+        store.create_subject(ALICE, "networks", [("DNS", "d")])
+    assert raised.value.name == "networks"
+    with pytest.raises(SubjectExists):
+        store.create_subject_with_notes(ALICE, "NETWORKS", [], [])
+    store.create_subject(BOB, "networks", [])  # another user's name is no clash
+    assert [s.name for s in store.list_subjects(ALICE)] == ["Networks"]
+
+
+def test_memory_store_refuses_a_name_differing_only_in_case():
+    memory = MemoryStore()
+    memory.create_subject(ALICE, "Networks", [])
+    with pytest.raises(SubjectExists):
+        memory.create_subject(ALICE, "networks", [])
+    with pytest.raises(SubjectExists):
+        memory.create_subject_with_notes(ALICE, "NETWORKS", [], [])
+    memory.create_subject(BOB, "networks", [])
 
 
 def test_mcq_options_round_trip_as_json(store, pg_pool):

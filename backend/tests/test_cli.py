@@ -690,6 +690,34 @@ def test_add_race_refusal_uses_the_same_copy(fakes, tmp_path, monkeypatch):
     assert "wk1.md is already in Networks." in flat(result.output)
 
 
+def test_cli_new_reports_existing_name_raced_in_by_another_terminal(fakes, monkeypatch):
+    from ebb.store import SubjectExists
+
+    store, _ = fakes
+
+    def raced(*args, **kwargs):
+        raise SubjectExists("Networks")
+
+    monkeypatch.setattr(store, "create_subject", raced)
+    result = runner.invoke(cli.app, ["new", "Networks"])
+    assert result.exit_code == 1
+    assert "Networks already exists — add notes to it with: ebb add <file>" in flat(result.output)
+
+
+def test_cli_new_with_notes_reports_a_raced_name(fakes, tmp_path, monkeypatch):
+    from ebb.store import SubjectExists
+
+    store, _ = fakes
+
+    def raced(*args, **kwargs):
+        raise SubjectExists("Networks")
+
+    monkeypatch.setattr(store, "create_subject_with_notes", raced)
+    result = runner.invoke(cli.app, ["new", "Networks", "--notes", str(note_file(tmp_path))])
+    assert result.exit_code == 1
+    assert "Networks already exists — add notes to it with: ebb add <file>" in flat(result.output)
+
+
 def test_new_with_notes_uses_only_note_concepts(fakes, tmp_path, monkeypatch):
     store, tutor = fakes
     tutor.note_concepts = [[("ARP", None), ("NAT", None), ("DNS", None)]]

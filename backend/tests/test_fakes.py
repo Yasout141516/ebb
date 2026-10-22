@@ -103,7 +103,7 @@ def test_next_review_subject_and_timezone():
 
 def test_resumable_window_and_subject():
     store, subject_id, session_id, _ = setup()
-    other = make_subject(store, ALICE, concepts=1)
+    other = make_subject(store, ALICE, concepts=1, name="Databases")
     store.sessions[session_id]["last_active_at"] = NOW - timedelta(hours=23, minutes=59)
     assert store.resumable_session(ALICE, subject_id, NOW).session_id == session_id
     assert store.resumable_session(ALICE, other, NOW) is None

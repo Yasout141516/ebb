@@ -25,7 +25,13 @@ from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
 from ebb.domain import Concept, NewDocument, ResumableSession, Subject
 from ebb.mastery import reviews_due
-from ebb.store import MAX_DOCUMENTS, DocumentRefused, Store, merge_note_concepts
+from ebb.store import (
+    MAX_DOCUMENTS,
+    DocumentRefused,
+    Store,
+    SubjectExists,
+    merge_note_concepts,
+)
 from ebb.ui import (
     DISPUTE_REASONS,
     NOT_DISPUTABLE,
@@ -228,7 +234,7 @@ def new(
     user_id = settings.ebb_dev_user_id
     for existing in store.list_subjects(user_id):
         if existing.name.casefold() == topic.casefold():
-            _fail(f"{existing.name} already exists — add notes to it with: ebb add <file>")
+            _fail(_exists_copy(existing.name))
     if notes:
         _new_from_notes(settings, store, topic, notes)
         return
@@ -241,7 +247,10 @@ def new(
         except ConfigError as error:
             _fail(str(error), code=2)
     concepts = [(c.name, c.description) for c in generated.value]
-    store.create_subject(user_id, topic, concepts)
+    try:
+        store.create_subject(user_id, topic, concepts)
+    except SubjectExists:  # another terminal got there first
+        _fail(_exists_copy(topic))
     console.print(f"[bold]{escape(topic)}[/bold] · {len(concepts)} concepts")
     for number, (name, description) in enumerate(concepts, start=1):
         console.print(f"  {number}. [bold]{escape(name)}[/bold] [dim]— {escape(description)}[/dim]")
@@ -266,11 +275,18 @@ def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[
         matched, fresh = _find_concepts(tutor, topic, known, document)
         known += fresh
         reports.append((document, matched, fresh))
-    store.create_subject_with_notes(settings.ebb_dev_user_id, topic, documents, known)
+    try:
+        store.create_subject_with_notes(settings.ebb_dev_user_id, topic, documents, known)
+    except SubjectExists:  # another terminal got there first
+        _fail(_exists_copy(topic))
     console.print(f"[bold]{escape(topic)}[/bold]")
     for document, matched, fresh in reports:
         _print_report(document, matched, fresh)
     console.print("\nStart with: [bold]ebb study[/bold]")
+
+
+def _exists_copy(name: str) -> str:
+    return f"{name} already exists — add notes to it with: ebb add <file>"
 
 
 def _full_copy(subject: Subject) -> str:
