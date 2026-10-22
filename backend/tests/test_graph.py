@@ -12,7 +12,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from ebb.citations import MAX_RETRIES
+from ebb.citations import MAX_RETRIES, source_from_dict, verify
 from ebb.citations import to_dict as citation_to_dict
 from ebb.domain import (
     Answer,
@@ -1420,6 +1420,23 @@ def test_source_line_uses_structured_fields():
     )
     assert line("notes", name="n.txt", heading=None, title=None) == "From your notes"
     assert line("web", kind="web", name="cloudflare.com", heading=None, title="DNS") == (
+        "From the web · cloudflare.com"
+    )
+
+
+def test_source_line_of_a_verified_milestone3_web_source():
+    old = {
+        "label": "W1",
+        "kind": "web",
+        "ref": "u",
+        "title": "cloudflare.com · What is DNS?",
+        "text": "DNS maps names to addresses.",
+        "heading": None,
+        "page_start": None,
+        "page_offsets": [],
+    }
+    (cite,), _ = verify([Claim("W1", "DNS maps names")], [source_from_dict(old)])
+    assert source_line({"source": "web", "citations": [citation_to_dict(cite)]}) == (
         "From the web · cloudflare.com"
     )
 

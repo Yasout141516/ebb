@@ -222,6 +222,9 @@ def source_to_dict(s: Source) -> dict[str, Any]:
 
 
 def source_from_dict(d: Mapping[str, Any]) -> Source:
+    site, page_title = d.get("site"), d.get("page_title")
+    if d["kind"] == "web" and "site" not in d:  # milestone 3 stored only "domain · page title"
+        site, _, page_title = _split_label("web", d["title"])
     return Source(
         d["label"],
         d["kind"],
@@ -231,6 +234,6 @@ def source_from_dict(d: Mapping[str, Any]) -> Source:
         d["heading"],
         d["page_start"],
         tuple(d["page_offsets"]),
-        d.get("site"),
-        d.get("page_title"),
+        site,
+        page_title,
     )

@@ -151,6 +151,23 @@ def test_milestone3_source_dict_loads_without_site_and_title():
     assert source_from_dict(old) == N1
 
 
+def test_milestone3_web_source_keeps_site_and_title_through_verify():
+    old = {
+        "label": "W1",
+        "kind": "web",
+        "ref": "https://cloudflare.com/x",
+        "title": "cloudflare.com · What is DNS?",
+        "text": "DNS maps names to addresses.",
+        "heading": None,
+        "page_start": None,
+        "page_offsets": [],
+    }
+    source = source_from_dict(old)
+    assert (source.site, source.page_title) == ("cloudflare.com", "What is DNS?")
+    (c,), _ = verify([Claim("W1", "DNS maps names")], [source])
+    assert (c.name, c.title) == ("cloudflare.com", "What is DNS?")
+
+
 def test_page_of_uses_offsets():
     src = Source(
         "N1", "chunk", "i", "a.pdf", "x" * 45 + "target", page_start=12, page_offsets=(0, 40)
