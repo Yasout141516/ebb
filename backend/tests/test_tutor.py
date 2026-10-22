@@ -310,8 +310,7 @@ def test_grade_caps_a_correct_result_that_names_a_misconception():
 def test_regrade_caps_a_correct_result_that_names_a_misconception():
     result = RegradeResult(grade="correct", explanation="Fair.", misconception="Mixes up TTL.")
     out, _ = regrade_with(result)
-    new, _ambiguous = out.value
-    assert new == Grade(GradeValue.PARTIAL, "Fair.", "Mixes up TTL.")
+    assert out.value.grade == Grade(GradeValue.PARTIAL, "Fair.", "Mixes up TTL.")
 
 
 class Raising(BaseChatModel):
@@ -752,11 +751,11 @@ def test_regrade_returns_grade_and_ambiguity():
         citations=[{"source": "N1", "quote": "cache answers"}],
     )
     out, precise = regrade_with(result, sources=[NOTE], failures=["N1: not found"])
-    new, ambiguous = out.value
-    assert new == Grade(
+    assert out.value.grade.value is GradeValue.CORRECT
+    assert out.value.grade == Grade(
         GradeValue.CORRECT, "Fair point.", None, claims=(Claim("N1", "cache answers"),)
     )
-    assert ambiguous is True
+    assert out.value.ambiguous is True
     [(schema, prompt)] = precise.calls
     assert schema is RegradeResult
     assert "<<<SOURCES" in prompt and "- N1: not found" in prompt

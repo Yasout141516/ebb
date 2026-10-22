@@ -30,6 +30,7 @@ from ebb.domain import (
     Lesson,
     Option,
     Question,
+    Regrade,
     Source,
 )
 from ebb.grading import cap_for_misconception
@@ -159,7 +160,7 @@ class Tutor(Protocol):
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
         previous: Grade | None = None,
-    ) -> Generated[tuple[Grade, bool]]: ...
+    ) -> Generated[Regrade]: ...
 
     def write_eval_case(
         self, topic: str, target: GradeValue, notes: str | None
@@ -573,7 +574,7 @@ class LangChainTutor:
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
         previous: Grade | None = None,
-    ) -> Generated[tuple[Grade, bool]]:
+    ) -> Generated[Regrade]:
         prompt = _with_sources(
             _prompt(
                 "regrade",
@@ -594,7 +595,7 @@ class LangChainTutor:
             lambda m: m.with_structured_output(RegradeResult),
             prompt,
             creative=False,
-            parse=lambda out: (_grade_from(out), out.question_ambiguous),
+            parse=lambda out: Regrade(_grade_from(out), out.question_ambiguous),
         )
 
     def write_eval_case(

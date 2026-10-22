@@ -102,6 +102,12 @@ class Grade:
 
 
 @dataclass(frozen=True)
+class Regrade:
+    grade: Grade
+    ambiguous: bool
+
+
+@dataclass(frozen=True)
 class Answer:
     id: UUID
     question_id: UUID

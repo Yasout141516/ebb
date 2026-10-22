@@ -23,6 +23,7 @@ from ebb.domain import (
     NewDocument,
     Option,
     Question,
+    Regrade,
     ResumableSession,
     Source,
     Subject,
@@ -585,7 +586,7 @@ class FakeTutor:
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
         previous: Grade | None = None,
-    ) -> Generated[tuple[Grade, bool]]:
+    ) -> Generated[Regrade]:
         self.regrade_calls.append((answer, reason, explanation))
         self.regrade_previous.append(previous)
         if self.fail_regrade:
@@ -594,7 +595,7 @@ class FakeTutor:
         scripted = self.regrades or []
         value, ambiguous = scripted[call] if call < len(scripted) else (grade.value.value, False)
         new = Grade(GradeValue(value), f"Regraded {value}.", grade.misconception)
-        return self._out((new, ambiguous))
+        return self._out(Regrade(new, ambiguous))
 
     def write_eval_case(
         self, topic: str, target: GradeValue, notes: str | None

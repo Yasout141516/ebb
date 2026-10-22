@@ -30,6 +30,7 @@ from ebb.domain import (
     Grade,
     GradeValue,
     Question,
+    Regrade,
     Source,
 )
 from ebb.grading import dispute_outcome, grade_mcq
@@ -620,7 +621,7 @@ def make_nodes(
 
     def recheck(
         graded: dict[str, Any], request: dict[str, Any]
-    ) -> tuple[Dispute, Generated[tuple[Grade, bool]]]:
+    ) -> tuple[Dispute, Generated[Regrade]]:
         """Ask the model to re-check the graded answer; code decides the outcome. Raises
         AllProvidersExhausted if the first call fails."""
         question = question_from_dict(graded["question"])
@@ -636,15 +637,15 @@ def make_nodes(
                 request["explanation"],
                 sources,
                 failures,
-                previous=None if previous is None else previous[0],
+                previous=None if previous is None else previous.grade,
             ),
-            lambda regraded: regraded[0].claims,
+            lambda regraded: regraded.grade.claims,
             sources,
             # The ambiguity verdict stays the first call's too.
-            lambda kept, retried: (_keep_grade(kept[0], retried[0]), kept[1]),
+            lambda kept, retried: Regrade(_keep_grade(kept.grade, retried.grade), kept.ambiguous),
         )
-        new, ambiguous = generated.value
-        outcome = dispute_outcome(reason, first.value, new.value, ambiguous)
+        new = generated.value.grade
+        outcome = dispute_outcome(reason, first.value, new.value, generated.value.ambiguous)
         dispute = Dispute(
             id=UUID(request["id"]),
             attempt_id=UUID(graded["attempt_id"]),

@@ -1273,9 +1273,9 @@ def test_regrade_checks_the_grades_sources_and_cites_them():
         ):
             self.regrade_sources = [s.label for s in sources]
             generated = super().regrade(question, answer, grade, reason, explanation)
-            new, ambiguous = generated.value
-            cited = replace(new, claims=(Claim("N1", OTHER_QUOTE),))
-            return replace(generated, value=(cited, ambiguous))
+            regraded = generated.value
+            cited = replace(regraded.grade, claims=(Claim("N1", OTHER_QUOTE),))
+            return replace(generated, value=replace(regraded, grade=cited))
 
     store = MemoryStore()
     tutor = CitingTutor(cite=[[("N1", QUOTE)]], regrades=[("correct", False)])
