@@ -16,8 +16,9 @@ from langchain_core.exceptions import (
     OutputParserException,
 )
 from langchain_core.language_models import BaseChatModel
-from langchain_core.runnables import Runnable
-from pydantic import ValidationError
+from langchain_core.messages import BaseMessage
+from langchain_core.runnables import Runnable, RunnableLambda
+from pydantic import BaseModel, ValidationError
 
 from ebb.citations import MAX_CITATIONS, MAX_QUOTE
 from ebb.config import ConfigError, Settings
@@ -95,8 +96,57 @@ def _retryable(error: BaseException) -> bool:
     return isinstance(error, PROVIDER_ERRORS) and _classify(error) == "retry"
 
 
-class AllProvidersExhausted(Exception):
+EXHAUSTED_NOTICE = "The tutor couldn't respond — your progress is saved. Try again in a minute."
+REFUSED_NOTICE = "The tutor won't help with that topic."
+
+
+class TutorUnavailable(Exception):
+    """The tutor can't answer this call; `notice` is what the learner is told."""
+
+    notice: str = EXHAUSTED_NOTICE
+
+
+class AllProvidersExhausted(TutorUnavailable):
     """Every provider failed or returned invalid output after retries."""
+
+
+class TutorRefused(TutorUnavailable):
+    """A provider refused the request for safety: not retried, and no other provider asked."""
+
+    notice = REFUSED_NOTICE
+
+
+def _is_refusal(raw: BaseMessage) -> bool:
+    """Groq's API ends a reply its content filters withheld with finish_reason
+    "content_filter"; OpenAI-style APIs put a model's refusal in `refusal`."""
+    return (
+        bool(raw.additional_kwargs.get("refusal"))
+        or raw.response_metadata.get("finish_reason") == "content_filter"
+    )
+
+
+def _unless_refused(raw: BaseMessage) -> BaseMessage:
+    if _is_refusal(raw):
+        raise TutorRefused()
+    return raw
+
+
+def _parsed(output: dict[str, Any]) -> Any:
+    """The structured value from an `include_raw=True` reply. A refusal raises TutorRefused;
+    a reply that didn't parse raises as it would without `include_raw`, so it is retried."""
+    _unless_refused(output["raw"])
+    if output["parsing_error"] is not None:
+        raise output["parsing_error"]
+    if output["parsed"] is None:
+        raise OutputParserException("the reply had no structured output")
+    return output["parsed"]
+
+
+def _chain(model: BaseChatModel, schema: type[BaseModel] | None) -> Runnable:
+    """The model, structured as `schema` when given (plain text otherwise)."""
+    if schema is None:
+        return model | RunnableLambda(_unless_refused)
+    return model.with_structured_output(schema, include_raw=True) | RunnableLambda(_parsed)
 
 
 @dataclass(frozen=True)
@@ -184,6 +234,18 @@ def _prompt(template: str, /, **values: str) -> str:
 def _neutralise(text: str) -> str:
     """Untrusted text must not be able to open or close one of our fences."""
     return text.replace("<<<", "‹‹‹").replace(">>>", "›››")
+
+
+def _line(text: str) -> str:
+    """A name or description, fenced as one line: a newline can't start a line of its own."""
+    return _neutralise(" ".join(text.splitlines()))
+
+
+def _listing(concepts: Sequence[Concept], descriptions: bool) -> str:
+    return "\n".join(
+        f"- {_line(c.name)}" + (f": {_line(c.description)}" if descriptions else "")
+        for c in concepts
+    )
 
 
 def _cite_item(item: str) -> str:
@@ -383,15 +445,16 @@ class LangChainTutor:
 
     def _run[T](
         self,
-        build: Callable[[BaseChatModel], Runnable],
+        schema: type[BaseModel] | None,
         prompt: str,
         creative: bool,
         parse: Callable[[Any], T],
     ) -> Generated[T]:
+        """Each provider in turn, retried; a refusal (TutorRefused) ends the call at once."""
         last_error: BaseException | None = None
         for index, provider in enumerate(self.providers):
             model = provider.creative if creative else provider.precise
-            chain = build(model).with_retry(
+            chain = _chain(model, schema).with_retry(
                 retry_if_exception_type=_retryable, stop_after_attempt=self.attempts
             )
             try:
@@ -415,8 +478,8 @@ class LangChainTutor:
 
     def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]:
         return self._run(
-            lambda m: m.with_structured_output(ConceptList),
-            _prompt("extract_concepts", topic=topic),
+            ConceptList,
+            _prompt("extract_concepts", topic=_line(topic)),
             creative=True,
             parse=lambda out: out.concepts,
         )
@@ -424,10 +487,13 @@ class LangChainTutor:
     def extend_concepts(
         self, subject: str, existing: Sequence[Concept]
     ) -> Generated[list[ConceptDraft]]:
-        listing = "\n".join(f"- {c.name}: {c.description}" for c in existing)
         return self._run(
-            lambda m: m.with_structured_output(ConceptExtension),
-            _prompt("extend_concepts", subject=subject, existing=listing),
+            ConceptExtension,
+            _prompt(
+                "extend_concepts",
+                subject=_line(subject),
+                existing=_listing(existing, descriptions=True),
+            ),
             creative=True,
             parse=lambda out: out.concepts,
         )
@@ -441,7 +507,7 @@ class LangChainTutor:
         web_count: int | None = None,
         rewrite: Sequence[Question] = (),
     ) -> Generated[list[Question]]:
-        avoid_text = "\n".join(f"- {p}" for p in avoid) or "(none)"
+        avoid_text = "\n".join(f"- {_line(p)}" for p in avoid) or "(none)"
         count = len(rewrite) if rewrite else web_count
 
         def to_questions(batch: QuestionBatch | WebQuestionBatch) -> list[Question]:
@@ -460,33 +526,20 @@ class LangChainTutor:
                 for draft in drafts
             ]
 
+        schema: type[BaseModel]
+        values = {"name": _line(concept.name), "description": _line(concept.description)}
         if rewrite:
             template, schema = "rewrite_questions", RewrittenQuestions
-            values = {
-                "name": concept.name,
-                "description": concept.description,
-                "count": str(len(rewrite)),
-                "questions": _questions_text(rewrite),
-            }
+            values |= {"count": str(len(rewrite)), "questions": _questions_text(rewrite)}
         elif web_count is None:
             template, schema = "generate_questions", QuestionBatch
-            values = {"name": concept.name, "description": concept.description}
         else:
             template, schema = "generate_web_questions", WebQuestionBatch
-            values = {
-                "name": concept.name,
-                "description": concept.description,
-                "count": str(web_count),
-            }
+            values |= {"count": str(web_count)}
         prompt = _with_sources(
             _prompt(template, **values, avoid=avoid_text), sources, failures, _CITE_QUESTIONS
         )
-        return self._run(
-            lambda m: m.with_structured_output(schema),
-            prompt,
-            creative=True,
-            parse=to_questions,
-        )
+        return self._run(schema, prompt, creative=True, parse=to_questions)
 
     def grade(
         self,
@@ -499,8 +552,8 @@ class LangChainTutor:
         prompt = _with_sources(
             _prompt(
                 "grade",
-                prompt=question.prompt,
-                reference=question.reference_answer,
+                prompt=_neutralise(question.prompt),
+                reference=_neutralise(question.reference_answer),
                 answer=_neutralise(answer),
             ),
             sources,
@@ -508,12 +561,7 @@ class LangChainTutor:
             _CITE_GRADE,
             _previous_grade(previous),
         )
-        return self._run(
-            lambda m: m.with_structured_output(GradeResult),
-            prompt,
-            creative=False,
-            parse=_grade_from,
-        )
+        return self._run(GradeResult, prompt, creative=False, parse=_grade_from)
 
     def teach(
         self,
@@ -527,10 +575,10 @@ class LangChainTutor:
         prompt = _with_sources(
             _prompt(
                 "teach",
-                prompt=question.prompt,
-                reference=correct_text(question),
+                prompt=_neutralise(question.prompt),
+                reference=_neutralise(correct_text(question)),
                 answer=_neutralise(answer),
-                explanation=grade.explanation,
+                explanation=_neutralise(grade.explanation),
             ),
             sources,
             failures,
@@ -539,10 +587,10 @@ class LangChainTutor:
         )
         if not sources:
             return self._run(
-                lambda m: m, prompt, creative=True, parse=lambda out: Lesson(out.text.strip())
+                None, prompt, creative=True, parse=lambda out: Lesson(out.text.strip())
             )
         return self._run(
-            lambda m: m.with_structured_output(LessonResult),
+            LessonResult,
             prompt,
             creative=True,
             parse=lambda out: Lesson(out.text.strip(), _claims(out.citations)),
@@ -551,13 +599,12 @@ class LangChainTutor:
     def concepts_from_notes(
         self, subject: str, existing: Sequence[Concept], digest: str
     ) -> Generated[list[NoteConcept]]:
-        listing = "\n".join(f"- {c.name}" for c in existing) or "(none)"
         return self._run(
-            lambda m: m.with_structured_output(NoteConceptList),
+            NoteConceptList,
             _prompt(
                 "concepts_from_notes",
-                subject=subject,
-                existing=listing,
+                subject=_line(subject),
+                existing=_listing(existing, descriptions=False) or "(none)",
                 digest=_neutralise(digest),
             ),
             creative=True,
@@ -578,11 +625,11 @@ class LangChainTutor:
         prompt = _with_sources(
             _prompt(
                 "regrade",
-                prompt=question.prompt,
-                reference=question.reference_answer,
+                prompt=_neutralise(question.prompt),
+                reference=_neutralise(question.reference_answer),
                 answer=_neutralise(answer),
                 grade=grade.value.value,
-                first_explanation=grade.explanation,
+                first_explanation=_neutralise(grade.explanation),
                 reason=_REASONS[reason],
                 claim=_neutralise(explanation),
             ),
@@ -592,7 +639,7 @@ class LangChainTutor:
             _previous_grade(previous),
         )
         return self._run(
-            lambda m: m.with_structured_output(RegradeResult),
+            RegradeResult,
             prompt,
             creative=False,
             parse=lambda out: Regrade(_grade_from(out), out.question_ambiguous),
@@ -609,7 +656,7 @@ class LangChainTutor:
                 f"<<<NOTES\n{_neutralise(notes)}\nNOTES>>>\n\n"
             )
         return self._run(
-            lambda m: m.with_structured_output(EvalCaseDraft),
+            EvalCaseDraft,
             _prompt("write_eval_case", topic=topic, target=target.value, notes_section=section),
             creative=True,
             parse=lambda out: out,

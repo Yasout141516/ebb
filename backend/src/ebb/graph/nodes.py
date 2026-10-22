@@ -47,14 +47,14 @@ from ebb.graph.state import (
     question_to_dict,
     result_to_dict,
 )
-from ebb.llm.tutor import AllProvidersExhausted, Generated, Tutor
+from ebb.llm.tutor import EXHAUSTED_NOTICE as EXHAUSTED_NOTICE
+from ebb.llm.tutor import Generated, Tutor, TutorUnavailable
 from ebb.repeats import too_close
 from ebb.routing import choose_question, pick_next_concept
 from ebb.store import Store
 from ebb.web import WebSearch, WebSearchFailed
 
 FALLBACK_NOTICE = "Switched to a backup model while the main one is busy."
-EXHAUSTED_NOTICE = "The tutor couldn't respond — your progress is saved. Try again in a minute."
 WEB_NOTICE = "Web search unavailable — skipped repeated questions."
 
 Node = Callable[[QuizState], dict[str, Any]]
@@ -255,8 +255,8 @@ def make_nodes(
             generated = tutor.extend_concepts(
                 subject.name, store.list_concepts(user_id, subject_id)
             )
-        except AllProvidersExhausted:
-            return {"fatal": EXHAUSTED_NOTICE, "notices": _with_notice(state, EXHAUSTED_NOTICE)}
+        except TutorUnavailable as error:
+            return {"fatal": error.notice, "notices": _with_notice(state, error.notice)}
         added = store.add_concepts(
             user_id, subject_id, [(d.name, d.description) for d in generated.value]
         )
@@ -291,14 +291,14 @@ def make_nodes(
                 _sources(state, web_mode),
                 web_count=state["run"]["replacing"] if web_mode else None,
             )
-        except AllProvidersExhausted:
+        except TutorUnavailable as error:
             if web_mode:
                 # The batch goes on without replacements, as when the search finds nothing.
                 return {"run": {**state["run"], "candidates": []}}
             return {
-                "fatal": EXHAUSTED_NOTICE,
+                "fatal": error.notice,
                 "generation_calls_on_concept": calls,
-                "notices": _with_notice(state, EXHAUSTED_NOTICE),
+                "notices": _with_notice(state, error.notice),
             }
         return {
             "run": {**state["run"], "candidates": [question_to_dict(q) for q in generated.value]},
@@ -454,12 +454,12 @@ def make_nodes(
         sources = _sources(state, question.source == "web")
         try:
             first = tutor.grade(question, state["answer"], sources)
-        except AllProvidersExhausted:
+        except TutorUnavailable as error:
             return {
                 "grade": None,
                 "batch": [state["question"], *state["batch"]],
                 "current_question_id": state["question"]["id"],
-                "notices": _with_notice(state, EXHAUSTED_NOTICE),
+                "notices": _with_notice(state, error.notice),
             }
 
         def fix(last: Generated[Grade], failures: tuple[str, ...]) -> Generated[Grade]:
@@ -519,10 +519,10 @@ def make_nodes(
         sources = _sources(state, question.source == "web")
         try:
             first = tutor.teach(question, state["answer"], grade, sources)
-        except AllProvidersExhausted:
+        except TutorUnavailable as error:
             return {
                 "lesson": None,
-                "notices": _with_notice(state, EXHAUSTED_NOTICE),
+                "notices": _with_notice(state, error.notice),
             }
         generated, citations = _with_citations(
             first,
@@ -545,7 +545,7 @@ def make_nodes(
         graded: dict[str, Any], request: dict[str, Any]
     ) -> tuple[Dispute, Generated[Regrade]]:
         """Ask the model to re-check the graded answer; code decides the outcome. Raises
-        AllProvidersExhausted if the first call fails."""
+        TutorUnavailable if the first call fails."""
         question = question_from_dict(graded["question"])
         first = grade_from_dict(graded["grade"])
         reason = DisputeReason(request["reason"])
@@ -609,7 +609,7 @@ def make_nodes(
         if dispute is None:
             try:
                 dispute, generated = recheck(graded, request)
-            except AllProvidersExhausted:
+            except TutorUnavailable:
                 return {**refused, "dispute_result": {"outcome": "failed"}}
             notices = [FALLBACK_NOTICE] if generated.fell_back else []
         try:

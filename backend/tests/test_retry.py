@@ -1,8 +1,10 @@
 """The one citation-retry loop shared by question batches, grades, lessons and re-checks."""
 
+import pytest
+
 from ebb.citations import MAX_RETRIES
 from ebb.graph.retry import fix_citations
-from ebb.llm.tutor import AllProvidersExhausted, Generated
+from ebb.llm.tutor import AllProvidersExhausted, Generated, TutorRefused
 
 
 def failing_while_below(clean: int):
@@ -39,13 +41,14 @@ def test_fix_citations_tries_at_most_max_retries():
     assert fixed.value == 2  # the last fix is kept even though it still fails
 
 
-def test_fix_citations_keeps_last_value_when_fix_is_exhausted():
+@pytest.mark.parametrize("error", [AllProvidersExhausted("busy"), TutorRefused()])
+def test_fix_citations_keeps_last_value_when_fix_is_unavailable(error):
     calls = []
 
     def fix(last, failures):
         calls.append(last.value)
         if len(calls) == 2:
-            raise AllProvidersExhausted("busy")
+            raise error
         return Generated(last.value + 1, "fixer", fell_back=True)
 
     fixed = fix_citations(Generated(0, "first"), failing_while_below(100), fix)

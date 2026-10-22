@@ -284,6 +284,61 @@ def test_failed_teaching_continues_without_a_lesson():
     assert EXHAUSTED_NOTICE in payloads[1]["notices"]
 
 
+REFUSED = "The tutor won't help with that topic."
+
+
+def test_refused_generation_ends_the_session_with_the_refusal_notice():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"generate_questions"})
+    subject_id = make_subject(store, USER)
+
+    final, payloads = run(tutor, store, subject_id, always_right)
+
+    assert payloads == []
+    assert final["fatal"] == REFUSED
+    assert final["notices"] == [REFUSED]
+    assert final["results"] == []
+    assert store.questions == {} and store.attempts == {}
+    assert next(iter(store.sessions.values()))["ended_at"] == NOW
+
+
+def test_refused_extension_ends_the_session_with_the_refusal_notice():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"extend_concepts"})
+    subject_id = make_subject(store, USER, concepts=1)
+
+    final, payloads = run(tutor, store, subject_id, always_right)
+
+    assert len(payloads) == 2
+    assert final["fatal"] == REFUSED and REFUSED in final["notices"]
+    assert len(store.list_concepts(USER, subject_id)) == 1
+
+
+def test_refused_grade_keeps_the_question_waiting():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"grade"})
+    subject_id = make_subject(store, USER, concepts=1)
+    answers = iter([reply("right"), {"quit": True}])
+
+    final, payloads = run(tutor, store, subject_id, lambda p: next(answers))
+
+    assert payloads[0]["question"]["type"] == "short"
+    assert payloads[1]["question"]["prompt"] == payloads[0]["question"]["prompt"]
+    assert payloads[1]["feedback"] is None
+    assert payloads[1]["notices"] == [REFUSED]
+    assert store.attempts == {}
+
+
+def test_refused_lesson_is_skipped_with_notice():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"teach"})
+    subject_id = make_subject(store, USER, concepts=1)
+    turns = iter([always_wrong, always_right, lambda p: {"quit": True}])
+
+    final, payloads = run(tutor, store, subject_id, lambda p: next(turns)(p))
+
+    assert payloads[1]["feedback"]["value"] == "incorrect"
+    assert payloads[1]["lesson"] is None
+    assert payloads[1]["notices"] == [REFUSED]
+    assert final["results"][0]["tally"] == {"correct": 1, "partial": 0, "incorrect": 1}
+
+
 def test_backup_model_notice_is_shown_once():
     store, tutor = MemoryStore(), FakeTutor(fell_back=True)
     subject_id = make_subject(store, USER, concepts=1)
@@ -1259,6 +1314,20 @@ def test_regrade_unavailable_keeps_the_grade():
     [attempt] = store.attempts.values()
     assert attempt.grade is GradeValue.PARTIAL
     assert final["results"][0]["tally"] == {"correct": 0, "partial": 1, "incorrect": 0}
+
+
+def test_refused_regrade_reports_failed():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"regrade"})
+    subject_id, _ = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+
+    assert len(tutor.regrade_calls) == 1
+    assert payloads[2]["dispute_result"] == {"outcome": "failed"}
+    assert payloads[2]["can_dispute"] is True
+    assert store.disputes == {}
+    [attempt] = store.attempts.values()
+    assert attempt.grade is GradeValue.PARTIAL
 
 
 def test_regrade_checks_the_grades_sources_and_cites_them():

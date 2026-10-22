@@ -4,7 +4,7 @@ citations through fix_citations."""
 from collections.abc import Callable
 
 from ebb.citations import MAX_RETRIES
-from ebb.llm.tutor import AllProvidersExhausted, Generated
+from ebb.llm.tutor import Generated, TutorUnavailable
 
 
 def fix_citations[T](
@@ -21,7 +21,7 @@ def fix_citations[T](
             break
         try:
             generated = fix(generated, failures)
-        except AllProvidersExhausted:
+        except TutorUnavailable:
             break
         failures = check(generated.value)
     return generated

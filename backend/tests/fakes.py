@@ -30,7 +30,7 @@ from ebb.domain import (
     Subject,
 )
 from ebb.llm.schemas import ConceptDraft, EvalCaseDraft, NoteConcept
-from ebb.llm.tutor import AllProvidersExhausted, Generated
+from ebb.llm.tutor import AllProvidersExhausted, Generated, TutorRefused
 from ebb.store import (
     MAX_DOCUMENTS,
     PRUNE_AFTER,
@@ -428,7 +428,9 @@ class FakeTutor:
         fail_regrade: bool = False,
         fail_concepts: bool = False,
         fail_eval_on_calls: Sequence[int] = (),
+        refuse: set[str] | None = None,
     ) -> None:
+        self.refuse = refuse or set()  # names of the methods that raise TutorRefused
         self.batch_size = batch_size
         self.fail_grade_times = fail_grade_times
         self.fail_generate = fail_generate
@@ -474,7 +476,12 @@ class FakeTutor:
     def _out[T](self, value: T) -> Generated[T]:
         return Generated(value, "fake-model", self.fell_back)
 
+    def _maybe_refuse(self, method: str) -> None:
+        if method in self.refuse:
+            raise TutorRefused()
+
     def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]:
+        self._maybe_refuse("extract_concepts")
         drafts = [
             ConceptDraft(name=f"{topic} {n}", description=f"Idea {n} of {topic}.")
             for n in range(1, 7)
@@ -485,6 +492,7 @@ class FakeTutor:
         self, subject: str, existing: Sequence[Concept]
     ) -> Generated[list[ConceptDraft]]:
         self.extend_calls.append((subject, [c.name for c in existing]))
+        self._maybe_refuse("extend_concepts")
         if self.fail_extend:
             raise AllProvidersExhausted("extension down")
         call = len(self.extend_calls) - 1
@@ -508,6 +516,7 @@ class FakeTutor:
         self.failures_calls.append(list(failures))
         self.web_count_calls.append(web_count)
         self.rewrite_calls.append(list(rewrite))
+        self._maybe_refuse("generate_questions")
         if self.fail_generate or self.generate_attempts == self.fail_generate_on_call:
             raise AllProvidersExhausted("generation down")
         self.generate_calls.append(concept.name)
@@ -566,6 +575,7 @@ class FakeTutor:
         previous: Grade | None = None,
     ) -> Generated[Grade]:
         self.grade_previous.append(previous)
+        self._maybe_refuse("grade")
         if self.fail_grade_times > 0:
             self.fail_grade_times -= 1
             raise AllProvidersExhausted("grading down")
@@ -586,6 +596,7 @@ class FakeTutor:
         previous: Lesson | None = None,
     ) -> Generated[Lesson]:
         self.teach_previous.append(previous)
+        self._maybe_refuse("teach")
         if self.fail_teach:
             raise AllProvidersExhausted("teaching down")
         claims = self._claims(self.teach_cites, self.teach_attempts)
@@ -596,6 +607,7 @@ class FakeTutor:
         self, subject: str, existing: Sequence[Concept], digest: str
     ) -> Generated[list[NoteConcept]]:
         self.concepts_calls.append((subject, [c.name for c in existing], digest))
+        self._maybe_refuse("concepts_from_notes")
         if self.fail_concepts:
             raise AllProvidersExhausted("concepts down")
         call = len(self.concepts_calls) - 1
@@ -618,6 +630,7 @@ class FakeTutor:
     ) -> Generated[Regrade]:
         self.regrade_calls.append((answer, reason, explanation))
         self.regrade_previous.append(previous)
+        self._maybe_refuse("regrade")
         if self.fail_regrade:
             raise AllProvidersExhausted("regrade down")
         call = len(self.regrade_calls) - 1
@@ -631,6 +644,7 @@ class FakeTutor:
     ) -> Generated[EvalCaseDraft]:
         """An answer this tutor's own `grade` marks as the target: right, meh or wrong."""
         self.eval_calls.append((topic, target, notes))
+        self._maybe_refuse("write_eval_case")
         if len(self.eval_calls) in self.fail_eval_on_calls:
             raise AllProvidersExhausted("writer down")
         answer = {"correct": "right", "partial": "meh", "incorrect": "wrong"}[target.value]

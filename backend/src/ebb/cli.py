@@ -53,7 +53,7 @@ if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
     from langgraph.graph.state import CompiledStateGraph
 
-    from ebb.llm.tutor import LangChainTutor
+    from ebb.llm.tutor import LangChainTutor, TutorUnavailable
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -159,10 +159,9 @@ def _ask(payload: dict[str, Any]) -> dict[str, Any]:
         return reply
 
 
-def _exhausted(error: Exception) -> NoReturn:
-    from ebb.graph.nodes import EXHAUSTED_NOTICE
-
-    console.print(f"[red]{escape(EXHAUSTED_NOTICE)}[/red]")
+def _exhausted(error: TutorUnavailable) -> NoReturn:
+    """A tutor call outside the graph failed or was refused: its notice, then exit 1."""
+    console.print(f"[red]{escape(error.notice)}[/red]")
     cause = str(error).strip()
     if cause:
         console.print(f"[dim]{escape(cause.splitlines()[0])}[/dim]")
@@ -194,7 +193,7 @@ def _find_concepts(
 ) -> tuple[list[str], list[tuple[str, str]]]:
     """Ask for the concepts in one file; returns (matched names, new (name, description))."""
     from ebb.chunking import digest
-    from ebb.llm.tutor import AllProvidersExhausted
+    from ebb.llm.tutor import TutorUnavailable
 
     # Placeholders: the prompt only uses names and descriptions, so these ids are never stored.
     placeholder = uuid4()
@@ -202,7 +201,7 @@ def _find_concepts(
     with console.status("Finding the concepts in your notes…"):
         try:
             generated = tutor.concepts_from_notes(subject, existing, digest(document.chunks))
-        except AllProvidersExhausted as error:
+        except TutorUnavailable as error:
             _exhausted(error)
         except ConfigError as error:
             _fail(str(error), code=2)
@@ -225,7 +224,7 @@ def new(
     ] = None,
 ) -> None:
     """Create a subject from a topic, or from your notes: Ebb lists its core concepts."""
-    from ebb.llm.tutor import AllProvidersExhausted
+    from ebb.llm.tutor import TutorUnavailable
 
     topic = topic.strip()
     if not topic:
@@ -242,7 +241,7 @@ def new(
     with console.status("Mapping the topic…"):
         try:
             generated = tutor.extract_concepts(topic)
-        except AllProvidersExhausted as error:
+        except TutorUnavailable as error:
             _exhausted(error)
         except ConfigError as error:
             _fail(str(error), code=2)

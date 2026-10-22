@@ -170,6 +170,47 @@ def test_new_shows_the_first_line_of_the_cause(fakes, monkeypatch):
     assert "stack detail" not in result.output
 
 
+REFUSED = "The tutor won't help with that topic."
+
+
+def test_new_prints_the_refusal_and_exits_1(fakes):
+    store, tutor = fakes
+    tutor.refuse = {"extract_concepts"}
+
+    result = runner.invoke(cli.app, ["new", "Networks"])
+
+    assert result.exit_code == 1
+    assert REFUSED in result.output
+    assert "couldn't respond" not in result.output
+    assert store.subjects == {}
+
+
+def test_add_prints_the_refusal_and_exits_1(fakes, tmp_path):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    tutor.refuse = {"concepts_from_notes"}
+
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+
+    assert result.exit_code == 1
+    assert REFUSED in result.output
+    assert store.documents == {}
+
+
+def test_study_refused_generation_shows_the_notice_and_ends_normally(fakes):
+    """Inside the graph a refusal follows the exhausted path: notice, summary, exit 0."""
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    tutor.refuse = {"generate_questions"}
+
+    result = runner.invoke(cli.app, ["study"])
+
+    assert result.exit_code == 0, result.output
+    assert REFUSED in flat(result.output)
+    assert "No answers this session." in result.output
+    assert next(iter(store.sessions.values()))["ended_at"] is not None
+
+
 def test_new_exits_2_on_a_rejected_key(fakes, monkeypatch):
     _, tutor = fakes
 
