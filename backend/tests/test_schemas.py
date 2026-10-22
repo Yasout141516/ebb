@@ -91,6 +91,7 @@ def test_citations_default_to_empty_and_parse_when_given():
     web = WebQuestionBatch.model_validate({"questions": [draft]})
     assert web.questions[0].citations[0].source == "N1"
     assert LessonResult(text="t", citations=[]).citations == []
+    assert LessonResult(text="t").citations == []
 
 
 @pytest.mark.parametrize("count", [0, 6])
@@ -107,9 +108,9 @@ def test_note_concept_list_bounds():
     def concepts(count):
         return {"concepts": [{"name": f"c{n}", "description": "d"} for n in range(count)]}
 
-    assert len(NoteConceptList.model_validate(concepts(3)).concepts) == 3
+    assert len(NoteConceptList.model_validate(concepts(1)).concepts) == 1
     assert len(NoteConceptList.model_validate(concepts(12)).concepts) == 12
-    for count in (2, 13):
+    for count in (0, 13):
         with pytest.raises(ValidationError):
             NoteConceptList.model_validate(concepts(count))
     assert NoteConceptList.model_validate(concepts(3)).concepts[0].same_as is None

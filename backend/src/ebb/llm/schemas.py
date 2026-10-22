@@ -114,7 +114,7 @@ class GradeResult(BaseModel):
 
 class LessonResult(BaseModel):
     text: str
-    citations: list[CitationDraft]
+    citations: list[CitationDraft] = []
 
 
 class NoteConcept(BaseModel):
@@ -136,9 +136,9 @@ class NoteConceptList(BaseModel):
 
     @field_validator("concepts")
     @classmethod
-    def three_to_twelve(cls, value: list[NoteConcept]) -> list[NoteConcept]:
-        if not 3 <= len(value) <= 12:
-            raise ValueError(f"expected 3-12 concepts, got {len(value)}")
+    def one_to_twelve(cls, value: list[NoteConcept]) -> list[NoteConcept]:
+        if not 1 <= len(value) <= 12:
+            raise ValueError(f"expected 1-12 concepts, got {len(value)}")
         return value
 
 
