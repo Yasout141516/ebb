@@ -1046,3 +1046,76 @@ def test_take_ai_call_counts_per_day_in_the_users_zone(usage_store):
     assert usage_store.take_ai_call(ALICE, before_midnight, 1) is True
     assert usage_store.take_ai_call(ALICE, before_midnight, 1) is False
     assert usage_store.take_ai_call(ALICE, after_midnight, 1) is True
+
+
+# --- who drives a session, in either store ------------------------------------------------
+
+LEASE = timedelta(seconds=90)
+
+
+@pytest.fixture(params=["postgres", "memory"])
+def session_store(request, store):
+    if request.param == "postgres":
+        return store
+    memory = MemoryStore()
+    memory.ensure_profile(ALICE)
+    memory.ensure_profile(BOB)
+    return memory
+
+
+def open_session(store, thread_id: str = "t-1") -> UUID:
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    return store.create_session(ALICE, subject_id, thread_id)
+
+
+def later(seconds: int) -> datetime:
+    return NOW + timedelta(seconds=seconds)
+
+
+def test_claim_session_takes_a_free_lease_and_renews_its_own(session_store):
+    open_session(session_store)
+
+    assert session_store.session_driver(ALICE, "t-1", NOW, LEASE) is None
+    assert session_store.claim_session(ALICE, "t-1", "tab-a", NOW, LEASE) is True
+    assert session_store.session_driver(ALICE, "t-1", later(89), LEASE) == "tab-a"
+    assert session_store.claim_session(ALICE, "t-1", "tab-b", later(89), LEASE) is False
+    assert session_store.claim_session(ALICE, "t-1", "tab-a", later(60), LEASE) is True
+    assert session_store.claim_session(ALICE, "t-1", "tab-b", later(149), LEASE) is False
+    assert session_store.session_driver(ALICE, "t-1", later(150), LEASE) is None  # expired
+    assert session_store.claim_session(ALICE, "t-1", "tab-b", later(150), LEASE) is True
+    assert session_store.session_driver(ALICE, "t-1", later(150), LEASE) == "tab-b"
+    assert session_store.get_session(ALICE, "t-1").last_active_at == later(150)
+
+
+def test_claim_session_refuses_ended_and_other_users_sessions(session_store):
+    session_id = open_session(session_store)
+
+    assert session_store.claim_session(BOB, "t-1", "tab-a", NOW, LEASE) is False
+    assert session_store.get_session(BOB, "t-1") is None
+    assert session_store.get_session(ALICE, "t-1").session_id == session_id
+    session_store.end_session(ALICE, session_id, NOW)
+    assert session_store.claim_session(ALICE, "t-1", "tab-a", NOW, LEASE) is False
+    assert session_store.get_session(ALICE, "t-1") is None
+    assert session_store.session_driver(ALICE, "t-1", NOW, LEASE) is None
+
+
+def test_touch_session_moves_the_last_activity(session_store):
+    session_id = open_session(session_store)
+
+    session_store.touch_session(ALICE, "t-1", NOW)
+    session_store.touch_session(BOB, "t-1", later(60))
+
+    found = session_store.get_session(ALICE, "t-1")
+    assert (found.session_id, found.thread_id, found.last_active_at) == (session_id, "t-1", NOW)
+
+
+def test_close_stale_sessions_skips_a_session_whose_lock_is_held(session_store):
+    open_session(session_store)
+    session_store.touch_session(ALICE, "t-1", NOW - timedelta(hours=25))
+
+    with session_store.session_lock(ALICE, "t-1") as held:
+        assert held is True
+        assert session_store.close_stale_sessions(ALICE, NOW) == 0
+
+    assert session_store.close_stale_sessions(ALICE, NOW) == 1
+    assert session_store.get_session(ALICE, "t-1") is None

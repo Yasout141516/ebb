@@ -370,10 +370,27 @@ def test_locked_session_starts_fresh(fakes, monkeypatch):
         result = runner.invoke(cli.app, ["study"], input="q\n")
 
     assert result.exit_code == 0, result.output
-    assert "That session is open in another terminal." in result.output
+    assert "That session is open in another tab or terminal." in result.output
     assert "Resume?" not in result.output
     assert "Nothing is due. Let's learn something new." in result.output
     assert old["ended_at"] is None  # still the other terminal's
+    assert len(store.sessions) == 2
+
+
+def test_session_a_browser_tab_is_driving_starts_fresh(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    old_id, old = only_session(store)
+    lease = timedelta(seconds=90)
+    assert store.claim_session(old["user_id"], old["thread_id"], "web:1", datetime.now(UTC), lease)
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "That session is open in another tab or terminal." in result.output
+    assert "Resume?" not in result.output
+    assert old["ended_at"] is None and old["driver"] == "web:1"
     assert len(store.sessions) == 2
 
 

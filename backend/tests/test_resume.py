@@ -18,6 +18,7 @@ from ebb.config import Settings
 from ebb.db.migrate import MIGRATION_LOCK
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
+from ebb.study import Offer, Pending, StudySessions
 from tests.fakes import FakeTutor
 
 pytestmark = pytest.mark.db
@@ -148,6 +149,40 @@ def test_crash_while_grading_resumes_and_grades_once(
     assert "● Correct" in result.output.split("Resume? [Y/n]", 1)[1]
     assert attempt_count(pg_pool) == 1
     assert ended_at(store, found.session_id) is not None  # finished by q, same session
+
+
+def study_service(store: PgStore, tutor: FakeTutor) -> StudySessions:
+    """The session service as a freshly started API process builds it."""
+    saver = PostgresSaver(store.pool)
+    graph = build_graph(tutor, store, saver)
+    return StudySessions(store, graph, saver, lambda: datetime.now(UTC))
+
+
+def test_service_finishes_a_cut_off_step_once_after_a_restart(
+    store, subject_id, pg_pool, monkeypatch
+):
+    crashing = FakeTutor()
+
+    def killed_while_grading(question, answer, sources=(), failures=(), previous=None):
+        raise RuntimeError("killed while grading")
+
+    monkeypatch.setattr(crashing, "grade", killed_while_grading)
+    sessions = study_service(store, crashing)
+    thread_id, _, events = sessions.start(ALICE, subject_id, "tab-a")
+    first = list(events)[-1]
+    with pytest.raises(RuntimeError):
+        list(sessions.reply(ALICE, thread_id, "tab-a", reply(first.payload)))
+
+    sessions = study_service(store, FakeTutor())  # the API restarted; the tab reconnects
+    offer = sessions.offer(ALICE, subject_id, "tab-a")
+    resumed = list(sessions.resume(ALICE, thread_id, "tab-a"))
+
+    assert offer == Offer(thread_id, "DNS", 1, offer.last_active_at, busy=False)
+    last = resumed[-1]
+    assert isinstance(last, Pending)
+    assert last.payload["number"] == 2 and last.payload["feedback"]["value"] == "correct"
+    assert attempt_count(pg_pool) == 1
+    assert sessions.offer(ALICE, subject_id, "tab-b").busy is True  # tab-a's lease is live
 
 
 def test_state_with_nothing_pending_is_closed(store, subject_id, cli_on_postgres):

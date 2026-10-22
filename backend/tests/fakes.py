@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
 from ebb import mastery
@@ -115,6 +115,8 @@ class MemoryStore:
             "ended_at": None,
             "last_active_at": datetime.now(UTC),
             "pruned_at": None,
+            "driver": None,
+            "driver_seen_at": None,
         }
         return session_id
 
@@ -376,10 +378,48 @@ class MemoryStore:
                 s["user_id"] == user_id
                 and s["ended_at"] is None
                 and s["last_active_at"] <= now - RESUME_WINDOW
+                and s["thread_id"] not in self.locks
             ):
                 s["ended_at"] = s["last_active_at"]
                 closed += 1
         return closed
+
+    def _open_session(self, user_id: UUID, thread_id: str) -> tuple[UUID, dict] | None:
+        for session_id, s in self.sessions.items():
+            if s["user_id"] == user_id and s["thread_id"] == thread_id and s["ended_at"] is None:
+                return session_id, s
+        return None
+
+    def get_session(self, user_id: UUID, thread_id: str) -> ResumableSession | None:
+        found = self._open_session(user_id, thread_id)
+        if found is None:
+            return None
+        session_id, s = found
+        return ResumableSession(session_id, s["thread_id"], s["last_active_at"])
+
+    def claim_session(
+        self, user_id: UUID, thread_id: str, driver: str, now: datetime, lease: timedelta
+    ) -> bool:
+        found = self._open_session(user_id, thread_id)
+        if found is None:
+            return False
+        s = found[1]
+        if s["driver"] not in (None, driver) and s["driver_seen_at"] > now - lease:
+            return False
+        s.update(driver=driver, driver_seen_at=now, last_active_at=now)
+        return True
+
+    def session_driver(
+        self, user_id: UUID, thread_id: str, now: datetime, lease: timedelta
+    ) -> str | None:
+        found = self._open_session(user_id, thread_id)
+        seen = None if found is None else found[1]["driver_seen_at"]
+        return found[1]["driver"] if seen is not None and seen > now - lease else None
+
+    def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
+        found = self._open_session(user_id, thread_id)
+        if found is not None:
+            found[1]["last_active_at"] = now
 
     def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:
         return [

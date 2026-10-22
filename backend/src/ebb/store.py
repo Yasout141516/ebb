@@ -260,7 +260,32 @@ class Store(Protocol):
         ...
 
     def close_stale_sessions(self, user_id: UUID, now: datetime) -> int:
-        """End open sessions idle for RESUME_WINDOW, at their last activity; returns the count."""
+        """End open sessions idle for RESUME_WINDOW, at their last activity; returns the count.
+
+        A session whose lock is held is skipped: someone is still on it. One whose lease is
+        live never qualifies, since claiming a lease also marks the session active."""
+        ...
+
+    def get_session(self, user_id: UUID, thread_id: str) -> ResumableSession | None:
+        """The user's open session on this thread, or None."""
+        ...
+
+    def claim_session(
+        self, user_id: UUID, thread_id: str, driver: str, now: datetime, lease: timedelta
+    ) -> bool:
+        """Make `driver` the session's driver as of `now`, and mark the session active, if it
+        is open and its lease is free, expired (seen `lease` or longer ago) or already this
+        driver's; returns whether it did."""
+        ...
+
+    def session_driver(
+        self, user_id: UUID, thread_id: str, now: datetime, lease: timedelta
+    ) -> str | None:
+        """The driver of the open session whose lease is live at `now`, or None."""
+        ...
+
+    def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
+        """Mark the open session active at `now`."""
         ...
 
     def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:

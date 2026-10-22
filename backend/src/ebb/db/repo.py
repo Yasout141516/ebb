@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import asdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -615,12 +615,73 @@ class PgStore:
         return ResumableSession(row["id"], row["thread_id"], row["last_active_at"])
 
     def close_stale_sessions(self, user_id: UUID, now: datetime) -> int:
+        idle_since = now - RESUME_WINDOW
         with self.pool.connection() as conn:
-            return conn.execute(
-                "update study_sessions set ended_at = last_active_at"
+            stale = conn.execute(
+                "select id, thread_id from study_sessions"
                 " where user_id = %s and ended_at is null and last_active_at <= %s",
-                (user_id, now - RESUME_WINDOW),
-            ).rowcount
+                (user_id, idle_since),
+            ).fetchall()
+        closed = 0
+        for row in stale:
+            # Ended under its lock, so a terminal can't take it up in between.
+            with self.session_lock(user_id, row["thread_id"]) as free:
+                if not free:
+                    continue  # someone is still on it
+                with self.pool.connection() as conn:
+                    closed += conn.execute(
+                        "update study_sessions set ended_at = last_active_at"
+                        " where id = %s and ended_at is null and last_active_at <= %s",
+                        (row["id"], idle_since),
+                    ).rowcount
+        return closed
+
+    def get_session(self, user_id: UUID, thread_id: str) -> ResumableSession | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select id, thread_id, last_active_at from study_sessions"
+                " where user_id = %s and thread_id = %s and ended_at is null",
+                (user_id, thread_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return ResumableSession(row["id"], row["thread_id"], row["last_active_at"])
+
+    def claim_session(
+        self, user_id: UUID, thread_id: str, driver: str, now: datetime, lease: timedelta
+    ) -> bool:
+        # One statement: of two drivers claiming at once, the row lock lets one win.
+        with self.pool.connection() as conn:
+            return (
+                conn.execute(
+                    "update study_sessions"
+                    " set driver = %s, driver_seen_at = %s, last_active_at = %s"
+                    " where user_id = %s and thread_id = %s and ended_at is null"
+                    " and (driver is null or driver = %s or driver_seen_at <= %s)",
+                    (driver, now, now, user_id, thread_id, driver, now - lease),
+                ).rowcount
+                == 1
+            )
+
+    def session_driver(
+        self, user_id: UUID, thread_id: str, now: datetime, lease: timedelta
+    ) -> str | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select driver from study_sessions"
+                " where user_id = %s and thread_id = %s and ended_at is null"
+                " and driver_seen_at > %s",
+                (user_id, thread_id, now - lease),
+            ).fetchone()
+        return None if row is None else row["driver"]
+
+    def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "update study_sessions set last_active_at = %s"
+                " where user_id = %s and thread_id = %s and ended_at is null",
+                (now, user_id, thread_id),
+            )
 
     def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:
         with self.pool.connection() as conn:
