@@ -11,7 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ebb.domain import Concept, Document
-from ebb.grading import parse_choice
+from ebb.grading import GRADE_RANK, parse_choice
 from ebb.mastery import MAX_STAGE, is_due, tide
 
 GRADE_STYLE = {"correct": "green", "partial": "yellow", "incorrect": "red"}
@@ -116,7 +116,6 @@ def status_table(concepts: Sequence[Concept], now: datetime, tz: ZoneInfo) -> Ta
 
 
 GRADE_NAME = {"correct": "Correct", "partial": "Partial", "incorrect": "Incorrect"}
-GRADE_ORDER = {"incorrect": 0, "partial": 1, "correct": 2}
 DISPUTE_REASONS = [
     ("correct", "My answer is correct"),
     ("ambiguous", "The question is ambiguous"),
@@ -201,7 +200,7 @@ def dispute_line(result: dict[str, Any]) -> str:
     if outcome == "voided":
         return "Re-check: the question was ambiguous — that answer no longer counts."
     new = result["new_grade"]
-    raised = GRADE_ORDER[new] > GRADE_ORDER[result["original_grade"]]
+    raised = GRADE_RANK[new] > GRADE_RANK[result["original_grade"]]
     verb, link = ("raised to", "back to") if raised else ("lowered to", "now")
     level = f"{stage_dots(result['stage'])} level {result['stage']}"
     return f"Re-check: {verb} {GRADE_NAME[new]} — {result['concept']} {link} {level}."

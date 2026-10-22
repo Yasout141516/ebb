@@ -15,6 +15,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from ebb.chunking import chunk_notes
 from ebb.citations import note_sources, source_from_dict, source_to_dict, verify
 from ebb.domain import Chunk, Grade, GradeValue, Question, Source
+from ebb.grading import GRADE_RANK
 from ebb.llm.tutor import AllProvidersExhausted, Tutor
 from ebb.notes import read_notes
 
@@ -69,7 +70,6 @@ EVAL_TOPICS = (
 )
 
 _TARGETS = (GradeValue.CORRECT, GradeValue.PARTIAL, GradeValue.INCORRECT)
-_RANK = {GradeValue.INCORRECT: 0, GradeValue.PARTIAL: 1, GradeValue.CORRECT: 2}
 _ORDER = ("correct", "partial", "incorrect")
 _CHUNK_NAMESPACE = uuid5(NAMESPACE_URL, "ebb:eval-notes")
 
@@ -267,7 +267,7 @@ def score(cases: Sequence[EvalCase], grades: Sequence[Grade | None]) -> EvalScor
         if grade.value is case.label:
             agreed += 1
             continue
-        if _RANK[grade.value] < _RANK[case.label]:
+        if GRADE_RANK[grade.value] < GRADE_RANK[case.label]:
             harsh += 1
         else:
             lenient += 1

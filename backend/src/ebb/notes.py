@@ -13,7 +13,6 @@ from ebb.chunking import chunk_notes
 from ebb.domain import NewDocument
 
 MAX_BYTES = 20 * 1024 * 1024
-MAX_FILES = 5
 MIN_CHARS_PER_PAGE = 50
 KINDS = {".pdf": "pdf", ".txt": "txt", ".md": "md"}
 

@@ -5,6 +5,9 @@ from dataclasses import replace
 
 from ebb.domain import DisputeOutcome, DisputeReason, Grade, GradeValue, Question
 
+# Grades from worst to best. GradeValue is a StrEnum, so "correct" looks up CORRECT too.
+GRADE_RANK = {GradeValue.INCORRECT: 0, GradeValue.PARTIAL: 1, GradeValue.CORRECT: 2}
+
 
 def parse_choice(options: Sequence[str], answer: str) -> int | None:
     """Map an answer to a 0-based option index, or None if it matches nothing.
