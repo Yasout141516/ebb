@@ -6,6 +6,7 @@ the commands that use them; `ebb --help` and `ebb status` never load them.
 
 import atexit
 import time
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -62,12 +63,17 @@ def _fail(message: str, code: int = 1) -> NoReturn:
     raise typer.Exit(code)
 
 
-def _open_store() -> tuple[Settings, PgStore]:
+def _configured[T](make: Callable[[], T]) -> T:
+    """`make()`; a ConfigError it raises exits 2 with its message."""
     try:
-        settings = Settings()
-        pool = make_pool(settings.database_url)
+        return make()
     except ConfigError as error:
         _fail(str(error), code=2)
+
+
+def _open_store() -> tuple[Settings, PgStore]:
+    settings = _configured(Settings)
+    pool = _configured(lambda: make_pool(settings.database_url))
     # Close the pool before interpreter shutdown, or its worker threads print a traceback.
     atexit.register(pool.close)
     with pool.connection() as conn:
@@ -77,20 +83,14 @@ def _open_store() -> tuple[Settings, PgStore]:
     return settings, store
 
 
-def _tutor(settings: Settings) -> LangChainTutor:
+def _tutor(settings: Settings, fallback: bool = True) -> LangChainTutor:
     from ebb.llm.tutor import LangChainTutor
 
-    try:
-        return LangChainTutor.from_settings(settings)
-    except ConfigError as error:
-        _fail(str(error), code=2)
+    return _configured(lambda: LangChainTutor.from_settings(settings, fallback))
 
 
 def _timezone(settings: Settings) -> ZoneInfo:
-    try:
-        return resolve_timezone(settings.ebb_timezone)
-    except ConfigError as error:
-        _fail(str(error), code=2)
+    return _configured(lambda: resolve_timezone(settings.ebb_timezone))
 
 
 def _subject(store: PgStore, user_id: UUID, name: str | None) -> Subject:
@@ -477,30 +477,15 @@ def status(
         console.print("  No sources yet. Add notes with: ebb add <file>")
 
 
-def _eval_settings() -> Settings:
-    try:
-        return Settings()
-    except ConfigError as error:
-        _fail(str(error), code=2)
-
-
 def _eval_writer(settings: Settings) -> LangChainTutor:
     from ebb.llm.tutor import LangChainTutor
 
-    try:
-        return LangChainTutor.writer(settings)
-    except ConfigError as error:
-        _fail(str(error), code=2)
+    return _configured(lambda: LangChainTutor.writer(settings))
 
 
 def _eval_grader(settings: Settings) -> LangChainTutor:
     """The primary model alone, so one run measures one model."""
-    from ebb.llm.tutor import LangChainTutor
-
-    try:
-        return LangChainTutor.from_settings(settings, fallback=False)
-    except ConfigError as error:
-        _fail(str(error), code=2)
+    return _tutor(settings, fallback=False)
 
 
 def _pace(seconds: float) -> None:
@@ -536,7 +521,7 @@ def eval_build(
 
     if dataset.exists() and not force:
         _fail(f"{dataset} exists — pass --force to rebuild it.")
-    writer = _eval_writer(_eval_settings())
+    writer = _eval_writer(_configured(Settings))
     expected = len(EVAL_TOPICS) + GROUNDED_CASES
     console.print(f"Writing {expected} cases; this takes a few minutes.")
     try:
@@ -566,17 +551,14 @@ def eval_run(
     if not dataset.is_file():
         _fail(f"{dataset} not found. Build it first with: ebb eval build")
     cases = load_cases(dataset)
-    settings = _eval_settings()
+    settings = _configured(Settings)
     model = settings.ebb_primary_model
     grader = _eval_grader(settings)
 
     def progress(number: int, total: int) -> None:
         console.print(f"Grading {number}/{total}…")
 
-    try:
-        grades = run_cases(grader, cases, sleep=_pace, progress=progress)
-    except ConfigError as error:
-        _fail(str(error), code=2)
+    grades = _configured(lambda: run_cases(grader, cases, sleep=_pace, progress=progress))
     result = score(cases, grades)
     writer = cases[0].writer_model if cases else "the writer model"
     text = report_markdown(result, model, _today(), _dispute_counts(), writer)
