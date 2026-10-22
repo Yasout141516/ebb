@@ -11,7 +11,7 @@ from pypdf.errors import PyPdfError
 
 from ebb.chunking import chunk_notes
 from ebb.domain import NewDocument
-from ebb.ui import format_megabytes
+from ebb.units import format_megabytes
 
 MAX_BYTES = 20 * 1024 * 1024
 MIN_CHARS_PER_PAGE = 50

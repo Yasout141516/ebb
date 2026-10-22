@@ -87,12 +87,9 @@ def _web_mode(state: QuizState) -> bool:
     return state.get("generation_mode", "notes") == "web"
 
 
-# What resets the citation retry for the next candidates.
-_CITATION_RESET: dict[str, Any] = {
-    "citation_retries": 0,
-    "citation_failures": [],
-    "citation_failing": [],
-}
+def _citation_reset() -> dict[str, Any]:
+    """What resets the citation retry for the next candidates, with fresh lists."""
+    return {"citation_retries": 0, "citation_failures": [], "citation_failing": []}
 
 
 def source_line(question: dict[str, Any]) -> str | None:
@@ -264,7 +261,7 @@ def make_nodes(
             "web_notice_shown": False,
             "sources": [],
             "candidates": [],
-            **_CITATION_RESET,
+            **_citation_reset(),
             "studied_concept_ids": [],
             "results": [],
             "quit": False,
@@ -334,7 +331,7 @@ def make_nodes(
             )
             sources = [source_to_dict(s) for s in note_sources(chunks)]
         # Fetched once per concept; this session's answers are in asked_prompts.
-        return {"sources": sources, "earlier_prompts": answered_prompts(state), **_CITATION_RESET}
+        return {"sources": sources, "earlier_prompts": answered_prompts(state), **_citation_reset()}
 
     def generate_questions(state: QuizState) -> dict[str, Any]:
         concept = concept_from_dict(state["concept"])
@@ -428,7 +425,7 @@ def make_nodes(
         update: dict[str, Any] = {
             "batch": [*state["batch"], *(question_to_dict(q) for q in kept)],
             "candidates": [],
-            **_CITATION_RESET,
+            **_citation_reset(),
             "generation_mode": "notes",
             # Only repeats from a notes batch are replaced; web ones are simply dropped.
             "replacements_needed": 0 if web_mode else len(final) - len(kept),

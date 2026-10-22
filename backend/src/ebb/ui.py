@@ -13,6 +13,7 @@ from rich.table import Table
 from ebb.domain import Concept, Document
 from ebb.grading import GRADE_RANK, parse_choice
 from ebb.mastery import MAX_STAGE, is_due, tide
+from ebb.units import format_megabytes
 
 GRADE_STYLE = {"correct": "green", "partial": "yellow", "incorrect": "red"}
 GRADE_MARK = {"correct": "● Correct", "partial": "◐ Partial", "incorrect": "○ Incorrect"}
@@ -254,10 +255,6 @@ PRIVACY_LINE = (
     "Don't upload sensitive documents. "
     "Files are processed by an AI model to write questions and cite answers."
 )
-
-
-def format_megabytes(size_bytes: int) -> str:
-    return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 
 def _pages_prefix(page_count: int | None) -> str:
