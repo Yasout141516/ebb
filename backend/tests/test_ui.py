@@ -18,6 +18,7 @@ from ebb.ui import (
     read_reply,
     read_yes_no,
     render_citations,
+    render_feedback,
     render_summary,
     render_turn,
     resume_question,
@@ -75,7 +76,7 @@ def test_generated_text_with_brackets_is_shown_literally():
     payload = {
         "concept": "Routing",
         "feedback": {"value": "incorrect", "explanation": "Close [/bold] but no."},
-        "lesson": "Use [SYN] first.",
+        "lesson": {"text": "Use [SYN] first.", "citations": []},
         "notices": ["[x] note"],
         "question": {
             "type": "mcq",
@@ -316,7 +317,9 @@ def test_render_turn_after_a_dispute_skips_the_old_feedback():
     cited = {"kind": "chunk", "label": "a.md", "quote": "Quote."}
     result = {"outcome": "upheld", "explanation": "Still half.", "citations": [cited]}
     backup = "Switched to a backup model while the main one is busy."
-    payload = question_payload(dispute_result=result, lesson="Old lesson", notices=[backup])
+    payload = question_payload(
+        dispute_result=result, lesson={"text": "Old lesson", "citations": []}, notices=[backup]
+    )
 
     text = recorded(render_turn, payload)
 
@@ -326,3 +329,13 @@ def test_render_turn_after_a_dispute_skips_the_old_feedback():
     assert "Old lesson" not in text
     assert backup in text  # the re-check's own notices
     assert "Why?" in text
+
+
+def test_render_feedback_reads_lesson_object():
+    cited = {"kind": "chunk", "label": "a.md", "quote": "Quote."}
+
+    text = recorded(render_feedback, None, {"text": "Use SYN first.", "citations": [cited]})
+
+    assert "Use SYN first." in text
+    assert "“Quote.”" in text
+    assert "a.md" in text

@@ -217,7 +217,7 @@ def test_wrong_answer_is_taught_then_asked_again_at_same_difficulty():
     final, payloads = run(tutor, store, subject_id, lambda p: next(answers))
 
     assert payloads[1]["feedback"]["value"] == "incorrect"
-    assert payloads[1]["lesson"] == "Here is the idea, with an example."
+    assert payloads[1]["lesson"] == {"text": "Here is the idea, with an example.", "citations": []}
     assert payloads[1]["question"]["difficulty"] == payloads[0]["question"]["difficulty"]
     assert final["results"][0]["tally"]["incorrect"] == 1
 
@@ -258,6 +258,7 @@ def test_failed_grading_asks_the_same_question_again():
     assert payloads[1]["feedback"] is None
     assert payloads[2]["feedback"]["value"] == "correct"
     assert len(store.attempts) == 1
+    assert final["current_question_id"] is None  # cleared once the question is answered
 
 
 def test_failed_generation_ends_the_session_with_a_notice():
@@ -598,7 +599,7 @@ def test_uncovered_concept_is_general_without_retry():
     assert payloads[0]["question"]["source_line"] is None
     assert payloads[1]["feedback"]["citations"] == []
     assert payloads[1]["feedback"]["general_knowledge"] is True
-    assert payloads[1]["lesson_citations"] == []
+    assert payloads[1]["lesson"]["citations"] == []
 
 
 def test_topic_only_subject_has_no_label():
@@ -613,7 +614,7 @@ def test_topic_only_subject_has_no_label():
     feedback = [p["feedback"] for p in payloads if p["feedback"]]
     assert feedback
     assert all(f["general_knowledge"] is False and f["citations"] == [] for f in feedback)
-    assert all(p["lesson_citations"] == [] for p in payloads)
+    assert all(p["lesson"] is None or p["lesson"]["citations"] == [] for p in payloads)
 
 
 def test_grade_without_citations_uses_the_question_citations():
@@ -680,8 +681,7 @@ def test_lesson_citations_are_in_the_payload():
 
     _, payloads = run(tutor, store, subject_id, quit_after(1, always_wrong))
 
-    assert payloads[1]["lesson"] == "Here is the idea, with an example."
-    [citation] = payloads[1]["lesson_citations"]
+    [citation] = payloads[1]["lesson"]["citations"]
     assert (citation["label"], citation["quote"]) == ("CSE321.pdf · p. 12", OTHER_QUOTE)
     assert payloads[1]["feedback"]["general_knowledge"] is False
 
@@ -696,8 +696,8 @@ def test_lesson_without_valid_citations_shows_none_of_its_own():
     assert tutor.teach_attempts == 1 + MAX_RETRIES
     lesson = Lesson("Here is the idea, with an example.", (Claim("N9", "x"),))
     assert tutor.teach_previous == [None, lesson, lesson]  # each retry sees the last lesson
-    assert payloads[1]["lesson"] == "Here is the idea, with an example."
-    assert payloads[1]["lesson_citations"] == []
+    assert payloads[1]["lesson"]["text"] == "Here is the idea, with an example."
+    assert payloads[1]["lesson"]["citations"] == []
     assert [c["quote"] for c in payloads[1]["feedback"]["citations"]] == [QUOTE]  # the question's
 
 
@@ -804,10 +804,11 @@ def test_milestone_2_checkpoint_still_resumes():
     assert first["question"]["prompt"] == "An old question?"
     assert first["question"]["source_line"] is None
     assert first["feedback"]["citations"] == []
-    assert first["lesson_citations"] == []
+    assert first["lesson"] is None
+    assert "lesson_citations" not in first
     assert second["feedback"]["value"] == "incorrect"
     assert second["feedback"]["general_knowledge"] is False
-    assert second["lesson"] == "Here is the idea, with an example."
+    assert second["lesson"]["text"] == "Here is the idea, with an example."
     assert tutor.sources_calls == [[]]  # the next batch, generated without retrieval
     assert second["question"]["source"] == "general"
 
@@ -1174,7 +1175,7 @@ def test_dispute_reshows_the_same_question():
     assert payloads[3]["question"]["prompt"] != payloads[1]["question"]["prompt"]
     assert payloads[3]["dispute_result"] is None
     assert payloads[3]["can_dispute"] is False  # an MCQ answer
-    assert final["pending_question_id"] is None
+    assert final["current_question_id"] is None
     assert len(store.attempts) == 2
 
 
@@ -1546,3 +1547,105 @@ def test_milestone2_checkpoint_without_new_keys_resumes():
     assert "__interrupt__" in result  # the session goes on to the next question
     assert len(store.attempts) == 1
     assert graph.get_state(config).values["tally"]["correct"] == 1
+
+
+# --- one current question id; the lesson as one object ---------------------------------
+
+
+def old_checkpoint_graph():
+    """A milestone 3 checkpoint's state, with two short questions waiting in the batch."""
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    session_id = store.create_session(USER, subject_id, "t-old")
+    concept = store.list_concepts(USER, subject_id)[0]
+    batch = [
+        question_to_dict(Question(uuid4(), concept.id, "short", 1, p, "right", (), "general"))
+        for p in ("First?", "Second?")
+    ]
+    store.save_questions(USER, session_id, [question_from_dict(q) for q in batch])
+    saved = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-old",
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(concept.id)],
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "concept": concept_to_dict(concept),
+        "start": {"stage": concept.stage, "tide": None},
+        "tally": {"correct": 0, "partial": 0, "incorrect": 0},
+        "batch": batch,
+        "asked_prompts": [],
+        "asked_on_concept": 0,
+        "correct_streak": 0,
+        "generation_calls_on_concept": 1,
+        "question": None,
+        "difficulty": None,
+        "retry_question": False,
+        "grade": None,
+        "lesson": None,
+        "lesson_citations": [],
+        "pending_question_id": None,
+    }
+    graph = build_graph(FakeTutor(), store, InMemorySaver(), now=lambda: NOW)
+    return graph, {"configurable": {"thread_id": "t-old"}}, batch, saved
+
+
+def test_old_checkpoint_with_pending_question_id_resumes():
+    graph, config, batch, saved = old_checkpoint_graph()
+    saved["pending_question_id"] = batch[1]["id"]
+    graph.update_state(config, saved, as_node="regrade")
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=reply("right")), config)
+
+    assert shown["question"]["prompt"] == "Second?"  # the interrupted one, not the first
+    assert "__interrupt__" in result  # the session goes on
+    assert graph.get_state(config).values["current_question_id"] is None
+
+
+def test_old_checkpoint_with_retry_question_resumes():
+    graph, config, _, saved = old_checkpoint_graph()
+    saved["retry_question"] = True
+    graph.update_state(config, saved, as_node="grade_answer")
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=reply("right")), config)
+
+    assert shown["question"]["prompt"] == "First?"  # the failed one, at the front
+    assert "__interrupt__" in result
+
+
+def test_old_checkpoint_with_string_lesson_resumes():
+    graph, config, _, saved = old_checkpoint_graph()
+    cite = {"kind": "chunk", "label": "a.md", "quote": "Quote."}
+    saved |= {
+        "grade": {"value": "incorrect", "explanation": "No.", "misconception": None},
+        "lesson": "An old lesson.",
+        "lesson_citations": [cite],
+    }
+    graph.update_state(config, saved, as_node="teach")
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=reply("right")), config)
+
+    assert shown["lesson"] == {"text": "An old lesson.", "citations": [cite]}
+    assert "lesson_citations" not in shown
+    assert "__interrupt__" in result
+
+
+def test_payload_lesson_is_text_and_citations():
+    store = MemoryStore()
+    tutor = FakeTutor(cite=[[("N1", QUOTE)]], teach_cites=[[("N1", OTHER_QUOTE)]])
+    subject_id = notes_subject(store)
+
+    _, payloads = run(tutor, store, subject_id, quit_after(1, always_wrong))
+
+    assert set(payloads[1]["lesson"]) == {"text", "citations"}
+    assert payloads[1]["lesson"]["text"] == "Here is the idea, with an example."
+    assert [c["quote"] for c in payloads[1]["lesson"]["citations"]] == [OTHER_QUOTE]
+    assert "lesson_citations" not in payloads[1]
+    assert payloads[0]["lesson"] is None

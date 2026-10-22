@@ -276,8 +276,7 @@ def make_nodes(
             "tally": {},
             "grade": None,
             "lesson": None,
-            "lesson_citations": [],
-            "retry_question": False,
+            "current_question_id": None,
         }
 
     def pick_concept(state: QuizState) -> dict[str, Any]:
@@ -299,7 +298,7 @@ def make_nodes(
             "correct_streak": 0,
             "generation_calls_on_concept": 0,
             "difficulty": None,
-            "retry_question": False,
+            "current_question_id": None,
             "generation_mode": "notes",
             "replacements_needed": 0,
             "web_sources": [],
@@ -468,12 +467,11 @@ def make_nodes(
     def ask_question(state: QuizState) -> dict[str, Any]:
         # Runs again from the top when resumed, so nothing before interrupt() may have side effects.
         batch = state["batch"]
-        # After a dispute the question it interrupted is shown again, whatever the grade now is.
-        pending = state["pending_question_id"]
-        index = next((i for i, q in enumerate(batch) if q["id"] == pending), None)
-        if index is None and state["retry_question"]:
-            index = 0
-        elif index is None:
+        # After a dispute the question it interrupted is shown again, whatever the grade now
+        # is; so is one whose grading failed.
+        current = state["current_question_id"]
+        index = next((i for i, q in enumerate(batch) if q["id"] == current), None)
+        if index is None:
             last = state["grade"]["value"] if state["grade"] else None
             index = choose_question(
                 batch, state["difficulty"], last, first=state["asked_on_concept"] == 0
@@ -496,7 +494,6 @@ def make_nodes(
                 },
                 "feedback": feedback,
                 "lesson": state["lesson"],
-                "lesson_citations": state["lesson_citations"],
                 "notices": state["notices"],
                 "can_dispute": graded is not None and not graded["disputed"],
                 "dispute_result": state["dispute_result"],
@@ -504,16 +501,14 @@ def make_nodes(
         )
         if "dispute" in reply:
             # The question stays in the batch, to be shown again once regrade is done.
-            return {"dispute": reply["dispute"], "pending_question_id": question["id"]}
+            return {"dispute": reply["dispute"], "current_question_id": question["id"]}
         update: dict[str, Any] = {
             "question": question,
             "batch": batch[:index] + batch[index + 1 :],
-            "retry_question": False,
+            "current_question_id": None,
             "grade": None,
             "lesson": None,
-            "lesson_citations": [],
             "notices": [],
-            "pending_question_id": None,
             "dispute_result": None,
             "last_graded": None,
         }
@@ -546,7 +541,7 @@ def make_nodes(
             return {
                 "grade": None,
                 "batch": [state["question"], *state["batch"]],
-                "retry_question": True,
+                "current_question_id": state["question"]["id"],
                 "notices": _with_notice(state, EXHAUSTED_NOTICE),
             }
         return {
@@ -611,13 +606,14 @@ def make_nodes(
         except AllProvidersExhausted:
             return {
                 "lesson": None,
-                "lesson_citations": [],
                 "notices": _with_notice(state, EXHAUSTED_NOTICE),
             }
         return {
-            "lesson": generated.value.text,
-            # Only the lesson's own citations; the grade card already shows the question's.
-            "lesson_citations": [to_dict(c) for c in citations],
+            "lesson": {
+                "text": generated.value.text,
+                # Only the lesson's own citations; the grade card already shows the question's.
+                "citations": [to_dict(c) for c in citations],
+            },
             "notices": _notices(state, generated),
         }
 

@@ -55,20 +55,25 @@ class QuizState(TypedDict, total=False):
     # current question
     question: dict[str, Any] | None
     difficulty: int | None
-    retry_question: bool
+    # The question ask_question must show next: after a dispute the interrupted one, after a
+    # failed grade the failed one (which is also back at the front of `batch`).
+    current_question_id: str | None
     attempt_id: str | None
     answer: str | None
     grade: dict[str, Any] | None
     model_used: str | None
-    lesson: str | None
-    lesson_citations: list[dict[str, Any]]
+    lesson: dict[str, Any] | None  # {text, citations}
     # disputes
     # The last short answer graded by the LLM, kept until the next answer so it can be
     # disputed: {attempt_id, concept_id, question, answer, grade, sources, disputed}.
     last_graded: dict[str, Any] | None
     dispute: dict[str, Any] | None  # {id, reason, explanation} waiting for regrade
     dispute_result: dict[str, Any] | None  # shown above the re-shown question
-    pending_question_id: str | None  # the question to show again after a dispute
+    # Keys of sessions saved before milestone 4, kept so their checkpoints still load;
+    # fill_defaults moves them to current_question_id and lesson, and nothing writes them.
+    pending_question_id: str | None
+    retry_question: bool
+    lesson_citations: list[dict[str, Any]]
 
 
 # Keys added after milestone 1, with what a session saved before them gets. `None` for
@@ -87,16 +92,30 @@ STATE_DEFAULTS: dict[str, Any] = {
     "generation_mode": "notes",
     "replacements_needed": 0,
     "web_sources": [],
-    "lesson_citations": [],
     "last_graded": None,
     "dispute_result": None,
-    "pending_question_id": None,
+    "current_question_id": None,
 }
 
 
 def fill_defaults(values: Mapping[str, Any]) -> dict[str, Any]:
-    """A copy of `values` with every absent key of STATE_DEFAULTS filled in."""
-    return {**deepcopy(STATE_DEFAULTS), **values}
+    """A copy of `values` with every absent key of STATE_DEFAULTS filled in, and the keys
+    older sessions saved moved to the ones that replaced them."""
+    filled = {**deepcopy(STATE_DEFAULTS), **values}
+    # pending_question_id and retry_question became current_question_id. Once a node has
+    # written that key the old ones are stale, since nothing clears them.
+    pending = filled.pop("pending_question_id", None)
+    retry = filled.pop("retry_question", False)
+    if "current_question_id" not in values:
+        if pending:
+            filled["current_question_id"] = pending
+        elif retry and filled.get("batch"):
+            filled["current_question_id"] = filled["batch"][0]["id"]
+    # A lesson was a string, with its citations beside it.
+    citations = filled.pop("lesson_citations", None)
+    if isinstance(filled.get("lesson"), str):
+        filled["lesson"] = {"text": filled["lesson"], "citations": citations or []}
+    return filled
 
 
 def _dt(value: datetime | None) -> str | None:

@@ -149,8 +149,7 @@ def render_citations(
 def render_feedback(
     console: Console,
     grade: dict[str, Any] | None,
-    lesson: str | None,
-    lesson_citations: Sequence[dict[str, Any]] = (),
+    lesson: dict[str, Any] | None,
 ) -> None:
     if grade:
         style = GRADE_STYLE[grade["value"]]
@@ -158,8 +157,8 @@ def render_feedback(
         console.print(f"[bold {style}]{GRADE_MARK[grade['value']]}[/]  {explanation}")
         render_citations(console, grade.get("citations", []), grade.get("general_knowledge", False))
     if lesson:
-        console.print(Panel(escape(lesson), title="Let's fix that", border_style="cyan"))
-        render_citations(console, lesson_citations, False)
+        console.print(Panel(escape(lesson["text"]), title="Let's fix that", border_style="cyan"))
+        render_citations(console, lesson["citations"], False)
 
 
 def render_notices(console: Console, notices: Sequence[str]) -> None:
@@ -215,17 +214,13 @@ def render_turn(console: Console, payload: dict[str, Any]) -> None:
         console.print(escape(dispute_line(result)))
         render_citations(console, result.get("citations", []), False)
     else:
-        render_feedback(
-            console, payload["feedback"], payload["lesson"], payload.get("lesson_citations", [])
-        )
+        render_feedback(console, payload["feedback"], payload["lesson"])
     render_notices(console, payload["notices"])
     render_question(console, payload)
 
 
 def render_summary(console: Console, final: dict[str, Any], tz: ZoneInfo) -> None:
-    render_feedback(
-        console, final.get("grade"), final.get("lesson"), final.get("lesson_citations", [])
-    )
+    render_feedback(console, final.get("grade"), final.get("lesson"))
     render_notices(console, final.get("notices", []))
     results = final.get("results", [])
     if not results:
