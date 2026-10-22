@@ -2,6 +2,7 @@
 
 import re
 from collections.abc import Sequence
+from functools import lru_cache
 
 # Chosen against the test pairs: the two paraphrase pairs score 1.0 and 0.5 ("unusable"
 # and "usable" stay different words), the three different-question pairs score 0.33 or
@@ -32,6 +33,8 @@ def _stem(word: str) -> str:
     return word
 
 
+# The same earlier prompts are checked against every new one, so each is tokenised once.
+@lru_cache(maxsize=4096)
 def _words(prompt: str) -> frozenset[str]:
     tokens = TOKEN.findall(prompt.casefold())
     return frozenset(_stem(t) for t in tokens if t not in STOP_WORDS)
