@@ -159,26 +159,26 @@ def test_after_generate_verifies_unless_fatal():
     assert after_generate({"fatal": "down"}) == "summarize"
 
 
-def test_after_verify_retries_on_citation_failures():
-    pending = state(batch=[], citation_failures=["question 1 cites nothing"])
-    assert after_verify(pending, web=True) == "generate_questions"
+def test_after_verify_ignores_failures_left_by_an_old_checkpoint():
+    # verify_citations fixes its own batch now; milestone 3 left its failures in state.
+    stale = state(citation_failures=["question 1 cites nothing"])
+    assert after_verify(stale, web=True) == "ask_question"
 
 
 def test_after_verify_asks_from_a_finalised_batch():
     # state() has none of the web keys, like a milestone-2 session
-    assert after_verify(state(citation_failures=[]), web=True) == "ask_question"
+    assert after_verify(state(), web=True) == "ask_question"
 
 
 def test_after_verify_with_an_empty_batch_follows_decide_next():
-    assert after_verify(state(batch=[], citation_failures=[]), web=True) == "generate_questions"
-    empty = state(batch=[], citation_failures=[], generation_calls_on_concept=2)
+    assert after_verify(state(batch=[]), web=True) == "generate_questions"
+    empty = state(batch=[], generation_calls_on_concept=2)
     assert after_verify(empty, web=True) == "next_concept"
 
 
 def repeats(**overrides):
     """A finalised notes batch that dropped one repeat on a concept not yet searched."""
     base = {
-        "citation_failures": [],
         "concept": {"id": "c1"},
         "run": {"mode": "notes", "candidates": [], "replacing": 1},
         "web_searched": [],

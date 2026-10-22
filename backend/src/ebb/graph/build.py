@@ -2,7 +2,7 @@
 
 pick_concept -> retrieve_notes | extend_subject | summarize
 extend_subject -> pick_concept | summarize
-retrieve_notes -> generate_questions <-> verify_citations -> ask_question
+retrieve_notes -> generate_questions -> verify_citations -> ask_question
 verify_citations -> search_web -> generate_questions (web mode) | ask_question
 ask_question -> regrade -> ask_question (a disputed grade)
 """

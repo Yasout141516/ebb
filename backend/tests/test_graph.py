@@ -12,7 +12,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from ebb.citations import MAX_RETRIES, source_from_dict, verify
+from ebb.citations import MAX_RETRIES, note_sources, source_from_dict, source_to_dict, verify
 from ebb.citations import to_dict as citation_to_dict
 from ebb.domain import (
     Answer,
@@ -1396,6 +1396,20 @@ def test_step_events_start_with_reading_the_notes_when_there_are_some():
     ]
 
 
+def test_a_citation_retry_is_part_of_checking_citations():
+    store = MemoryStore()
+    tutor = FakeTutor(cite=[[("N9", "x")], [("N1", QUOTE)]])
+
+    labels = step_labels(store, notes_subject(store), tutor)
+
+    assert len(tutor.generate_calls) == 2  # the batch, then its rewrite
+    assert labels == [
+        "Reading your notes…",
+        "Writing questions…",
+        "Checking citations against your notes…",
+    ]
+
+
 def test_grade_label_without_notes_is_grading():
     assert step_label("grade_answer", {"has_notes": False}) == "Grading…"
     assert step_label("grade_answer", {"has_notes": True}) == "Grading against your notes…"
@@ -1663,3 +1677,61 @@ def test_old_checkpoint_with_generation_mode_resumes():
     assert "__interrupt__" in result
     values = graph.get_state(config).values
     assert values["run"] == {"mode": "notes", "candidates": [], "replacing": 0}
+
+
+def test_old_checkpoint_saved_mid_citation_retry_resumes():
+    store = MemoryStore()
+    tutor = FakeTutor(cite=[[("N1", QUOTE)]])
+    subject_id = notes_subject(store)
+    session_id = store.create_session(USER, subject_id, "t-old")
+    concept = store.list_concepts(USER, subject_id)[0]
+    chunks = store.search_chunks(USER, subject_id, f"{concept.name} {concept.description}")
+    bad = replace(
+        Question(uuid4(), concept.id, "short", 1, "Why?", "Because.", ()),
+        claims=(Claim("N9", "x"),),
+    )
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": "t-old"}}
+    # Saved by milestone 3 after verify_citations sent its first candidates back for a fix.
+    saved = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-old",
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(concept.id)],
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "has_notes": True,
+        "concept": concept_to_dict(concept),
+        "start": {"stage": concept.stage, "tide": None},
+        "tally": {"correct": 0, "partial": 0, "incorrect": 0},
+        "batch": [],
+        "asked_prompts": [],
+        "asked_on_concept": 0,
+        "correct_streak": 0,
+        "generation_calls_on_concept": 1,
+        "sources": [source_to_dict(s) for s in note_sources(chunks)],
+        "earlier_prompts": [],
+        "difficulty": None,
+        "grade": None,
+        "lesson": None,
+        "generation_mode": "notes",
+        "candidates": [question_to_dict(bad)],
+        "replacements_needed": 0,
+        "citation_retries": 1,
+        "citation_failures": ["question 1: N9 is not one of the sources you were given"],
+        "citation_failing": [0],
+    }
+    graph.update_state(config, saved, as_node="verify_citations")
+    assert graph.get_state(config).next == ("generate_questions",)
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=always_right(shown)), config)
+
+    assert shown["concept"] == concept.name
+    assert shown["question"]["source"] == "notes"  # a fresh batch, cited
+    assert "__interrupt__" in result  # the session goes on
+    assert len(store.attempts) == 1

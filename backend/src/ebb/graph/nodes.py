@@ -1,26 +1,25 @@
-"""The fourteen quiz-loop nodes. Only generate_questions, extend_subject, grade_answer (short
-answers), teach and regrade call the LLM, and only search_web searches the web; everything
-else is plain code."""
+"""The fourteen quiz-loop nodes. Only generate_questions, verify_citations (rewriting the
+questions whose citations fail), extend_subject, grade_answer (short answers), teach and
+regrade call the LLM, and only search_web searches the web; everything else is plain code."""
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from langgraph.types import interrupt
 
 from ebb.citations import (
-    MAX_RETRIES,
+    from_dict as citation_from_dict,
+)
+from ebb.citations import (
     note_sources,
     source_from_dict,
     source_to_dict,
     to_dict,
     verify,
     web_sources,
-)
-from ebb.citations import (
-    from_dict as citation_from_dict,
 )
 from ebb.domain import (
     Answer,
@@ -37,6 +36,7 @@ from ebb.domain import (
     Source,
 )
 from ebb.grading import dispute_outcome, grade_mcq
+from ebb.graph.retry import fix_citations
 from ebb.graph.state import (
     QuizState,
     concept_from_dict,
@@ -96,11 +96,6 @@ def _fresh_run() -> dict[str, Any]:
     return {"mode": "notes", "candidates": [], "replacing": 0}
 
 
-def _citation_reset() -> dict[str, Any]:
-    """What resets the citation retry for the next candidates, with fresh lists."""
-    return {"citation_retries": 0, "citation_failures": [], "citation_failing": []}
-
-
 def source_line(question: dict[str, Any]) -> str | None:
     """Where a question came from, shown under it: "From your notes · p. 12" and the like."""
     citations = question.get("citations", [])
@@ -114,31 +109,40 @@ def source_line(question: dict[str, Any]) -> str | None:
     return f"From your notes · § {first.heading}" if first.heading else "From your notes"
 
 
-def _verified[T](
-    call: Callable[[tuple[str, ...], T | None], Generated[T]],
+def _with_citations[T](
+    generated: Generated[T],
     claims_of: Callable[[T], Sequence[Claim]],
     sources: Sequence[Source],
-    keep: Callable[[T, T], T] = lambda first, retried: retried,
+    fix: Callable[[Generated[T], tuple[str, ...]], Generated[T]],
 ) -> tuple[Generated[T], tuple[Citation, ...]]:
-    """Call with no failures, then again with them and the last result while any claim is
-    invalid, at most MAX_RETRIES more times. A retry only fixes citations: `keep` takes
-    from it what the first result allows. A retry that fails keeps the last result.
-    Missing claims aren't retried, and nothing counts as cited when there are no sources."""
-    generated = call((), None)
+    """`generated` once `fix` has had its tries at any invalid claim (see fix_citations),
+    with the citations that hold. Missing claims aren't retried, and nothing counts as
+    cited when there are no sources."""
     if not sources:
         return generated, ()
-    first = generated.value
-    citations, failures = verify(claims_of(first), sources)
-    for _ in range(MAX_RETRIES):
-        if not failures:
-            break
-        try:
-            retried = call(failures, generated.value)
-        except AllProvidersExhausted:
-            break
-        generated = replace(retried, value=keep(first, retried.value))
-        citations, failures = verify(claims_of(generated.value), sources)
-    return generated, citations
+    fixed = fix_citations(generated, lambda value: verify(claims_of(value), sources)[1], fix)
+    return fixed, verify(claims_of(fixed.value), sources)[0]
+
+
+def _failing(
+    questions: Sequence[Question], sources: Sequence[Source]
+) -> tuple[list[int], tuple[str, ...]]:
+    """The indexes of the questions whose citations fail, and why, each numbered as a
+    rewrite lists the failing questions. With sources, a question citing nothing fails."""
+    if not sources:
+        return [], ()
+    failing: list[int] = []
+    failures: list[str] = []
+    for index, question in enumerate(questions):
+        _, failed = verify(question.claims, sources)
+        n = len(failing) + 1
+        reasons = [f"question {n}: {reason}" for reason in failed]
+        if not question.claims:
+            reasons.append(f"question {n} cites nothing")
+        if reasons:
+            failures += reasons
+            failing.append(index)
+    return failing, tuple(failures)
 
 
 def _keep_grade(first: Grade, retried: Grade) -> Grade:
@@ -269,7 +273,6 @@ def make_nodes(
             "web_notice_shown": False,
             "sources": [],
             "run": _fresh_run(),
-            **_citation_reset(),
             "studied_concept_ids": [],
             "results": [],
             "quit": False,
@@ -337,38 +340,22 @@ def make_nodes(
             )
             sources = [source_to_dict(s) for s in note_sources(chunks)]
         # Fetched once per concept; this session's answers are in asked_prompts.
-        return {"sources": sources, "earlier_prompts": answered_prompts(state), **_citation_reset()}
+        return {"sources": sources, "earlier_prompts": answered_prompts(state)}
 
     def generate_questions(state: QuizState) -> dict[str, Any]:
         concept = concept_from_dict(state["concept"])
-        failures = state["citation_failures"]
         web_mode = _web_mode(state)
-        # A citation retry rewrites part of the same batch, and web questions fill in the
-        # last one, so neither is another generation call.
-        calls = state["generation_calls_on_concept"] + (0 if failures or web_mode else 1)
-        web_count = state["run"]["replacing"] if web_mode else None
-        candidates = state["run"]["candidates"]
-        # A retry rewrites only the questions whose citations failed; the rest are kept as
-        # they are. A session saved before this was tracked (None) rewrites them all.
-        failing = state["citation_failing"]
-        if not failures:
-            failing = []
-        elif failing is None:
-            failing = list(range(len(candidates)))
+        # Web questions fill in the last batch, so they aren't another generation call.
+        calls = state["generation_calls_on_concept"] + (0 if web_mode else 1)
         try:
             generated = tutor.generate_questions(
                 concept,
                 # Web questions join the batch, so they must not repeat what is waiting in it.
                 known_prompts(state),
                 _sources(state, web_mode),
-                failures,
-                web_count=web_count,
-                rewrite=[question_from_dict(candidates[i]) for i in failing],
+                web_count=state["run"]["replacing"] if web_mode else None,
             )
         except AllProvidersExhausted:
-            if failures:
-                # Keep the candidates we have; verify_citations drops their bad citations.
-                return {"citation_retries": MAX_RETRIES}
             if web_mode:
                 # The batch goes on without replacements, as when the search finds nothing.
                 return {"run": {**state["run"], "candidates": []}}
@@ -377,15 +364,8 @@ def make_nodes(
                 "generation_calls_on_concept": calls,
                 "notices": _with_notice(state, EXHAUSTED_NOTICE),
             }
-        fresh = [question_to_dict(q) for q in generated.value]
-        if failures:
-            # Each rewrite takes its question's place; one not rewritten fails again.
-            merged = list(candidates)
-            for index, rewritten in zip(failing, fresh, strict=False):
-                merged[index] = rewritten
-            fresh = merged
         return {
-            "run": {**state["run"], "candidates": fresh},
+            "run": {**state["run"], "candidates": [question_to_dict(q) for q in generated.value]},
             "generation_calls_on_concept": calls,
             "notices": _notices(state, generated),
         }
@@ -394,28 +374,33 @@ def make_nodes(
         user_id, _ = ids(state)
         web_mode = _web_mode(state)
         sources = _sources(state, web_mode)
-        retries = state["citation_retries"]
-        checked: list[tuple[Question, tuple[Citation, ...]]] = []
-        failures: list[str] = []
-        failing: list[int] = []
-        for index, candidate in enumerate(state["run"]["candidates"]):
-            question = question_from_dict(candidate)
-            citations, failed = verify(question.claims, sources) if sources else ((), ())
-            n = len(failing) + 1  # numbered as the retry lists the failing questions
-            reasons = [f"question {n}: {reason}" for reason in failed]
-            if sources and not question.claims:
-                reasons.append(f"question {n} cites nothing")
-            if reasons:
-                failures += reasons
-                failing.append(index)
-            checked.append((question, citations))
-        if failures and retries < MAX_RETRIES:
-            return {
-                "citation_retries": retries + 1,
-                "citation_failures": failures,
-                "citation_failing": failing,
-            }
-        # Out of retries: bad citations are dropped. A notes question left with none is
+
+        def rewrite(
+            last: Generated[list[Question]], failures: tuple[str, ...]
+        ) -> Generated[list[Question]]:
+            """Rewrites only the questions whose citations failed; the rest are kept as they
+            are. Each rewrite takes its question's place; one not rewritten fails again."""
+            failing, _ = _failing(last.value, sources)
+            rewritten = tutor.generate_questions(
+                concept_from_dict(state["concept"]),
+                known_prompts(state),
+                sources,
+                failures,
+                web_count=state["run"]["replacing"] if web_mode else None,
+                rewrite=[last.value[i] for i in failing],
+            )
+            merged = list(last.value)
+            for index, question in zip(failing, rewritten.value, strict=False):
+                merged[index] = question
+            return Generated(merged, rewritten.model, last.fell_back or rewritten.fell_back)
+
+        # generate_questions already noted whether the candidates came from a backup model.
+        candidates = Generated([question_from_dict(c) for c in state["run"]["candidates"]], "")
+        fixed = fix_citations(
+            candidates, lambda questions: _failing(questions, sources)[1], rewrite
+        )
+        checked = [(q, verify(q.claims, sources)[0] if sources else ()) for q in fixed.value]
+        # After the retries bad citations are dropped. A notes question left with none is
         # general; a web question left with none is dropped.
         if web_mode:
             final = [
@@ -437,10 +422,10 @@ def make_nodes(
         update: dict[str, Any] = {
             "batch": [*state["batch"], *(question_to_dict(q) for q in kept)],
             "run": {"mode": "notes", "candidates": [], "replacing": replacing},
-            **_citation_reset(),
+            "notices": _notices(state, fixed),
         }
         if replacing and web is None:
-            update |= _web_notice(state)
+            update |= _web_notice(cast(QuizState, {**state, **update}))
         return update
 
     def search_web(state: QuizState) -> dict[str, Any]:
@@ -532,14 +517,7 @@ def make_nodes(
             return {"grade": _grade_dict(state, graded, (), question), "model_used": "code"}
         sources = _sources(state, question.source == "web")
         try:
-            generated, citations = _verified(
-                lambda failures, previous: tutor.grade(
-                    question, state["answer"], sources, failures, previous=previous
-                ),
-                lambda grade: grade.claims,
-                sources,
-                _keep_grade,
-            )
+            first = tutor.grade(question, state["answer"], sources)
         except AllProvidersExhausted:
             return {
                 "grade": None,
@@ -547,6 +525,12 @@ def make_nodes(
                 "current_question_id": state["question"]["id"],
                 "notices": _with_notice(state, EXHAUSTED_NOTICE),
             }
+
+        def fix(last: Generated[Grade], failures: tuple[str, ...]) -> Generated[Grade]:
+            retried = tutor.grade(question, state["answer"], sources, failures, previous=last.value)
+            return replace(retried, value=_keep_grade(first.value, retried.value))
+
+        generated, citations = _with_citations(first, lambda grade: grade.claims, sources, fix)
         return {
             "grade": _grade_dict(state, generated.value, citations, question),
             "model_used": generated.model,
@@ -599,18 +583,20 @@ def make_nodes(
         grade = grade_from_dict(state["grade"])
         sources = _sources(state, question.source == "web")
         try:
-            generated, citations = _verified(
-                lambda failures, previous: tutor.teach(
-                    question, state["answer"], grade, sources, failures, previous=previous
-                ),
-                lambda lesson: lesson.claims,
-                sources,
-            )
+            first = tutor.teach(question, state["answer"], grade, sources)
         except AllProvidersExhausted:
             return {
                 "lesson": None,
                 "notices": _with_notice(state, EXHAUSTED_NOTICE),
             }
+        generated, citations = _with_citations(
+            first,
+            lambda lesson: lesson.claims,
+            sources,
+            lambda last, failures: tutor.teach(
+                question, state["answer"], grade, sources, failures, previous=last.value
+            ),
+        )
         return {
             "lesson": {
                 "text": generated.value.text,
@@ -629,8 +615,11 @@ def make_nodes(
         first = grade_from_dict(graded["grade"])
         reason = DisputeReason(request["reason"])
         sources = [source_from_dict(s) for s in graded["sources"]]
-        generated, citations = _verified(
-            lambda failures, previous: tutor.regrade(
+
+        def call(
+            failures: tuple[str, ...] = (), previous: Grade | None = None
+        ) -> Generated[Regrade]:
+            return tutor.regrade(
                 question,
                 graded["answer"],
                 first,
@@ -638,12 +627,21 @@ def make_nodes(
                 request["explanation"],
                 sources,
                 failures,
-                previous=None if previous is None else previous.grade,
-            ),
-            lambda regraded: regraded.grade.claims,
-            sources,
+                previous=previous,
+            )
+
+        initial = call()
+
+        def fix(last: Generated[Regrade], failures: tuple[str, ...]) -> Generated[Regrade]:
+            retried = call(failures, last.value.grade)
             # The ambiguity verdict stays the first call's too.
-            lambda kept, retried: Regrade(_keep_grade(kept.grade, retried.grade), kept.ambiguous),
+            kept = initial.value
+            return replace(
+                retried, value=Regrade(_keep_grade(kept.grade, retried.value.grade), kept.ambiguous)
+            )
+
+        generated, citations = _with_citations(
+            initial, lambda regraded: regraded.grade.claims, sources, fix
         )
         new = generated.value.grade
         outcome = dispute_outcome(reason, first.value, new.value, generated.value.ambiguous)

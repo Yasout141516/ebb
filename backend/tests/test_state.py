@@ -11,10 +11,17 @@ def test_fill_defaults_fills_only_missing_keys():
     assert filled["sources"] == []
     assert filled["web_searched"] == []
     assert filled["earlier_prompts"] is None
-    assert filled["citation_failing"] is None
     assert filled["web_failed"] is True  # present keys are untouched
     assert filled["notices"] == ["x"]
     assert values == {"web_failed": True, "notices": ["x"]}  # the input isn't mutated
+
+
+def test_fill_defaults_drops_the_old_citation_retry_keys():
+    old = {"citation_retries": 1, "citation_failures": ["question 1 cites nothing"]}
+
+    filled = fill_defaults({**old, "citation_failing": [0]})
+
+    assert not {"citation_retries", "citation_failures", "citation_failing"} & set(filled)
 
 
 def test_filled_defaults_are_fresh_lists():

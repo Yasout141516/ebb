@@ -46,9 +46,6 @@ class QuizState(TypedDict, total=False):
     generation_calls_on_concept: int
     sources: list[dict[str, Any]]  # the concept's retrieved note chunks, as Source dicts
     earlier_prompts: list[str]  # earlier sessions' answered prompts on the concept
-    citation_retries: int
-    citation_failures: list[str]  # why the last candidates' citations failed; empty when done
-    citation_failing: list[int]  # indexes of the candidates those failures are about
     # The candidate questions being written: {mode, candidates, replacing}. `mode` is "web"
     # while replacements for repeats are written from the web; `candidates` wait for
     # verify_citations; `replacing` counts the repeats dropped from the last notes batch.
@@ -81,10 +78,16 @@ class QuizState(TypedDict, total=False):
     generation_mode: Literal["notes", "web"]
     candidates: list[dict[str, Any]]
     replacements_needed: int
+    # Keys of sessions saved while verify_citations sent its candidates back to
+    # generate_questions for a citation fix; it fixes them itself now. fill_defaults drops
+    # them, and nothing writes them.
+    citation_retries: int
+    citation_failures: list[str]
+    citation_failing: list[int]
 
 
 # Keys added after milestone 1, with what a session saved before them gets. `None` for
-# earlier_prompts means "ask the store"; for citation_failing, "all the candidates".
+# earlier_prompts means "ask the store".
 STATE_DEFAULTS: dict[str, Any] = {
     "has_notes": False,
     "web_searched": [],
@@ -92,9 +95,6 @@ STATE_DEFAULTS: dict[str, Any] = {
     "web_notice_shown": False,
     "sources": [],
     "earlier_prompts": None,
-    "citation_retries": 0,
-    "citation_failures": [],
-    "citation_failing": None,
     "web_sources": [],
     "last_graded": None,
     "dispute_result": None,
@@ -119,6 +119,10 @@ def fill_defaults(values: Mapping[str, Any]) -> dict[str, Any]:
     # written `run` the old ones are stale, since nothing clears them.
     filled["run"] = candidate_run(values)
     for old in ("generation_mode", "candidates", "replacements_needed"):
+        filled.pop(old, None)
+    # A session saved mid-retry gets a fresh batch: generate_questions no longer rewrites,
+    # so the failures it was sent back with are of no use.
+    for old in ("citation_retries", "citation_failures", "citation_failing"):
         filled.pop(old, None)
     # A lesson was a string, with its citations beside it.
     citations = filled.pop("lesson_citations", None)

@@ -104,11 +104,8 @@ def candidate_run(state: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["search_web"]:
-    """Failures left in state mean the candidates go back for another try. Repeats dropped
-    from a notes batch are replaced from the web, if `web` search is set up and this
-    session hasn't searched for this concept or seen a search fail."""
-    if state["citation_failures"]:
-        return "generate_questions"
+    """Repeats dropped from a notes batch are replaced from the web, if `web` search is set
+    up and this session hasn't searched for this concept or seen a search fail."""
     run = candidate_run(state)
     if (
         web
