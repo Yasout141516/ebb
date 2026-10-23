@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from ebb.store import DocumentRefused, SubjectExists
-from ebb.subjects import add_notes, find_note_concepts, subject_from_topic
+from ebb.store import MAX_DOCUMENTS, DocumentRefused, SubjectExists
+from ebb.subjects import add_notes, ensure_name_free, find_note_concepts, subject_from_topic
 from tests.fakes import FakeTutor, MemoryStore, make_subject, new_document
 
 
@@ -45,11 +45,36 @@ def test_add_notes_reports_matched_and_fresh():
     assert "Routing" in [c.name for c in store.list_concepts(user, subject_id)]
 
 
-def test_add_notes_refuses_a_duplicate_file():
+def test_add_notes_refuses_a_duplicate_file_without_calling_the_tutor():
     store, user = MemoryStore(), uuid4()
     make_subject(store, user)
     subject = store.list_subjects(user)[0]
     document = new_document("a.md", "text")
     add_notes(FakeTutor(), store, user, subject, document)
-    with pytest.raises(DocumentRefused):
-        add_notes(FakeTutor(), store, user, subject, document)
+    tutor = FakeTutor(refuse={"concepts_from_notes"})
+    with pytest.raises(DocumentRefused) as err:
+        add_notes(tutor, store, user, subject, document)
+    assert err.value.reason == "duplicate"
+    assert tutor.concepts_calls == []
+
+
+def test_add_notes_refuses_a_full_subject_without_calling_the_tutor():
+    store, user = MemoryStore(), uuid4()
+    make_subject(store, user)
+    subject = store.list_subjects(user)[0]
+    for number in range(MAX_DOCUMENTS):
+        add_notes(FakeTutor(), store, user, subject, new_document(f"{number}.md", "text"))
+    tutor = FakeTutor(refuse={"concepts_from_notes"})
+    with pytest.raises(DocumentRefused) as err:
+        add_notes(tutor, store, user, subject, new_document("extra.md", "other"))
+    assert err.value.reason == "full"
+    assert tutor.concepts_calls == []
+
+
+def test_ensure_name_free_strips_and_names_the_existing_subject():
+    store, user = MemoryStore(), uuid4()
+    make_subject(store, user, name="Networks")
+    assert ensure_name_free(store, user, "  Physics ") == "Physics"
+    with pytest.raises(SubjectExists) as err:
+        ensure_name_free(store, user, " networks ")
+    assert err.value.name == "Networks"

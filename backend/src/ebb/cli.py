@@ -28,7 +28,14 @@ from ebb.store import (
     DocumentRefused,
     SubjectExists,
 )
-from ebb.subjects import NotesReport, add_notes, find_note_concepts, subject_from_topic
+from ebb.subjects import (
+    NotesReport,
+    add_notes,
+    ensure_name_free,
+    ensure_room,
+    find_note_concepts,
+    subject_from_topic,
+)
 from ebb.ui import (
     DISPUTE_REASONS,
     NOT_DISPUTABLE,
@@ -244,9 +251,10 @@ def new(
         _fail('Give a topic, e.g. ebb new "Computer Networks"')
     settings, store = _open_store()
     user_id = settings.ebb_dev_user_id
-    for existing in store.list_subjects(user_id):
-        if existing.name.casefold() == topic.casefold():
-            _fail(_exists_copy(existing.name))
+    try:
+        ensure_name_free(store, user_id, topic)
+    except SubjectExists as error:
+        _fail(_exists_copy(error.name))
     if notes:
         _new_from_notes(settings, store, topic, notes)
         return
@@ -303,6 +311,10 @@ def _duplicate_copy(subject: Subject, document: NewDocument) -> str:
     return f"{document.filename} is already in {subject.name}."
 
 
+def _refusal_copy(error: DocumentRefused, subject: Subject, document: NewDocument) -> str:
+    return _full_copy(subject) if error.reason == "full" else _duplicate_copy(subject, document)
+
+
 @app.command()
 def add(
     path: Annotated[Path, typer.Argument(help="A PDF, TXT or MD file of your notes.")],
@@ -313,10 +325,10 @@ def add(
     user_id = settings.ebb_dev_user_id
     chosen = _subject(store, user_id, subject)
     document = _prepare(path)
-    if store.count_documents(user_id, chosen.id) >= MAX_DOCUMENTS:
-        _fail(_full_copy(chosen))
-    if store.has_document(user_id, chosen.id, document.sha256):
-        _fail(_duplicate_copy(chosen, document))
+    try:
+        ensure_room(store, user_id, chosen, document)
+    except DocumentRefused as error:
+        _fail(_refusal_copy(error, chosen, document))
     tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
     from ebb.llm.tutor import NOTES_REFUSED_NOTICE
@@ -328,7 +340,7 @@ def add(
             NOTES_REFUSED_NOTICE,
         )
     except DocumentRefused as error:  # another terminal got there first
-        _fail(_full_copy(chosen) if error.reason == "full" else _duplicate_copy(chosen, document))
+        _fail(_refusal_copy(error, chosen, document))
     _print_report(document, report)
 
 
