@@ -133,3 +133,54 @@ class QuitReply(_Reply):
 class ReplyBody(BaseModel):
     driver: DriverId
     reply: AnswerReply | DisputeReply | QuitReply
+
+
+class Streak(BaseModel):
+    current: int
+    best: int
+    last14: list[bool]
+
+
+class DueConcept(BaseModel):
+    name: str
+    tide: float | None
+
+
+class Average(BaseModel):
+    now: float | None
+    change: float | None
+    since: str
+    counted: int
+    not_counted: list[str]
+
+
+class ChartConcept(BaseModel):
+    id: UUID
+    name: str
+    studied: bool
+    now: float | None
+    past: list[tuple[datetime, float | None]]
+    ahead: list[tuple[datetime, float]]
+
+
+class Chart(BaseModel):
+    enough_days: bool
+    concepts: list[ChartConcept]
+
+
+class StagedConcept(BaseModel):
+    name: str
+    next_review_at: datetime | None
+
+
+class Stage(BaseModel):
+    stage: int
+    concepts: list[StagedConcept]
+
+
+class Progress(BaseModel):
+    streak: Streak
+    due: list[DueConcept]
+    average: Average
+    chart: Chart
+    stages: list[Stage]
