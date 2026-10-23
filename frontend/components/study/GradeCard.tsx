@@ -4,7 +4,7 @@ import type { DisputeResult, GradeValue } from "@/lib/types";
 import CitationChips, { shownCitations } from "./CitationChips";
 import styles from "./GradeCard.module.css";
 
-const NAME: Record<GradeValue, string> = { correct: "Correct", partial: "Partial", incorrect: "Incorrect" };
+export const GRADE_NAME: Record<GradeValue, string> = { correct: "Correct", partial: "Partial", incorrect: "Incorrect" };
 const RANK: Record<GradeValue, number> = { incorrect: 0, partial: 1, correct: 2 };
 
 /** A re-check's outcome in the CLI's words (backend ui.dispute_line), the failure in the spec's. */
@@ -22,7 +22,7 @@ export function disputeLine(result: DisputeResult): string {
       const now = result.new_grade ?? result.original_grade;
       const raised = RANK[now] > RANK[result.original_grade];
       const [verb, link] = raised ? ["raised to", "back to"] : ["lowered to", "now"];
-      return `Re-check: ${verb} ${NAME[now]} — ${result.concept} ${link} ${stageDots(result.stage)} level ${result.stage}.`;
+      return `Re-check: ${verb} ${GRADE_NAME[now]} — ${result.concept} ${link} ${stageDots(result.stage)} level ${result.stage}.`;
     }
   }
 }
@@ -74,11 +74,11 @@ export default function GradeCard({ card, onDispute }: Props) {
   const fromNotes = sources.some((c) => c.kind !== "web");
   const recheckDone = result !== null && result.outcome !== "refused" && result.outcome !== "failed";
   return (
-    <article aria-label={`Grade: ${NAME[value]}`} className={styles.card}>
+    <article aria-label={`Grade: ${GRADE_NAME[value]}`} className={styles.card}>
       <div className={`${styles.head} ${styles[value]}`}>
         <span className={styles.verdict}>
           <VerdictIcon value={value} />
-          {NAME[value]}
+          {GRADE_NAME[value]}
         </span>
       </div>
       <div className={styles.body}>

@@ -26,6 +26,8 @@ import type { DisputeReason, Finished, Offer, SessionOffer, Started, StreamError
 const FALLBACK = "Switched to a backup model while the main one is busy.";
 const SOMETHING_WRONG = "Something went wrong — try again.";
 const UNREACHABLE = "Can't reach the API.";
+/** How often an open session renews this tab's lease on it. */
+const HEARTBEAT_MS = 30_000;
 
 /** A failure shown as the error card; `retry` sends the failed request again. */
 export type StudyError = { message: string; retry: (() => void) | null };
@@ -47,6 +49,8 @@ export type Study = {
   waiting: QuestionCard | null;
   /** The session is under way: its End session button shows. */
   open: boolean;
+  /** Counts the turns and endings so far: memory levels may have changed with each. */
+  updates: number;
   answer: (text: string, choice: number | null) => void;
   dispute: (gradeId: string, reason: DisputeReason, explanation: string) => void;
   end: () => void;
@@ -74,6 +78,7 @@ export default function useStudy(subjectId: string): Study {
   const [error, setError] = useState<StudyError | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [updates, setUpdates] = useState(0);
   const thread = useRef<string | null>(null); // the open session's id, once known
   const inFlight = useRef<AbortController | null>(null);
 
@@ -114,10 +119,12 @@ export default function useStudy(subjectId: string): Study {
       case "turn":
         setStep(null);
         setCards((c) => applyTurn(c, (event.data as { payload: TurnPayload }).payload));
+        setUpdates((n) => n + 1);
         break;
       case "finished":
         setStep(null);
         setCards((c) => applyFinished(c, event.data as Finished));
+        setUpdates((n) => n + 1);
         forgetThread(subjectId);
         thread.current = null;
         break;
@@ -285,6 +292,30 @@ export default function useStudy(subjectId: string): Study {
 
   const finished = cards.some((c) => c.kind === "summary");
   const waiting = running || offer ? null : waitingQuestion(cards);
+  const sessionOpen = !finished && offer === null && cards.some((c) => c.kind === "question");
+
+  /**
+   * Renew this tab's lease while the session is open; a request in flight renews it
+   * itself. 404: the session has ended meanwhile, nothing to do. 409: another tab or
+   * terminal has taken it over, as a refused reply would say.
+   */
+  const heartbeat = useEffectEvent(async () => {
+    const threadId = thread.current;
+    if (!threadId || inFlight.current) return;
+    try {
+      await postJson(`/sessions/${threadId}/heartbeat`, { driver: driverId() });
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && thread.current === threadId && !inFlight.current) {
+        takenOver(threadId);
+      }
+      // anything else: the next beat tries again
+    }
+  });
+  useEffect(() => {
+    if (!sessionOpen) return;
+    const timer = setInterval(() => void heartbeat(), HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [sessionOpen]);
 
   function answer(text: string, choice: number | null) {
     if (!waiting) return;
@@ -314,7 +345,8 @@ export default function useStudy(subjectId: string): Study {
     running,
     backup: cards.some((c) => c.kind === "notice" && c.text.startsWith(FALLBACK)),
     waiting,
-    open: !finished && offer === null && cards.some((c) => c.kind === "question"),
+    open: sessionOpen,
+    updates,
     answer,
     dispute,
     end,

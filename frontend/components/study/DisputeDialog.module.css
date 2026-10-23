@@ -1,0 +1,136 @@
+/* tpl-Workspace's "Dispute dialog". */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(11, 20, 34, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.dialog {
+  width: 100%;
+  max-width: 520px;
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 26px;
+}
+
+.context {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.reasons {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legend {
+  font-size: 14px;
+  font-weight: 500;
+  padding-bottom: 8px;
+}
+
+.reason {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  border: 1.5px solid var(--line);
+  background: transparent;
+}
+
+.chosen {
+  border-color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.radio {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent-ink);
+}
+
+.reasonText {
+  font-size: 15px;
+}
+
+.note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.noteLabel {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.textarea {
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  padding: 10px 12px;
+  font: 400 15px/1.5 var(--sans);
+  resize: vertical;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.cancel {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font: 500 14px var(--sans);
+  cursor: pointer;
+}
+
+.send {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 0;
+  background: var(--primary-bg);
+  color: var(--primary-ink);
+  font: 500 14px var(--sans);
+  cursor: pointer;
+}

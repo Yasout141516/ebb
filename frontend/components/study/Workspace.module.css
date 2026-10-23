@@ -6,16 +6,6 @@
   align-items: stretch;
 }
 
-.left {
-  flex: 1 1 248px;
-  max-width: 100%;
-  padding: 24px 20px;
-  border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  gap: 28px;
-}
-
 .right {
   flex: 1 1 300px;
   max-width: 100%;
@@ -30,4 +20,21 @@
 /* A configuration error, in place of the columns (HealthGate's full-width message). */
 .full {
   padding: 32px clamp(16px, 3vw, 32px);
+}
+
+/*
+ * 375 px (tpl-WorkspaceMobile, D6): one column the height of the screen. The thread
+ * scrolls between the subject bar and the memory sheet's peek; the left column opens
+ * from the bar and the memory panel is the bottom sheet.
+ */
+@media (max-width: 640px) {
+  .columns {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    min-height: 0;
+  }
+
+  .right {
+    display: none;
+  }
 }

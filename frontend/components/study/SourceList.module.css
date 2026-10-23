@@ -1,0 +1,117 @@
+/* tpl-Workspace's LEFT column, Sources section; tpl-States' "Empty · no uploads". */
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.heading {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.source {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.badge {
+  width: 30px;
+  height: 38px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 9px var(--mono);
+  color: var(--ink-2);
+  flex: none;
+}
+
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.filename {
+  font-weight: 500;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.detail {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.add {
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+/* 5 of 5 files: shown, but not a link. */
+.disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.plus {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.empty {
+  flex: 1;
+  border: 1.5px dashed var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.emptyTitle {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 19px;
+}
+
+.emptyText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.emptyLink {
+  font-size: 14px;
+  font-weight: 500;
+}

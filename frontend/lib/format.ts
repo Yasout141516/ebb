@@ -9,9 +9,9 @@ export function stageDots(stage: number): string {
   return "●".repeat(filled) + "○".repeat(5 - filled);
 }
 
-/** The short weekday name of an instant, in `tz` (the browser's zone by default). */
-export function weekday(iso: string, tz?: string): string {
-  return new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: tz }).format(new Date(iso));
+/** The weekday of an instant, "Thu" (or "Thursday" when `long`), in `tz` (the browser's zone by default). */
+export function weekday(iso: string, tz?: string, long = false): string {
+  return new Intl.DateTimeFormat("en-US", { weekday: long ? "long" : "short", timeZone: tz }).format(new Date(iso));
 }
 
 /** A day as the CLI writes it ("Thu 30 Oct"), in `tz` (the browser's zone by default). */

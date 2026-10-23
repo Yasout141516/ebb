@@ -7,3 +7,17 @@
   display: flex;
   flex-direction: column;
 }
+
+/* 375 px: the page is the screen's height; the thread scrolls inside it (tpl-WorkspaceMobile). */
+@media (max-width: 640px) {
+  .page {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* The subject bar takes the header's place, with the theme toggle (tpl-WorkspaceMobile). */
+  .page > header {
+    display: none;
+  }
+}

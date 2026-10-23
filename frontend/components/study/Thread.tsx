@@ -116,7 +116,7 @@ export default function Thread({ study, onDispute }: Props) {
             action={study.error.retry ? { label: "Retry", onClick: study.error.retry } : undefined}
           />
         )}
-        <div ref={end} />
+        <div ref={end} className={styles.end} />
       </div>
       <Composer
         enabled={waiting !== null && waiting.question.type !== "mcq"}

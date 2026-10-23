@@ -1,0 +1,343 @@
+/* tpl-Workspace's RIGHT memory panel, and tpl-WorkspaceMobile's memory sheet. */
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 24px;
+}
+
+.lede {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.skelHeading {
+  height: 18px;
+  width: 50%;
+}
+
+.skelGap {
+  width: 40%;
+  margin-top: 10px;
+}
+
+.skelDue {
+  height: 56px;
+}
+
+.skelRow {
+  height: 44px;
+}
+
+.label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* Tide gauges: a frame (its size and border colour per place), the fill, the 3-day marker. */
+.gauge {
+  position: relative;
+  flex: none;
+}
+
+.fill {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  bottom: 2px;
+  height: calc((100% - 4px) * var(--tide));
+  border-radius: 2px;
+  background: var(--accent);
+  transition: height 0.6s ease;
+}
+
+.miniFill {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: calc((100% - 2px) * var(--tide));
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.ahead {
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  bottom: calc(2px + (100% - 4px) * var(--ahead));
+  border-top: 1.5px dashed var(--ink);
+}
+
+/* Due for review */
+.dueSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dueList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dueRow {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--partial-soft);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dueGauge {
+  width: 16px;
+  height: 36px;
+  border: 1.5px solid var(--ink-2);
+  border-radius: 5px;
+}
+
+.dueText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.dueName {
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.dueMeta {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+/* Nothing due (D5); the prototype has no such state, so it borrows the due row's box. */
+.calm {
+  margin: 0;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* All concepts */
+.allSection {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.allLabel {
+  margin: 0 0 6px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.rowGauge {
+  width: 18px;
+  height: 44px;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 5px;
+}
+
+.middle {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.name {
+  font-weight: 500;
+  font-size: 14px;
+}
+
+/* Dots, then the stage text; the text moves under the dots, whole, where it doesn't fit. */
+.stage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 3px;
+}
+
+.dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+}
+
+.dot,
+.dotOn {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line);
+}
+
+.dotOn {
+  background: var(--accent-ink);
+}
+
+.stageText {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.level {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.value {
+  font: 500 14px var(--mono);
+}
+
+.band {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.legend {
+  margin: 10px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.legendMark {
+  width: 16px;
+  border-top: 1.5px dashed var(--ink);
+}
+
+/* The sheet's peek */
+.minis {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.miniGauge {
+  width: 8px;
+  height: 22px;
+  border: 1px solid var(--ink-3);
+  border-radius: 3px;
+}
+
+.peekDue {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--partial);
+}
+
+/* The sheet's body */
+.sheetDue {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sheetDueRow {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--partial-soft);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sheetDueGauge {
+  width: 14px;
+  height: 32px;
+  border: 1.5px solid var(--ink-2);
+  border-radius: 4px;
+}
+
+.sheetName {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.sheetValue {
+  font: 500 13px var(--mono);
+}
+
+.sheetList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sheetRow {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sheetGauge {
+  width: 16px;
+  height: 38px;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 5px;
+}
+
+.sheetLevel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.sheetLink {
+  font-size: 14px;
+  font-weight: 500;
+}

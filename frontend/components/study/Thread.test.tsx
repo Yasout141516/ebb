@@ -81,7 +81,12 @@ beforeEach(() => {
   window.sessionStorage.clear();
   window.sessionStorage.setItem("ebb-driver", "drv-1");
   streams = [];
-  vi.mocked(getJson).mockResolvedValue({ offer: null });
+  // The session's offer; the side columns' lists (Workspace) are empty.
+  vi.mocked(getJson).mockImplementation(async (path: string) => {
+    if (path.startsWith("/subjects/s1/session")) return { offer: null };
+    if (path === "/subjects/s1/concepts") return { concepts: [], due_count: 0, next_review_at: null };
+    return [];
+  });
   vi.mocked(postJson).mockResolvedValue(undefined);
   vi.mocked(streamPost).mockImplementation(
     (path, body, onEvent: (e: SseEvent) => void) =>

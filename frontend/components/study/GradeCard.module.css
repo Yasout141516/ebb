@@ -154,3 +154,24 @@
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* 375 px: tpl-WorkspaceMobile's grade card. */
+@media (max-width: 640px) {
+  .head {
+    padding: 10px 14px;
+  }
+
+  .verdict {
+    font-size: 14px;
+  }
+
+  .body {
+    padding: 14px;
+    gap: 12px;
+  }
+
+  .explanation {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+}

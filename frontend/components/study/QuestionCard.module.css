@@ -176,3 +176,61 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* 375 px: tpl-WorkspaceMobile's smaller question card. */
+@media (max-width: 640px) {
+  .card {
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .label {
+    font-size: 11px;
+  }
+
+  /* No keyboard to press 1–4 on. */
+  .hint {
+    display: none;
+  }
+
+  .prompt,
+  .legend {
+    font-size: 18px;
+    font-weight: 400;
+  }
+
+  .legend {
+    padding-bottom: 8px;
+  }
+
+  .fieldset {
+    gap: 8px;
+  }
+
+  .option {
+    gap: 10px;
+    min-height: 48px;
+    padding: 8px 12px;
+  }
+
+  .number {
+    width: auto;
+    height: auto;
+    border: 0;
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+
+  .text {
+    font-size: 16px;
+  }
+
+  .tag {
+    font-size: 12px;
+  }
+
+  .submitRow {
+    display: flex;
+    flex-direction: column;
+  }
+}

@@ -19,6 +19,7 @@ describe("format", () => {
   it("weekday uses the given zone", () => {
     expect(weekday("2026-10-23T23:30:00Z", "UTC")).toBe("Fri");
     expect(weekday("2026-10-23T23:30:00Z", "Asia/Tokyo")).toBe("Sat");
+    expect(weekday("2026-10-29T09:00:00Z", "UTC", true)).toBe("Thursday");
   });
 
   it("day is the CLI's short date, in the given zone", () => {

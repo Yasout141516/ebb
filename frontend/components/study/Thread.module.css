@@ -68,3 +68,31 @@
   font-size: 16px;
   line-height: 1.6;
 }
+
+/* Scrolling to the newest card stops above the sticky composer, not behind it. */
+.end {
+  scroll-margin-bottom: 96px;
+}
+
+/* 375 px: the thread scrolls between the subject bar and the memory sheet's peek. */
+@media (max-width: 640px) {
+  .main {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .thread {
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .tutor {
+    gap: 4px;
+  }
+
+  .text {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+}

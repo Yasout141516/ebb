@@ -72,3 +72,17 @@
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* 375 px: tpl-WorkspaceMobile's composer. */
+@media (max-width: 640px) {
+  .bar {
+    padding: 10px 12px 8px;
+  }
+
+  .box {
+    gap: 8px;
+    align-items: center;
+    padding: 4px 4px 4px 12px;
+    border-radius: 12px;
+  }
+}

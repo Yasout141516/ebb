@@ -2,6 +2,13 @@
 
 import { useEffect, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
+import type { Card } from "@/lib/session";
+import BottomSheet from "./BottomSheet";
+import { shownCitations } from "./CitationChips";
+import DisputeDialog from "./DisputeDialog";
+import { GRADE_NAME } from "./GradeCard";
+import MemoryPanel, { MemoryPeek, MemorySheetBody, useConcepts } from "./MemoryPanel";
+import SubjectColumn from "./SubjectColumn";
 import Thread from "./Thread";
 import useStudy from "./useStudy";
 import styles from "./Workspace.module.css";
@@ -12,11 +19,29 @@ type Props = {
   onBackup: (backup: boolean) => void;
 };
 
-/** The study workspace's three columns; a configuration error replaces them full width. */
+/** The dispute dialog's opening line: what was answered, and how it was graded. */
+function disputeContext(cards: Card[], gradeId: string): string | null {
+  const at = cards.findIndex((c) => c.id === gradeId);
+  const grade = cards[at];
+  if (grade?.kind !== "grade") return null;
+  const question = cards.slice(0, at).findLast((c) => c.kind === "question");
+  const fromNotes = shownCitations(grade.grade.citations).some((c) => c.kind !== "web");
+  return (
+    `Short answer on ${question?.concept ?? "this question"}, graded ${GRADE_NAME[grade.grade.value]}. ` +
+    `A second grader will re-check it${fromNotes ? " against your notes" : ""}.`
+  );
+}
+
+/**
+ * The study workspace: subjects and sources, the thread, and the memory panel (a bottom
+ * sheet at 375 px). A configuration error replaces them full width.
+ */
 export default function Workspace({ subjectId, onBackup }: Props) {
   const study = useStudy(subjectId);
+  const memory = useConcepts(subjectId, study.updates);
   // The grade card the dispute dialog is open for.
-  const [, setDisputing] = useState<string | null>(null);
+  const [disputing, setDisputing] = useState<string | null>(null);
+  const context = disputing ? disputeContext(study.cards, disputing) : null;
 
   useEffect(() => onBackup(study.backup), [onBackup, study.backup]);
 
@@ -29,9 +54,24 @@ export default function Workspace({ subjectId, onBackup }: Props) {
   }
   return (
     <div className={styles.columns}>
-      <aside aria-label="Subjects and sources" className={styles.left} />
+      <SubjectColumn subjectId={subjectId} updates={study.updates} />
       <Thread study={study} onDispute={setDisputing} />
-      <aside aria-label="Memory" className={styles.right} />
+      <aside aria-label="Memory" className={styles.right}>
+        <MemoryPanel concepts={memory.concepts} failed={memory.failed} onRetry={memory.retry} />
+      </aside>
+      <BottomSheet title="Memory" peek={<MemoryPeek concepts={memory.concepts} />}>
+        <MemorySheetBody concepts={memory.concepts} />
+      </BottomSheet>
+      {disputing && context && (
+        <DisputeDialog
+          context={context}
+          onCancel={() => setDisputing(null)}
+          onSend={(reason, explanation) => {
+            setDisputing(null);
+            study.dispute(disputing, reason, explanation);
+          }}
+        />
+      )}
     </div>
   );
 }

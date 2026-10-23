@@ -111,6 +111,11 @@
   cursor: pointer;
 }
 
+.plain {
+  border: 0;
+  background: transparent;
+}
+
 .moon {
   fill: none;
   stroke: currentColor;

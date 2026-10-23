@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Header from "./Header";
+import Header, { ThemeToggle } from "./Header";
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/study/1" }));
 
@@ -39,6 +39,19 @@ describe("Header", () => {
     expect(window.localStorage.getItem("ebb-theme")).toBe("dark");
     await userEvent.click(screen.getByRole("button", { name: /switch to/i }));
     expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("keeps a second toggle (the 375 px bar's) in step", async () => {
+    render(
+      <>
+        <Header backup={false} />
+        <ThemeToggle plain />
+      </>,
+    );
+    const [header, bar] = screen.getAllByRole("button", { name: "Switch to dark mode" });
+    await userEvent.click(bar);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(header).toHaveAccessibleName("Switch to light mode");
   });
 
   it("survives a throwing localStorage", async () => {
