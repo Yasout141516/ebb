@@ -31,6 +31,7 @@ from ebb.domain import (
 )
 from ebb.llm.schemas import ConceptDraft, EvalCaseDraft, NoteConcept
 from ebb.llm.tutor import AllProvidersExhausted, Generated, TutorRefused
+from ebb.progress import AnswerPoint
 from ebb.store import (
     MAX_DOCUMENTS,
     PRUNE_AFTER,
@@ -344,6 +345,24 @@ class MemoryStore:
             if c.stage >= 1 and c.next_review_at is not None
         ]
         return min(times, default=None)
+
+    def subject_answers(self, user_id: UUID, subject_id: UUID) -> list[AnswerPoint]:
+        answers = [
+            a
+            for a in self.attempts.values()
+            if a.id not in self.voided
+            and self.concepts[a.concept_id][0] == user_id
+            and self.concepts[a.concept_id][1].subject_id == subject_id
+        ]
+        answers.sort(key=lambda a: (a.graded_at, a.id))
+        return [AnswerPoint(a.concept_id, a.graded_at, a.grade) for a in answers]
+
+    def answer_times(self, user_id: UUID) -> list[datetime]:
+        return sorted(
+            a.graded_at
+            for a in self.attempts.values()
+            if a.id not in self.voided and self.concepts[a.concept_id][0] == user_id
+        )
 
     def set_timezone(self, user_id: UUID, name: str) -> None:
         self.timezones[user_id] = name

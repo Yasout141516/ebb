@@ -30,6 +30,7 @@ from ebb.domain import (
     ResumableSession,
     Subject,
 )
+from ebb.progress import AnswerPoint
 from ebb.store import (
     MAX_DOCUMENTS,
     PRUNE_AFTER,
@@ -583,6 +584,26 @@ class PgStore:
                 (user_id, subject_id),
             ).fetchone()
         return row["soonest"]
+
+    def subject_answers(self, user_id: UUID, subject_id: UUID) -> list[AnswerPoint]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select a.concept_id, a.graded_at, a.grade from attempts a"
+                " join concepts c on c.id = a.concept_id"
+                " where a.user_id = %s and c.user_id = %s and c.subject_id = %s"
+                " and a.voided_at is null order by a.graded_at, a.id",
+                (user_id, user_id, subject_id),
+            ).fetchall()
+        return [AnswerPoint(r["concept_id"], r["graded_at"], GradeValue(r["grade"])) for r in rows]
+
+    def answer_times(self, user_id: UUID) -> list[datetime]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select graded_at from attempts where user_id = %s and voided_at is null"
+                " order by graded_at, id",
+                (user_id,),
+            ).fetchall()
+        return [row["graded_at"] for row in rows]
 
     def set_timezone(self, user_id: UUID, name: str) -> None:
         with self.pool.connection() as conn:

@@ -29,6 +29,7 @@ from ebb.domain import (
     Question,
 )
 from ebb.graph.build import build_graph
+from ebb.progress import replay
 from ebb.store import DocumentRefused, SubjectExists
 from tests.fakes import FakeTutor, MemoryStore, new_document
 
@@ -1119,3 +1120,42 @@ def test_close_stale_sessions_skips_a_session_whose_lock_is_held(session_store):
 
     assert session_store.close_stale_sessions(ALICE, NOW) == 1
     assert session_store.get_session(ALICE, "t-1") is None
+
+
+def test_replay_skips_voided_and_uses_changed_grades(store):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "Names."), ("TCP", "Streams.")])
+    dns, tcp = store.list_concepts(ALICE, subject_id)
+    session_id = store.create_session(ALICE, subject_id, "thread-1")
+    questions = [Question(uuid4(), c.id, "short", 1, "Why?", "Because.") for c in (dns, tcp)]
+    store.save_questions(ALICE, session_id, questions)
+    dns_first = answer_for(questions[0], GradeValue.INCORRECT, NOW)
+    dns_second = answer_for(questions[0], GradeValue.CORRECT, NOW + timedelta(days=2))
+    tcp_only = answer_for(questions[1], GradeValue.CORRECT, NOW + timedelta(days=1))
+    for answer in (dns_first, tcp_only, dns_second):
+        store.record_answer(ALICE, answer)
+    store.resolve_dispute(
+        ALICE, dispute_for(dns_second, DisputeOutcome.CHANGED, GradeValue.PARTIAL), NOW
+    )
+    store.resolve_dispute(ALICE, dispute_for(tcp_only, DisputeOutcome.VOIDED), NOW)
+
+    answers = store.subject_answers(ALICE, subject_id)
+
+    assert [(a.concept_id, a.grade) for a in answers] == [
+        (dns.id, GradeValue.INCORRECT),
+        (dns.id, GradeValue.PARTIAL),
+    ]
+    stored = store.list_concepts(ALICE, subject_id)[0]
+    assert replay(stored, answers)[-1][1] == stored
+    assert store.answer_times(ALICE) == [dns_first.graded_at, dns_second.graded_at]
+
+
+def test_answer_history_is_scoped_to_the_user_and_subject(store):
+    subject_id, _, question = subject_with_question(store)
+    store.record_answer(ALICE, answer_for(question, GradeValue.CORRECT))
+    other = store.create_subject(ALICE, "Maths", [("Sets", "Collections.")])
+
+    assert len(store.subject_answers(ALICE, subject_id)) == 1
+    assert store.subject_answers(ALICE, other) == []
+    assert store.subject_answers(BOB, subject_id) == []
+    assert store.answer_times(BOB) == []
+    assert len(store.answer_times(ALICE)) == 1

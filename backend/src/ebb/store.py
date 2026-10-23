@@ -23,6 +23,7 @@ from ebb.domain import (
     ResumableSession,
     Subject,
 )
+from ebb.progress import AnswerPoint
 
 RESUME_WINDOW = timedelta(hours=24)
 PRUNE_AFTER = timedelta(days=7)
@@ -247,6 +248,14 @@ class Store(Protocol):
     def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None: ...
 
     def set_timezone(self, user_id: UUID, name: str) -> None: ...
+
+    def subject_answers(self, user_id: UUID, subject_id: UUID) -> list[AnswerPoint]:
+        """Answers not voided, by graded_at then id; a grade a dispute changed shows as changed."""
+        ...
+
+    def answer_times(self, user_id: UUID) -> list[datetime]:
+        """When each answer not voided was graded, in every subject."""
+        ...
 
     def take_ai_call(self, user_id: UUID, day: date, limit: int) -> bool:
         """Count one AI call for `day` and return True while fewer than `limit` have been made;
