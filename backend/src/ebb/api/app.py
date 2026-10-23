@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ebb.api.errors import install_error_handlers
+from ebb.api.routes_subjects import router as subjects_router
 from ebb.api.schemas import Health
 from ebb.api.services import Services, build_services
 from ebb.config import Settings
@@ -21,6 +22,7 @@ def create_app(services: Services) -> FastAPI:
         allow_headers=["*"],
     )
     install_error_handlers(app)
+    app.include_router(subjects_router)
 
     @app.get("/health")
     def health() -> Health:
