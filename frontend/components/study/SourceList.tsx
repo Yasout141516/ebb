@@ -1,4 +1,5 @@
 import Link from "next/link";
+import ErrorCard from "@/components/ErrorCard";
 import { kindLabel, MAX_FILES } from "@/lib/notes";
 import type { Source } from "@/lib/types";
 import styles from "./SourceList.module.css";
@@ -13,14 +14,31 @@ function Plus() {
 
 type Props = {
   subjectId: string;
-  /** Null while loading. */
+  /** Null until they first arrive. */
   sources: Source[] | null;
+  /** Loading them failed: with no sources yet, an error card with Retry shows. */
+  failed?: boolean;
+  onRetry?: () => void;
 };
 
 /** The left column's Sources: each file with its detail line, and Add source (D5's 5 of 5). */
-export default function SourceList({ subjectId, sources }: Props) {
+export default function SourceList({ subjectId, sources, failed = false, onRetry }: Props) {
   const add = `/subjects/${subjectId}/add`;
-  if (sources !== null && sources.length === 0) {
+  if (sources === null) {
+    // How many files there are is unknown: no Add source that might be over the limit.
+    return (
+      <section className={styles.section}>
+        <h2 className={styles.heading}>Sources</h2>
+        {failed && (
+          <ErrorCard
+            title="Couldn't load your sources."
+            action={onRetry && { label: "Retry", onClick: onRetry }}
+          />
+        )}
+      </section>
+    );
+  }
+  if (sources.length === 0) {
     return (
       <section className={styles.section}>
         <h2 className={styles.heading}>Sources</h2>
@@ -36,11 +54,11 @@ export default function SourceList({ subjectId, sources }: Props) {
       </section>
     );
   }
-  const full = (sources?.length ?? 0) >= MAX_FILES;
+  const full = sources.length >= MAX_FILES;
   return (
     <section className={styles.section}>
       <h2 className={styles.heading}>Sources</h2>
-      {sources?.map((s) => (
+      {sources.map((s) => (
         <div key={s.id} className={styles.source}>
           <span aria-hidden="true" className={styles.badge}>
             {kindLabel(s.filename)}

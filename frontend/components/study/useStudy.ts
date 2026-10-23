@@ -296,25 +296,36 @@ export default function useStudy(subjectId: string): Study {
 
   /**
    * Renew this tab's lease while the session is open; a request in flight renews it
-   * itself. 404: the session has ended meanwhile, nothing to do. 409: another tab or
-   * terminal has taken it over, as a refused reply would say.
+   * itself, and a beat still waiting for its answer isn't doubled. 404: the session has
+   * ended meanwhile, nothing to do. 409: another tab or terminal has taken it over, as a
+   * refused reply would say.
    */
+  const beat = useRef<AbortController | null>(null);
   const heartbeat = useEffectEvent(async () => {
     const threadId = thread.current;
-    if (!threadId || inFlight.current) return;
+    if (!threadId || inFlight.current || beat.current) return;
+    const controller = new AbortController();
+    beat.current = controller;
     try {
-      await postJson(`/sessions/${threadId}/heartbeat`, { driver: driverId() });
+      await postJson(`/sessions/${threadId}/heartbeat`, { driver: driverId() }, controller.signal);
     } catch (e) {
+      if (controller.signal.aborted) return;
       if (e instanceof ApiError && e.status === 409 && thread.current === threadId && !inFlight.current) {
         takenOver(threadId);
       }
       // anything else: the next beat tries again
+    } finally {
+      if (beat.current === controller) beat.current = null;
     }
   });
   useEffect(() => {
     if (!sessionOpen) return;
     const timer = setInterval(() => void heartbeat(), HEARTBEAT_MS);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      beat.current?.abort();
+      beat.current = null;
+    };
   }, [sessionOpen]);
 
   function answer(text: string, choice: number | null) {

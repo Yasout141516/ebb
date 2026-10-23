@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type CSSProperties, useEffect, useId, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useId, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
 import { getJson } from "@/lib/api";
 import { stageDots, weekday } from "@/lib/format";
@@ -12,6 +12,7 @@ import styles from "./MemoryPanel.module.css";
 const INTERVAL_DAYS = [0, 1, 3, 7, 16, 35];
 const TIDE_TIP = "Tide: the chance you'd recall it right now. It ebbs every day and rises when you review.";
 const STAGE_TIP = "Stage: how far along its reviews are. Each right answer moves it up and widens the gap.";
+const LOAD_FAILED = "Couldn't load your memory levels.";
 
 /** The gap before the next review if the next answer at this stage is right. */
 export function nextGap(stage: number): number {
@@ -33,13 +34,64 @@ export function dueText(nextReviewAt: string | null, now: Date): string {
 
 const percent = (tide: number | null) => Math.round((tide ?? 0) * 100);
 
-/** The prototype's concept label, read aloud in place of the row's parts. */
-function rowLabel(c: ConceptState): string {
-  if (c.tide === null) return `${c.name}: new, not studied yet`;
-  const ahead = c.projected_tide === null ? "" : `, about ${percent(c.projected_tide)} percent in 3 days without review`;
+/** What the gauge's dashed marker shows, as text (screen readers can't see the gauge). */
+function AheadText({ c }: { c: ConceptState }) {
+  if (c.tide === null || c.projected_tide === null) return null;
+  return <span className={styles.srOnly}>, about {percent(c.projected_tide)}% in 3 days without review</span>;
+}
+
+/** A tide value: "71%", or "—" with its words for a concept never studied. */
+function TideValue({ tide, className }: { tide: number | null; className: string }) {
   return (
-    `${c.name}: tide ${percent(c.tide)} percent, ${c.band}, level ${c.stage} of 5, ` +
-    `next gap ${nextGap(c.stage)} days${ahead}`
+    <span className={className}>
+      <span className={styles.srOnly}>Tide</span>{" "}
+      {tide === null ? (
+        <>
+          <span aria-hidden="true">—</span>
+          <span className={styles.srOnly}>not measured yet,</span>
+        </>
+      ) : (
+        `${percent(tide)}%`
+      )}
+    </span>
+  );
+}
+
+type TipProps = {
+  tip: string;
+  className: string;
+  /** Line the tooltip up with the trigger's end edge rather than its start. */
+  end?: boolean;
+  children: ReactNode;
+};
+
+/**
+ * A one-line tooltip (D7) on `children`: a plain button that shows `tip` while hovered or
+ * focused, linked to it with aria-describedby; Escape hides it.
+ */
+function Tip({ tip, className, end = false, children }: TipProps) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <span className={styles.tipBox} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button
+        type="button"
+        aria-describedby={id}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape" || !open) return;
+          e.stopPropagation(); // the tooltip, not the sheet around it
+          setOpen(false);
+        }}
+        className={`${styles.tipTrigger} ${className}`}
+      >
+        {children}
+      </button>
+      <span role="tooltip" id={id} hidden={!open} className={`${styles.tip} ${end ? styles.tipEnd : ""}`}>
+        {tip}
+      </span>
+    </span>
   );
 }
 
@@ -70,7 +122,7 @@ export function Gauge({ tide, ahead = null, className, mini = false }: GaugeProp
 /** A concept's stage as the prototype's small dots, from `stageDots`. */
 function Dots({ stage }: { stage: number }) {
   return (
-    <span className={styles.dots}>
+    <span aria-hidden="true" className={styles.dots}>
       {[...stageDots(stage)].map((dot, i) => (
         <span key={i} data-dot={dot} className={dot === "●" ? styles.dotOn : styles.dot} />
       ))}
@@ -123,7 +175,7 @@ export default function MemoryPanel({ concepts, failed = false, onRetry, now = n
         <p className={styles.lede}>How high each idea&apos;s tide is right now</p>
       </div>
       {concepts === null && failed && (
-        <ErrorCard title="Couldn't load your memory levels." action={onRetry && { label: "Retry", onClick: onRetry }} />
+        <ErrorCard title={LOAD_FAILED} action={onRetry && { label: "Retry", onClick: onRetry }} />
       )}
       {concepts === null && !failed && (
         <div aria-busy="true" aria-label="Loading memory levels" className={styles.loading}>
@@ -169,21 +221,22 @@ export default function MemoryPanel({ concepts, failed = false, onRetry, now = n
             </h3>
             <ul className={styles.list}>
               {[...concepts.concepts].sort(byTide).map((c) => (
-                <li key={c.id} aria-label={rowLabel(c)} className={styles.row}>
+                <li key={c.id} className={styles.row}>
                   <Gauge tide={c.tide} ahead={c.projected_tide} className={styles.rowGauge} />
-                  <span aria-hidden="true" className={styles.middle}>
+                  <span className={styles.middle}>
                     <span className={styles.name}>{c.name}</span>
-                    <span className={styles.stage} title={STAGE_TIP}>
+                    <Tip tip={STAGE_TIP} className={styles.stage}>
                       <Dots stage={c.stage} />
                       <span className={styles.stageText}>
                         {c.tide === null ? "No reviews yet" : `level ${c.stage} · next gap ${nextGap(c.stage)} days`}
                       </span>
-                    </span>
+                    </Tip>
                   </span>
-                  <span aria-hidden="true" className={styles.level} title={TIDE_TIP}>
-                    <span className={styles.value}>{c.tide === null ? "—" : `${percent(c.tide)}%`}</span>
+                  <Tip tip={TIDE_TIP} className={styles.level} end>
+                    <TideValue tide={c.tide} className={styles.value} />{" "}
                     <span className={styles.band}>{c.band}</span>
-                  </span>
+                    <AheadText c={c} />
+                  </Tip>
                 </li>
               ))}
             </ul>
@@ -214,8 +267,16 @@ export function MemoryPeek({ concepts }: { concepts: Concepts | null }) {
 }
 
 /** The bottom sheet's body (375 px), as tpl-WorkspaceMobile lays it out. */
-export function MemorySheetBody({ concepts, now = new Date() }: { concepts: Concepts | null; now?: Date }) {
-  if (concepts === null) return null;
+export function MemorySheetBody({ concepts, failed = false, onRetry, now = new Date() }: Props) {
+  if (concepts === null) {
+    return failed ? (
+      <ErrorCard title={LOAD_FAILED} action={onRetry && { label: "Retry", onClick: onRetry }} />
+    ) : (
+      <p aria-busy="true" className={styles.sheetLoading}>
+        Loading memory levels…
+      </p>
+    );
+  }
   const due = dueFirst(concepts.concepts);
   return (
     <>
@@ -223,25 +284,27 @@ export function MemorySheetBody({ concepts, now = new Date() }: { concepts: Conc
         <section className={styles.sheetDue}>
           <h3 className={styles.label}>Due for review · {due.length}</h3>
           {due.length === 0 && <NothingDue at={concepts.next_review_at!} />}
-          {due.map((c) => (
-            <div key={c.id} className={styles.sheetDueRow} title={dueText(c.next_review_at, now)}>
-              <Gauge tide={c.tide} className={styles.sheetDueGauge} />
-              <span className={styles.sheetName}>{c.name}</span>
-              <span className={styles.sheetValue}>{percent(c.tide)}%</span>
-            </div>
-          ))}
+          <ul className={styles.sheetDueList}>
+            {due.map((c) => (
+              <li key={c.id} className={styles.sheetDueRow}>
+                <Gauge tide={c.tide} className={styles.sheetDueGauge} />
+                <span className={styles.sheetName}>{c.name}</span>
+                <TideValue tide={c.tide} className={styles.sheetValue} />
+                <span className={styles.srOnly}>, {dueText(c.next_review_at, now)}</span>
+              </li>
+            ))}
+          </ul>
         </section>
       )}
       <ul className={styles.sheetList}>
         {[...concepts.concepts].sort(byTide).map((c) => (
-          <li key={c.id} aria-label={rowLabel(c)} className={styles.sheetRow}>
+          <li key={c.id} className={styles.sheetRow}>
             <Gauge tide={c.tide} ahead={c.projected_tide} className={styles.sheetGauge} />
-            <span aria-hidden="true" className={styles.sheetName}>
-              {c.name}
-            </span>
-            <span aria-hidden="true" className={styles.sheetLevel}>
-              <span className={styles.sheetValue}>{c.tide === null ? "—" : `${percent(c.tide)}%`}</span>
+            <span className={styles.sheetName}>{c.name}</span>
+            <span className={styles.sheetLevel}>
+              <TideValue tide={c.tide} className={styles.sheetValue} />{" "}
               <span className={styles.band}>{c.band}</span>
+              <AheadText c={c} />
             </span>
           </li>
         ))}

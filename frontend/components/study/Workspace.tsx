@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
 import type { Card } from "@/lib/session";
 import BottomSheet from "./BottomSheet";
 import { shownCitations } from "./CitationChips";
 import DisputeDialog from "./DisputeDialog";
-import { GRADE_NAME } from "./GradeCard";
+import { checkingId, GRADE_NAME } from "./GradeCard";
 import MemoryPanel, { MemoryPeek, MemorySheetBody, useConcepts } from "./MemoryPanel";
 import SubjectColumn from "./SubjectColumn";
 import Thread from "./Thread";
@@ -43,7 +43,15 @@ export default function Workspace({ subjectId, onBackup }: Props) {
   const [disputing, setDisputing] = useState<string | null>(null);
   const context = disputing ? disputeContext(study.cards, disputing) : null;
 
+  // A dispute just sent: focus moves to its card's "re-checking" line, where the button was.
+  const sent = useRef<string | null>(null);
+
   useEffect(() => onBackup(study.backup), [onBackup, study.backup]);
+  useEffect(() => {
+    if (!sent.current) return;
+    document.getElementById(checkingId(sent.current))?.focus();
+    sent.current = null;
+  }, [study.cards]);
 
   if (study.fatal) {
     return (
@@ -60,7 +68,7 @@ export default function Workspace({ subjectId, onBackup }: Props) {
         <MemoryPanel concepts={memory.concepts} failed={memory.failed} onRetry={memory.retry} />
       </aside>
       <BottomSheet title="Memory" peek={<MemoryPeek concepts={memory.concepts} />}>
-        <MemorySheetBody concepts={memory.concepts} />
+        <MemorySheetBody concepts={memory.concepts} failed={memory.failed} onRetry={memory.retry} />
       </BottomSheet>
       {disputing && context && (
         <DisputeDialog
@@ -68,6 +76,7 @@ export default function Workspace({ subjectId, onBackup }: Props) {
           onCancel={() => setDisputing(null)}
           onSend={(reason, explanation) => {
             setDisputing(null);
+            sent.current = disputing;
             study.dispute(disputing, reason, explanation);
           }}
         />

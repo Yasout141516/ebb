@@ -107,6 +107,7 @@ export default function DisputeDialog({ context, onCancel, onSend }: Props) {
           <textarea
             id={`${id}-note`}
             rows={3}
+            maxLength={2000}
             value={explanation}
             onChange={(e) => setExplanation(e.target.value)}
             className={styles.textarea}

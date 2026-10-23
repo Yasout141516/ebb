@@ -1,4 +1,5 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getJson } from "@/lib/api";
 import type { Source } from "@/lib/types";
@@ -85,5 +86,104 @@ describe("SubjectColumn", () => {
     );
     rerender(<SubjectColumn subjectId="s1" updates={1} />);
     await waitFor(() => expect(screen.getByText("8 concepts · 2 due today")).toBeInTheDocument());
+  });
+
+  it("shows a failed first load of the sources, offers no Add source, and retries", async () => {
+    vi.mocked(getJson).mockImplementation(async (path: string) => {
+      if (path === "/subjects") return [{ id: "s1", name: "Computer Networks", concept_count: 8, due_count: 3 }];
+      throw new TypeError("Failed to fetch");
+    });
+    render(<SubjectColumn subjectId="s1" updates={0} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load your sources.");
+    expect(screen.queryByRole("link", { name: "Add source" })).toBeNull();
+    expect(screen.queryByText(/sources?$/)).toBeNull(); // the 375 px bar claims no count
+    vi.mocked(getJson).mockImplementation(async (path: string) =>
+      path === "/subjects" ? [{ id: "s1", name: "Computer Networks", concept_count: 8, due_count: 3 }] : [source(1)],
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Week_1.pdf")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add source" })).toBeInTheDocument();
+    expect(screen.getByText("1 source")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("tries the sources again after an update", async () => {
+    vi.mocked(getJson).mockImplementation(async (path: string) => {
+      if (path === "/subjects") return [];
+      throw new TypeError("Failed to fetch");
+    });
+    const { rerender } = render(<SubjectColumn subjectId="s1" updates={0} />);
+    await screen.findByText("Couldn't load your sources.");
+    vi.mocked(getJson).mockImplementation(async (path: string) => (path === "/subjects" ? [] : [source(1)]));
+    rerender(<SubjectColumn subjectId="s1" updates={1} />);
+    expect(await screen.findByText("Week_1.pdf")).toBeInTheDocument();
+  });
+
+  it("shows a failed first load of the subjects, with Retry", async () => {
+    vi.mocked(getJson).mockImplementation(async (path: string) => {
+      if (path === "/subjects") throw new TypeError("Failed to fetch");
+      return [source(1)];
+    });
+    render(<SubjectColumn subjectId="s1" updates={0} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load your subjects.");
+    vi.mocked(getJson).mockImplementation(async (path: string) =>
+      path === "/subjects" ? [{ id: "s1", name: "Computer Networks", concept_count: 8, due_count: 3 }] : [source(1)],
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("8 concepts · 3 due today")).toBeInTheDocument();
+  });
+});
+
+describe("the 375 px drawer", () => {
+  beforeEach(() => {
+    vi.mocked(getJson).mockImplementation(async (path: string) =>
+      path === "/subjects" ? [{ id: "s1", name: "Computer Networks", concept_count: 8, due_count: 3 }] : [source(1)],
+    );
+  });
+
+  async function opened() {
+    render(
+      <div>
+        <SubjectColumn subjectId="s1" updates={0} />
+        <main>The thread</main>
+      </div>,
+    );
+    await screen.findByText("Week_1.pdf");
+    const menu = screen.getByRole("button", { name: "Subjects and sources" });
+    await userEvent.click(menu);
+    return menu;
+  }
+
+  it("opens as a modal: focus moves in, Tab stays in, the rest is inert", async () => {
+    const menu = await opened();
+    expect(menu).toHaveAttribute("aria-expanded", "true");
+    const drawer = screen.getByRole("dialog", { name: "Subjects and sources" });
+    expect(drawer).toHaveAttribute("aria-modal", "true");
+    expect(drawer).toHaveFocus();
+    expect(screen.getByText("The thread")).toHaveAttribute("inert");
+    const links = within(drawer).getAllByRole("link");
+    links[links.length - 1].focus();
+    await userEvent.tab();
+    expect(links[0]).toHaveFocus();
+  });
+
+  it("Escape closes it from inside and gives focus back to the menu button", async () => {
+    const menu = await opened();
+    within(screen.getByRole("dialog")).getAllByRole("link")[1].focus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(menu).toHaveAttribute("aria-expanded", "false");
+    expect(menu).toHaveFocus();
+    expect(screen.getByText("The thread")).not.toHaveAttribute("inert");
+  });
+
+  it("closes when the current subject is tapped", async () => {
+    await opened();
+    // Tapping the page you're on navigates nowhere; keep jsdom from trying.
+    const stay = (e: Event) => e.preventDefault();
+    document.addEventListener("click", stay, true);
+    await userEvent.click(screen.getByRole("link", { name: /Computer Networks/ }));
+    document.removeEventListener("click", stay, true);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

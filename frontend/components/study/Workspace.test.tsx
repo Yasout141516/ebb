@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, getJson, postJson } from "@/lib/api";
@@ -182,7 +182,7 @@ describe("Workspace", () => {
       reply: { dispute: { id: expect.stringMatching(/^[0-9a-f-]{36}$/), reason: "ambiguous", explanation: "It could mean either." } },
     });
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText("Dispute sent. A second grader is re-checking your answer…")).toBeInTheDocument();
+    expect(screen.getByText("Dispute sent. A second grader is re-checking your answer…")).toHaveFocus();
     expect(screen.queryByRole("button", { name: "Dispute grade" })).toBeNull();
   });
 
@@ -215,7 +215,7 @@ describe("heartbeat", () => {
     await act(async () => vi.advanceTimersByTime(29_000));
     expect(beats()).toHaveLength(0);
     await act(async () => vi.advanceTimersByTime(1_000));
-    expect(beats()).toEqual([["/sessions/t1/heartbeat", { driver: "drv-1" }]]);
+    expect(beats()).toEqual([["/sessions/t1/heartbeat", { driver: "drv-1" }, expect.any(AbortSignal)]]);
     await act(async () => vi.advanceTimersByTime(30_000));
     expect(beats()).toHaveLength(2);
   });
@@ -237,6 +237,31 @@ describe("heartbeat", () => {
     expect(screen.getByRole("button", { name: "Start fresh" })).toBeInTheDocument();
     await act(async () => vi.advanceTimersByTime(60_000));
     expect(beats()).toHaveLength(1);
+  });
+
+  it("skips the beat while a reply is in flight (the reply holds the lease)", async () => {
+    await openSession();
+    await userEvent.type(screen.getByLabelText("Your answer"), "Speed.{Enter}");
+    const reply = await lastStream();
+    await act(async () => vi.advanceTimersByTime(30_000));
+    expect(beats()).toHaveLength(0);
+    reply.emit("turn", { payload: short({ number: 2, feedback: partial }) });
+    await reply.end();
+    await act(async () => vi.advanceTimersByTime(30_000));
+    expect(beats()).toHaveLength(1);
+  });
+
+  it("never overlaps beats, and abandons the one waiting when the page goes", async () => {
+    let signal: AbortSignal | undefined;
+    vi.mocked(postJson).mockImplementation((_path, _body, s) => {
+      signal = s;
+      return new Promise(() => {}); // the API never answers
+    });
+    await openSession();
+    await act(async () => vi.advanceTimersByTime(90_000));
+    expect(beats()).toHaveLength(1);
+    cleanup();
+    expect(signal?.aborted).toBe(true);
   });
 
   it("stops once the session has ended", async () => {

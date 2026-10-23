@@ -63,6 +63,9 @@ export function GeneralKnowledge() {
   );
 }
 
+/** The id of a grade card's "re-checking" line, which takes focus once a dispute is sent. */
+export const checkingId = (gradeId: string) => `grade-${gradeId}-checking`;
+
 type Props = { card: Model; onDispute: (gradeId: string) => void };
 
 /** The grade for an answer: verdict, explanation, sources, and any dispute of it. */
@@ -89,7 +92,7 @@ export default function GradeCard({ card, onDispute }: Props) {
           grade.general_knowledge && <GeneralKnowledge />
         )}
         {dispute === "checking" && (
-          <p role="status" className={styles.checking}>
+          <p id={checkingId(card.id)} role="status" tabIndex={-1} className={styles.checking}>
             Dispute sent. A second grader is re-checking your answer…
           </p>
         )}

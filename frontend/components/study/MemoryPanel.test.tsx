@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import type { ConceptState, Concepts } from "@/lib/types";
 import MemoryPanel, { dueText, MemoryPeek, MemorySheetBody, nextGap } from "./MemoryPanel";
 
@@ -48,30 +49,47 @@ describe("MemoryPanel", () => {
     render(<MemoryPanel concepts={data} now={NOW} />);
     const all = screen.getByRole("region", { name: "All concepts" });
     const rows = within(all).getAllByRole("listitem");
-    expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual([
-      "OSI layers: tide 92 percent, high tide, level 5 of 5, next gap 35 days, about 86 percent in 3 days without review",
-      "HTTP vs HTTPS: tide 71 percent, ebbing, level 3 of 5, next gap 16 days, about 58 percent in 3 days without review",
-      "Routing: tide 64 percent, ebbing, level 2 of 5, next gap 7 days, about 40 percent in 3 days without review",
-      "Subnetting: tide 29 percent, low tide, level 1 of 5, next gap 3 days, about 17 percent in 3 days without review",
-      "NAT: new, not studied yet",
-    ]);
+    // Each row's text alternative: its name and two tooltip buttons, read as they're shown.
+    const expected = [
+      ["OSI layers", "level 5 · next gap 35 days", "Tide 92% high tide, about 86% in 3 days without review"],
+      ["HTTP vs HTTPS", "level 3 · next gap 16 days", "Tide 71% ebbing, about 58% in 3 days without review"],
+      ["Routing", "level 2 · next gap 7 days", "Tide 64% ebbing, about 40% in 3 days without review"],
+      ["Subnetting", "level 1 · next gap 3 days", "Tide 29% low tide, about 17% in 3 days without review"],
+      ["NAT", "No reviews yet", "Tide not measured yet, new"],
+    ];
+    expect(rows).toHaveLength(expected.length);
+    rows.forEach((row, i) => {
+      const [name, stage, tide] = expected[i];
+      expect(row.textContent?.startsWith(name)).toBe(true);
+      const [stageButton, tideButton] = within(row).getAllByRole("button");
+      expect(stageButton).toHaveAccessibleName(stage);
+      expect(tideButton).toHaveAccessibleName(tide);
+    });
     const http = rows[1];
-    expect(within(http).getByText("71%")).toBeInTheDocument();
+    expect(within(http).getByText("71%", { exact: false })).toBeInTheDocument();
     expect(within(http).getByText("ebbing")).toBeInTheDocument();
-    expect(within(http).getByText("level 3 · next gap 16 days")).toBeInTheDocument();
     const dots = http.querySelectorAll("[data-dot]");
     expect([...dots].map((d) => d.getAttribute("data-dot")).join("")).toBe("●●●○○");
-    expect(within(rows[4]).getByText("new")).toBeInTheDocument();
-    expect(within(rows[4]).getByText("No reviews yet")).toBeInTheDocument();
+    expect(dots[0].closest("[aria-hidden]")).not.toBeNull();
   });
 
-  it("explains tide and stage in one-line tooltips", () => {
+  it("shows each one-line tooltip on hover and on keyboard focus, described by it", async () => {
     render(<MemoryPanel concepts={data} now={NOW} />);
-    const row = screen.getAllByRole("listitem").find((r) => r.textContent?.startsWith("HTTP vs HTTPS"))!;
-    expect(within(row).getByText("71%").closest("[title]")?.getAttribute("title")).toMatch(/^Tide: /);
-    expect(within(row).getByText("level 3 · next gap 16 days").closest("[title]")?.getAttribute("title")).toMatch(
-      /^Stage: /,
-    );
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await userEvent.tab();
+    const stage = screen.getByRole("button", { name: "level 5 · next gap 35 days" });
+    expect(stage).toHaveFocus();
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent(/^Stage: /);
+    expect(stage).toHaveAccessibleDescription(tip.textContent!);
+    await userEvent.tab();
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/^Tide: /);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await userEvent.hover(screen.getByRole("button", { name: /^Tide 71%/ }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/^Tide: /);
+    await userEvent.unhover(screen.getByRole("button", { name: /^Tide 71%/ }));
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("draws the 3-day projection marker only for studied concepts, and says what it is", () => {
@@ -89,7 +107,7 @@ describe("MemoryPanel", () => {
     render(<MemoryPanel concepts={calm} now={NOW} />);
     expect(screen.getByText("Tide's high. Next review Thursday.")).toBeInTheDocument();
     expect(screen.queryByText(/quiz ahead/i)).toBeNull();
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button", { name: /quiz/i })).toBeNull();
   });
 
   it("shows the loading skeleton until the levels arrive", () => {
@@ -107,9 +125,21 @@ describe("MemoryPanel", () => {
     render(<MemorySheetBody concepts={data} now={NOW} />);
     expect(screen.getByRole("heading", { name: "Due for review · 2" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open full progress" })).toHaveAttribute("href", "/progress");
-    expect(screen.getAllByRole("listitem").map((r) => r.getAttribute("aria-label"))).toContain(
-      "HTTP vs HTTPS: tide 71 percent, ebbing, level 3 of 5, next gap 16 days, about 58 percent in 3 days without review",
-    );
+    const http = screen.getAllByRole("listitem").find((r) => r.textContent?.includes("HTTP vs HTTPS"))!;
+    // The parts are flex items, read as separate words; textContent just runs them together.
+    expect(http).toHaveTextContent("HTTP vs HTTPSTide 71% ebbing, about 58% in 3 days without review");
+    const due = screen.getAllByRole("listitem").find((r) => r.textContent?.startsWith("Subnetting"))!;
+    expect(due).toHaveTextContent("SubnettingTide 29%, due 2 days ago");
+  });
+
+  it("the sheet says it's loading, or that loading failed, with Retry", async () => {
+    const { rerender } = render(<MemorySheetBody concepts={null} now={NOW} />);
+    expect(screen.getByText("Loading memory levels…")).toBeInTheDocument();
+    const retry = vi.fn();
+    rerender(<MemorySheetBody concepts={null} failed onRetry={retry} now={NOW} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load your memory levels.");
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalled();
   });
 });
 
