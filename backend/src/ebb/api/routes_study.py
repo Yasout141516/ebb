@@ -2,13 +2,14 @@
 
 Each run answers with Server-Sent Events: `started` (a new session only), a `step` as each
 labelled step starts, then the `turn` waiting for a reply or the `finished` summary; or an
-`error` when the tutor fails outside the graph's own handling or isn't configured. A session
-driven elsewhere (409) or not found (404) is refused before the stream opens.
+`error` when the tutor fails outside the graph's own handling, isn't configured, or anything
+else goes wrong. A session driven elsewhere (409) or not found (404) is refused before the
+stream opens.
 """
 
 import json
 import logging
-from collections.abc import Generator, Iterator
+from collections.abc import Iterator
 from dataclasses import asdict
 from typing import Annotated, Any
 from uuid import UUID
@@ -22,12 +23,12 @@ from fastapi.sse import EventSourceResponse, format_sse_event
 from ebb.api.drafts import SOMETHING_WRONG
 from ebb.api.schemas import AnswerReply, Driver, DriverId, Offer, ReplyBody, SessionOffer
 from ebb.api.services import Services, owned_subject, services_of
-from ebb.api.sse import event_stream
+from ebb.api.sse import close, event_stream
 from ebb.config import ConfigError
 from ebb.db.pool import DATABASE_DOWN
 from ebb.grading import parse_choice
 from ebb.llm.tutor import TutorUnavailable
-from ebb.study import Event, Finished, Pending, SessionBusy, Step
+from ebb.study import Event, Finished, Pending, SessionBusy, SessionNotFound, Step
 from ebb.ui import next_review_line
 
 router = APIRouter()
@@ -108,42 +109,46 @@ def _check_choice(services: Services, thread_id: str, reply: dict[str, Any]) -> 
 
 
 def _respond(services: Services, events: Iterator[Event], *before: Sse) -> EventSourceResponse:
-    """The run's events as SSE, after `before`. The first is pulled here, so SessionBusy or
-    LookupError answers as plain JSON before any stream opens."""
-    items = _items(services, events)
-    first = next(items)
-    return event_stream(_then([*before, first], items), _encode)
-
-
-def _then(first: list[Sse], rest: Generator[Sse]) -> Iterator[Sse]:
+    """The run's events as SSE, after `before`. The first is pulled here, so a session
+    driven elsewhere or not found answers as plain JSON before any stream opens; any other
+    failure is the stream's last event."""
     try:
-        yield from first
-        yield from rest
-    finally:
-        rest.close()  # a reader gone before `rest` started still finishes the run's turn
+        first = next(events)
+    except SessionBusy, SessionNotFound:
+        raise
+    except Exception as error:
+        return event_stream(iter([*before, _failure(error)]), _encode)
+    return event_stream(_items(services, before, first, events), _encode)
 
 
-def _items(services: Services, events: Iterator[Event]) -> Generator[Sse]:
-    """Each event as SSE; a failure becomes the last one, so the stream always ends."""
+def _items(
+    services: Services, before: tuple[Sse, ...], first: Event, events: Iterator[Event]
+) -> Iterator[Sse]:
+    """`before`, then each event as SSE; a failure becomes the last one, so the stream
+    always ends."""
     try:
+        yield from before
+        yield _sse(services, first)
         for event in events:
             yield _sse(services, event)
-    except SessionBusy, LookupError:
-        raise  # answered before the stream opens
-    except TutorUnavailable as error:
-        yield "error", {"notice": error.notice}
-    except ConfigError as error:
-        yield "error", {"error": str(error)}
-    except psycopg.Error:
-        log.exception("study run failed: database error")
-        yield "error", {"error": DATABASE_DOWN}
-    except Exception:  # the stream must still end; the traceback goes to the log
-        log.exception("study run failed")
-        yield "error", {"error": SOMETHING_WRONG}
+    except Exception as error:
+        yield _failure(error)
     finally:
-        close = getattr(events, "close", None)
-        if close is not None:
-            close()  # a reader gone mid-turn: the turn finishes, and its answer counts
+        close(events)  # a reader gone mid-turn: the turn finishes, and its answer counts
+
+
+def _failure(error: Exception) -> Sse:
+    match error:
+        case TutorUnavailable():
+            return "error", {"notice": error.notice}
+        case ConfigError():
+            return "error", {"error": str(error)}
+        case psycopg.Error():
+            log.error("study run failed: database error", exc_info=error)
+            return "error", {"error": DATABASE_DOWN}
+        case _:  # the traceback goes to the log
+            log.error("study run failed", exc_info=error)
+            return "error", {"error": SOMETHING_WRONG}
 
 
 def _sse(services: Services, event: Event) -> Sse:

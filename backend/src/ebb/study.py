@@ -29,6 +29,10 @@ class SessionBusy(Exception):
     """Another tab or terminal is driving the session."""
 
 
+class SessionNotFound(LookupError):
+    """The user has no open session by that thread id (or nothing in it to carry on with)."""
+
+
 @dataclass(frozen=True)
 class Offer:
     """An open session to resume: where it stopped, and whether someone else is on it."""
@@ -89,7 +93,7 @@ def _stopped_on(saved: StateSnapshot) -> tuple[str, int] | None:
 
 class StudySessions:
     """Every call is scoped by user_id. The event iterators are lazy: SessionBusy and
-    LookupError are raised when one is first advanced."""
+    SessionNotFound are raised when one is first advanced."""
 
     def __init__(
         self,
@@ -184,7 +188,10 @@ class StudySessions:
                 self.store.end_session(user_id, found.session_id, now)
 
     def heartbeat(self, user_id: UUID, thread_id: str, driver: str) -> bool:
-        """Renew `driver`'s lease; False if someone else drives the session or it ended."""
+        """Renew `driver`'s lease; False if someone else drives the session. Raises
+        SessionNotFound if it isn't open."""
+        if self.store.get_session(user_id, thread_id) is None:
+            raise SessionNotFound(thread_id)
         return self.store.claim_session(user_id, thread_id, driver, self.now(), LEASE)
 
     @contextmanager
@@ -211,7 +218,7 @@ class StudySessions:
             # Ended: a repeated last reply gets the summary again.
             saved = self.graph.get_state(_config(thread_id))
             if saved.values.get("user_id") != str(user_id) or _cut_off(saved):
-                raise LookupError(f"no open session {thread_id}")
+                raise SessionNotFound(thread_id)
             yield self._finished(user_id, saved.values)
             return
         run = self._next(user_id, thread_id, driver, reply)
@@ -251,7 +258,7 @@ class StudySessions:
         elif saved.values:
             return self._finished(user_id, saved.values)
         else:
-            raise LookupError(f"session {thread_id} has nothing to carry on with")
+            raise SessionNotFound(thread_id)
         return (yield from self._stream(user_id, thread_id, driver, graph_input))
 
     def _applied(self, user_id: UUID, values: Mapping[str, Any], reply: Mapping[str, Any]) -> bool:

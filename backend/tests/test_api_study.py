@@ -27,6 +27,7 @@ from tests.fakes import FakeTutor, make_subject
 type Sse = tuple[str, dict[str, Any]]
 
 BUSY_REPLY = {"error": BUSY}
+OTHER = UUID("00000000-0000-0000-0000-000000000002")
 
 
 class Clock:
@@ -179,7 +180,7 @@ def _post_and_leave(app, path: str, body: dict[str, Any]) -> list[Sse]:
         }
         await app(scope, receive, send)
 
-    asyncio.run(run())
+    asyncio.run(asyncio.wait_for(run(), 30))  # a regression fails here instead of hanging
     assert sent[0]["status"] == 200
     return _parse(b"".join(m.get("body", b"") for m in sent[1:]).decode())
 
@@ -363,17 +364,19 @@ def test_a_config_error_mid_stream_sends_an_error_event():
 
 
 class _Failing:
-    """Sessions whose run fails after its first step, outside the graph's own handling."""
+    """Sessions whose run fails outside the graph's own handling: after its first step, or
+    before it when `at_once`."""
 
-    def __init__(self, error: Exception) -> None:
-        self.error = error
+    def __init__(self, error: Exception, at_once: bool = False) -> None:
+        self.error, self.at_once = error, at_once
 
     def housekeeping(self, user_id: UUID) -> None:
         pass
 
     def start(self, user_id: UUID, subject_id: UUID, driver: str) -> tuple[str, str, Any]:
         def events() -> Iterator[Step]:
-            yield Step("Writing questions…")
+            if not self.at_once:
+                yield Step("Writing questions…")
             raise self.error
 
         return "thread-1", "Hello.", events()
@@ -395,6 +398,52 @@ def test_an_unexpected_failure_still_ends_the_stream():
     _, events = _start(client(services), subject_id)
 
     assert events[-1] == ("error", {"error": "Something went wrong — try again."})
+
+
+def test_a_key_error_is_a_failure_not_a_404_before_or_during_the_stream():
+    for at_once in (True, False):
+        services = replace(make_services(), sessions=_Failing(KeyError("concept"), at_once))
+        subject_id = make_subject(services.store, USER, concepts=2)
+
+        _, events = _start(client(services), subject_id)
+
+        assert events[-1] == ("error", {"error": "Something went wrong — try again."})
+        assert len(events) == (2 if at_once else 3)  # started, [step], error
+
+
+def test_heartbeat_on_a_session_that_isnt_open_is_404():
+    services = make_services()
+    subject_id = make_subject(services.store, USER, concepts=2)
+    web = client(services)
+    thread_id, _ = _start(web, subject_id)
+    _events(_reply(web, thread_id, {"quit": True}))
+
+    ended = web.post(f"/sessions/{thread_id}/heartbeat", json={"driver": "tab-a"})
+    unknown = web.post(f"/sessions/{uuid4()}/heartbeat", json={"driver": "tab-a"})
+
+    for response in (ended, unknown):
+        assert (response.status_code, response.json()) == (404, {"error": "Not found."})
+
+
+def test_another_users_subject_and_session_are_404():
+    services = make_services()
+    subject_id = make_subject(services.store, USER, concepts=2)
+    thread_id, events = _start(client(services), subject_id)
+    services.store.ensure_profile(OTHER)
+    other = client(replace(services, user_id=OTHER))
+    driver = {"driver": "tab-a"}
+
+    responses = [
+        other.get(f"/subjects/{subject_id}/session?driver=tab-a"),
+        other.post(f"/subjects/{subject_id}/session", json=driver),
+        other.post(f"/sessions/{thread_id}/resume", json=driver),
+        _reply(other, thread_id, _answer(_turn(events))),
+        other.post(f"/sessions/{thread_id}/heartbeat", json=driver),
+    ]
+
+    for response in responses:
+        assert (response.status_code, response.json()) == (404, {"error": "Not found."})
+    assert services.store.attempts == {}
 
 
 def test_dispute_round_trip_shows_result_on_next_turn():

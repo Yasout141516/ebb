@@ -13,7 +13,16 @@ from langgraph.types import Command
 
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
-from ebb.study import Event, Finished, Offer, Pending, SessionBusy, Step, StudySessions
+from ebb.study import (
+    Event,
+    Finished,
+    Offer,
+    Pending,
+    SessionBusy,
+    SessionNotFound,
+    Step,
+    StudySessions,
+)
 from tests.fakes import FakeTutor, MemoryStore, make_subject
 
 USER = UUID("00000000-0000-0000-0000-0000000000aa")
@@ -158,7 +167,7 @@ def test_quit_finishes_with_the_summary_and_a_repeat_gets_it_again(s):
 def test_reply_to_another_users_session_is_refused(s):
     thread_id, first = started(s)
 
-    with pytest.raises(LookupError):
+    with pytest.raises(SessionNotFound):
         list(s.sessions.reply(uuid4(), thread_id, "tab-a", right(first)))
 
 
@@ -183,7 +192,7 @@ def test_offer_ends_a_session_with_nothing_to_carry_on_with(s):
 def test_resuming_a_session_with_nothing_saved_is_refused(s):
     s.store.create_session(USER, s.subject_id, "never-saved")
 
-    with pytest.raises(LookupError):
+    with pytest.raises(SessionNotFound):
         list(s.sessions.resume(USER, "never-saved", "tab-a"))
     assert s.store.locks == set()
 
@@ -261,6 +270,17 @@ def test_heartbeat_keeps_the_lease(s):
     s.clock.advance(seconds=60)
 
     assert s.sessions.offer(USER, s.subject_id, "tab-b").busy is True
+
+
+def test_heartbeat_on_a_session_that_isnt_open_is_refused(s):
+    thread_id, _ = started(s, "tab-a")
+    with pytest.raises(SessionNotFound):
+        s.sessions.heartbeat(uuid4(), thread_id, "tab-a")  # another user's
+    ending(s.sessions.reply(USER, thread_id, "tab-a", {"quit": True}))
+
+    for thread in (thread_id, str(uuid4())):  # ended, unknown
+        with pytest.raises(SessionNotFound):
+            s.sessions.heartbeat(USER, thread, "tab-a")
 
 
 def test_same_driver_reconnects(s):

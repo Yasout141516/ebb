@@ -9,10 +9,11 @@ from starlette.concurrency import run_in_threadpool
 from starlette.types import Receive, Scope, Send
 
 
-def _close(events: Iterator[Any]) -> None:
-    close = getattr(events, "close", None)
-    if close is not None:
-        close()
+def close(events: Iterator[Any]) -> None:
+    """Close `events` if it can be closed (a generator runs its cleanup)."""
+    method = getattr(events, "close", None)
+    if method is not None:
+        method()
 
 
 async def _pull(events: Iterator[Any], encode: Callable[[Any], bytes]) -> AsyncIterator[bytes]:
@@ -35,7 +36,7 @@ class _EventStream(EventSourceResponse):
             # may block; left to garbage collection, it would run on the event loop.
             with anyio.CancelScope(shield=True):
                 await self._chunks.aclose()
-                await run_in_threadpool(_close, self._events)
+                await run_in_threadpool(close, self._events)
 
 
 def event_stream[T](events: Iterator[T], encode: Callable[[T], bytes]) -> EventSourceResponse:
