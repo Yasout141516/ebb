@@ -8,26 +8,29 @@ import json
 from collections.abc import AsyncIterator, Iterator
 from uuid import UUID
 
-from fastapi import APIRouter, Request, UploadFile
+from fastapi import APIRouter, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.sse import EventSourceResponse, format_sse_event
 from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
 
 from ebb import notes
 from ebb.api.drafts import Event, Say, refused, run_detached, tutor_refusal
-from ebb.api.routes_subjects import _owned, _services
 from ebb.api.schemas import CommittedDraft, CreatedDraft, NewDraft
-from ebb.api.services import Services
+from ebb.api.services import Services, owned_subject, services_of
 from ebb.config import ConfigError
 from ebb.domain import NewDocument, Subject
 from ebb.llm.tutor import TutorUnavailable
-from ebb.store import MAX_DOCUMENTS, DocumentRefused
-from ebb.subjects import add_notes, ensure_name_free, ensure_room
+from ebb.store import DocumentRefused
+from ebb.subjects import add_notes, ensure_name_free, ensure_room, room_copy
 from ebb.ui import pages_prefix
 from ebb.units import format_megabytes
 
 router = APIRouter()
 
 READ_CHUNK = 1024 * 1024
+MULTIPART_ALLOWANCE = 64 * 1024  # room for the multipart framing around an allowed file
+UNNAMED = "That file"
 READING: Event = {"status": "reading"}
 
 
@@ -53,13 +56,34 @@ async def _read_upload(file: UploadFile) -> bytes:
     return bytes(data)
 
 
-async def _upload(file: UploadFile) -> tuple[str, bytes] | EventSourceResponse:
-    """The file's name and bytes, or the stream refusing it when its type or size is wrong
-    (a file over the limit is refused with the size the client sent, unread past the limit)."""
-    filename = file.filename or ""
-    data = await _read_upload(file)
+def _content_length(request: Request) -> int:
+    length = request.headers.get("content-length", "")
+    return int(length) if length.isdigit() else 0
+
+
+async def _read_form(request: Request) -> tuple[str, bytes, int]:
+    """The `file` field's name, its first MAX_BYTES + 1 bytes and its full size."""
+    async with request.form() as form:
+        file = form.get("file")
+        if not isinstance(file, UploadFile):
+            missing = {"type": "missing", "loc": ("body", "file"), "msg": "Field required"}
+            raise RequestValidationError([missing])
+        data = await _read_upload(file)
+        return file.filename or "", data, max(file.size or 0, len(data))
+
+
+async def _upload(request: Request, name: str | None) -> tuple[str, bytes] | EventSourceResponse:
+    """The file's name and bytes, or the stream refusing it when its type or size is wrong.
+    A request too big to hold an allowed file is refused from its Content-Length before the
+    body is parsed, named by `name` (the frontend sends the file's name in the query)."""
     try:
-        notes.check_upload(filename, max(file.size or 0, len(data)))
+        if (length := _content_length(request)) > notes.MAX_BYTES + MULTIPART_ALLOWANCE:
+            if name:
+                notes.check_upload(name, length)  # its type first, as for any file
+            else:
+                notes.check_size(UNNAMED, length)
+        filename, data, size = await _read_form(request)
+        notes.check_upload(filename, size)
     except notes.NotesError as error:
         return _stream(iter([READING, refused(str(error))]))
     return filename, data
@@ -67,16 +91,19 @@ async def _upload(file: UploadFile) -> tuple[str, bytes] | EventSourceResponse:
 
 @router.post("/drafts", status_code=201)
 def create_draft(body: NewDraft, request: Request) -> CreatedDraft:
-    services = _services(request)
+    services = services_of(request)
     name = ensure_name_free(services.store, services.user_id, body.name)
     return CreatedDraft(id=services.drafts.create(name, services.user_id))
 
 
 @router.post("/drafts/{draft_id}/files")
-async def add_draft_file(draft_id: str, file: UploadFile, request: Request) -> EventSourceResponse:
-    services = _services(request)
+async def add_draft_file(
+    draft_id: str, request: Request, name: str | None = None
+) -> EventSourceResponse:
+    """Multipart field `file`."""
+    services = services_of(request)
     services.require_tutor()
-    upload = await _upload(file)
+    upload = await _upload(request, name)
     if isinstance(upload, EventSourceResponse):
         return upload
     filename, data = upload
@@ -85,23 +112,26 @@ async def add_draft_file(draft_id: str, file: UploadFile, request: Request) -> E
 
 @router.delete("/drafts/{draft_id}/files/{file_id}", status_code=204)
 def remove_draft_file(draft_id: str, file_id: str, request: Request) -> None:
-    services = _services(request)
+    services = services_of(request)
     services.drafts.remove_file(draft_id, file_id, services.user_id)
 
 
 @router.post("/drafts/{draft_id}/commit", status_code=201)
 def commit_draft(draft_id: str, request: Request) -> CommittedDraft:
-    services = _services(request)
+    services = services_of(request)
     subject_id = services.drafts.commit(draft_id, services.store, services.user_id)
     return CommittedDraft(subject_id=subject_id)
 
 
 @router.post("/subjects/{subject_id}/sources")
-async def add_source(subject_id: UUID, file: UploadFile, request: Request) -> EventSourceResponse:
-    services = _services(request)
-    subject = await run_in_threadpool(_owned, services, subject_id)
+async def add_source(
+    subject_id: UUID, request: Request, name: str | None = None
+) -> EventSourceResponse:
+    """Multipart field `file`."""
+    services = services_of(request)
+    subject = await run_in_threadpool(owned_subject, services, subject_id)
     services.require_tutor()
-    upload = await _upload(file)
+    upload = await _upload(request, name)
     if isinstance(upload, EventSourceResponse):
         return upload
     filename, data = upload
@@ -120,7 +150,7 @@ def _save_source(
         say(refused(str(error)))
         return
     except DocumentRefused as error:
-        say(refused(_room_copy(error, subject, filename)))
+        say(refused(room_copy(error, subject.name, filename)))
         return
     say({"status": "finding"})
     try:
@@ -128,7 +158,7 @@ def _save_source(
             services.require_tutor(), services.store, services.user_id, subject, document
         )
     except DocumentRefused as error:  # another upload got there first
-        say(refused(_room_copy(error, subject, filename)))
+        say(refused(room_copy(error, subject.name, filename)))
         return
     except (TutorUnavailable, ConfigError) as error:
         say(tutor_refusal(error))
@@ -141,13 +171,6 @@ def _save_source(
             "fresh": [{"name": n, "description": d} for n, d in report.fresh],
         }
     )
-
-
-def _room_copy(error: DocumentRefused, subject: Subject, filename: str) -> str:
-    """The CLI's copy for a full subject or a file it already has."""
-    if error.reason == "full":
-        return f"{subject.name} already has {MAX_DOCUMENTS} of {MAX_DOCUMENTS} files."
-    return f"{filename} is already in {subject.name}."
 
 
 def _detail(document: NewDocument) -> str:

@@ -14,8 +14,7 @@ from ebb.api.schemas import (
     Source,
     SubjectSummary,
 )
-from ebb.api.services import Services
-from ebb.domain import Subject
+from ebb.api.services import owned_subject, services_of
 from ebb.subjects import subject_from_topic
 from ebb.ui import pages_prefix
 from ebb.units import format_megabytes
@@ -23,21 +22,9 @@ from ebb.units import format_megabytes
 router = APIRouter()
 
 
-def _services(request: Request) -> Services:
-    services: Services = request.app.state.services
-    return services
-
-
-def _owned(services: Services, subject_id: UUID) -> Subject:
-    subject = services.store.get_subject(services.user_id, subject_id)
-    if subject is None:
-        raise LookupError(f"subject {subject_id} not found")
-    return subject
-
-
 @router.get("/subjects")
 def list_subjects(request: Request) -> list[SubjectSummary]:
-    services = _services(request)
+    services = services_of(request)
     now = services.now()
     summaries = []
     for subject in services.store.list_subjects(services.user_id):
@@ -53,7 +40,7 @@ def list_subjects(request: Request) -> list[SubjectSummary]:
 
 @router.post("/subjects", status_code=201)
 def create_subject(body: NewSubject, request: Request) -> CreatedSubject:
-    services = _services(request)
+    services = services_of(request)
     subject_id, concepts = subject_from_topic(
         services.require_tutor(), services.store, services.user_id, body.topic
     )
@@ -66,8 +53,8 @@ def create_subject(body: NewSubject, request: Request) -> CreatedSubject:
 
 @router.get("/subjects/{subject_id}/sources")
 def list_sources(subject_id: UUID, request: Request) -> list[Source]:
-    services = _services(request)
-    _owned(services, subject_id)
+    services = services_of(request)
+    owned_subject(services, subject_id)
     return [
         Source(
             id=d.id,
@@ -84,8 +71,8 @@ def list_sources(subject_id: UUID, request: Request) -> list[Source]:
 
 @router.get("/subjects/{subject_id}/concepts")
 def list_concepts(subject_id: UUID, request: Request) -> Concepts:
-    services = _services(request)
-    _owned(services, subject_id)
+    services = services_of(request)
+    owned_subject(services, subject_id)
     now = services.now()
     concepts = services.store.list_concepts(services.user_id, subject_id)
     due_ids = {c.id for c in mastery.reviews_due(concepts, now)}

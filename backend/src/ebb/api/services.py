@@ -8,11 +8,14 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from fastapi import Request
+
 from ebb.api.drafts import Drafts
 from ebb.config import ConfigError, Settings, resolve_timezone
 from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
+from ebb.domain import Subject
 from ebb.llm.tutor import Tutor
 from ebb.store import Store
 from ebb.study import StudySessions
@@ -41,6 +44,19 @@ class Services:
         if self.tutor is None:
             raise ConfigError(self.config_error or "The tutor is not configured.")
         return self.tutor
+
+
+def services_of(request: Request) -> Services:
+    services: Services = request.app.state.services
+    return services
+
+
+def owned_subject(services: Services, subject_id: UUID) -> Subject:
+    """The user's subject; raises LookupError (a 404) for anyone else's or none."""
+    subject = services.store.get_subject(services.user_id, subject_id)
+    if subject is None:
+        raise LookupError(f"subject {subject_id} not found")
+    return subject
 
 
 class NoTutor:

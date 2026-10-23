@@ -8,6 +8,7 @@ import pytest
 
 from ebb.api.drafts import DRAFT_TTL, DraftExpired, Drafts
 from ebb.db.repo import PgStore
+from ebb.llm.quota import UserQuotaExceeded
 from tests.api_support import NOW, USER
 from tests.fakes import FakeTutor, MemoryStore
 from tests.pdfs import build_pdf
@@ -41,11 +42,13 @@ def test_draft_files_see_earlier_concepts():
 
     assert [e["status"] for e in first] == ["reading", "finding", "ready"]
     assert first[-1]["concepts"] == ["Cells", "Genes"]
+    assert first[-1]["new"] == ["Cells", "Genes"]
     assert first[-1]["filename"] == "a.txt" and first[-1]["page_count"] is None
     assert first[-1]["passages"] >= 1
     assert tutor.concepts_calls[1][0] == "Biology"
     assert tutor.concepts_calls[1][1] == ["Cells", "Genes"]  # the second call sees the first
-    assert second[-1]["concepts"] == ["Proteins"]
+    assert second[-1]["concepts"] == ["Cells", "Proteins"]  # all it found, matched first
+    assert second[-1]["new"] == ["Proteins"]
 
     store = _store()
     subject_id = drafts.commit(draft, store, USER)
@@ -125,6 +128,7 @@ def test_failed_concept_call_saves_nothing_and_can_be_retried():
     retried = list(drafts.add_file(draft, "a.txt", _text("Cells"), USER))
     assert retried[-1]["status"] == "ready"  # not refused as a duplicate
     assert retried[-1]["concepts"] == ["Cells"]
+    assert retried[-1]["new"] == ["Cells"]
 
 
 def test_refused_notes_give_the_notes_copy():
@@ -136,6 +140,24 @@ def test_refused_notes_give_the_notes_copy():
     assert events[-1] == {
         "status": "refused",
         "message": "The tutor won't help with these notes.",
+        "retry": False,
+    }
+
+
+class _OverQuotaTutor(FakeTutor):
+    def concepts_from_notes(self, subject, existing, digest):
+        raise UserQuotaExceeded()
+
+
+def test_daily_limit_is_refused_without_retry():
+    drafts = _drafts(_OverQuotaTutor())
+    draft = drafts.create("Biology", USER)
+
+    events = list(drafts.add_file(draft, "a.txt", _text("Cells"), USER))
+
+    assert events[-1] == {
+        "status": "refused",
+        "message": "Daily limit reached — your progress is saved. It resets at midnight.",
         "retry": False,
     }
 
@@ -237,5 +259,6 @@ def test_commit_saves_subject_files_concepts_in_one_transaction(pg_pool, monkeyp
 
     subject_id = drafts.commit(draft, store, USER)  # the draft survives a failed commit
     assert [s.name for s in store.list_subjects(USER)] == ["Biology"]
-    assert [d.filename for d in store.list_documents(USER, subject_id)] == ["a.txt", "b.txt"]
+    # One transaction gives both rows the same created_at, so their order isn't fixed here.
+    assert sorted(d.filename for d in store.list_documents(USER, subject_id)) == ["a.txt", "b.txt"]
     assert [c.name for c in store.list_concepts(USER, subject_id)] == ["Cells", "Genes"]

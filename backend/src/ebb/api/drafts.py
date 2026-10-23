@@ -6,6 +6,7 @@ Each file is processed on its own thread, so it finishes even if nobody reads it
 never runs any of the work.
 """
 
+import logging
 import queue
 import threading
 from collections.abc import Callable, Iterator
@@ -14,15 +15,27 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import psycopg
+
 from ebb.config import ConfigError
+from ebb.db.pool import DATABASE_DOWN
 from ebb.domain import NewDocument
-from ebb.llm.tutor import NOTES_REFUSED_NOTICE, Tutor, TutorRefused, TutorUnavailable
+from ebb.llm.tutor import (
+    NOTES_REFUSED_NOTICE,
+    AllProvidersExhausted,
+    Tutor,
+    TutorRefused,
+    TutorUnavailable,
+)
 from ebb.notes import NotesError, prepare_bytes
 from ebb.store import MAX_DOCUMENTS, Store
-from ebb.subjects import find_note_concepts
+from ebb.subjects import duplicate_copy, find_note_concepts, too_many_copy
 
 DRAFT_TTL = timedelta(hours=1)
 EXPIRED = "This upload expired — add the files again."
+SOMETHING_WRONG = "Something went wrong — try again."
+
+log = logging.getLogger(__name__)
 
 type Event = dict[str, Any]
 type Say = Callable[[Event], None]
@@ -42,30 +55,29 @@ def refused(message: str, retry: bool = False) -> Event:
 
 
 def tutor_refusal(error: TutorUnavailable | ConfigError) -> Event:
-    """A failed concept call, as the file's refusal."""
+    """A failed concept call, as the file's refusal. Only a call that ran out of providers
+    is worth sending again; a refusal or the daily limit would only repeat."""
     if isinstance(error, TutorRefused):
         return refused(NOTES_REFUSED_NOTICE)
     if isinstance(error, TutorUnavailable):
-        return refused(error.notice, retry=True)
+        return refused(error.notice, retry=isinstance(error, AllProvidersExhausted))
     return refused(str(error))
 
 
-class _Failed:
-    """An unexpected error in the work, handed to whoever reads its events."""
-
-    def __init__(self, error: Exception) -> None:
-        self.error = error
-
-
 def run_detached(work: Callable[[Say], None]) -> Iterator[Event]:
-    """Start `work` on its own thread and return its events as they come."""
-    events: queue.SimpleQueue[Event | _Failed | None] = queue.SimpleQueue()
+    """Start `work` on its own thread and return its events as they come. The last event
+    is always the file's outcome: an unexpected error is logged and ends it as a refusal."""
+    events: queue.SimpleQueue[Event | None] = queue.SimpleQueue()
 
     def run() -> None:
         try:
             work(events.put)
-        except Exception as error:  # not swallowed: the reader raises it
-            events.put(_Failed(error))
+        except psycopg.Error:
+            log.exception("upload failed: database error")
+            events.put(refused(DATABASE_DOWN, retry=True))
+        except Exception:  # the row must still end; the traceback goes to the log
+            log.exception("upload failed")
+            events.put(refused(SOMETHING_WRONG, retry=True))
         finally:
             events.put(None)
 
@@ -73,10 +85,8 @@ def run_detached(work: Callable[[Say], None]) -> Iterator[Event]:
     return _read(events)
 
 
-def _read(events: queue.SimpleQueue[Event | _Failed | None]) -> Iterator[Event]:
+def _read(events: queue.SimpleQueue[Event | None]) -> Iterator[Event]:
     while (event := events.get()) is not None:
-        if isinstance(event, _Failed):
-            raise event.error
         yield event
 
 
@@ -216,7 +226,8 @@ class Drafts:
                 "filename": document.filename,
                 "page_count": document.page_count,
                 "passages": len(document.chunks),
-                "concepts": [name for name, _ in report.fresh],
+                "concepts": report.matched + [name for name, _ in report.fresh],
+                "new": [name for name, _ in report.fresh],
             }
         )
 
@@ -226,7 +237,7 @@ class Drafts:
         if draft.closed:
             return EXPIRED
         if len(draft.files) >= MAX_DOCUMENTS:
-            return f"{draft.name} can have at most {MAX_DOCUMENTS} files."
+            return too_many_copy(draft.name)
         if any(f.document.sha256 == document.sha256 for f in draft.files.values()):
-            return f"{document.filename} is already in {draft.name}."
+            return duplicate_copy(draft.name, document.filename)
         return None

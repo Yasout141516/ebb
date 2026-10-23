@@ -64,7 +64,7 @@ def read_notes(path: Path) -> ExtractedNotes:
         raise NotesError(f"Can't open {path}.")
     kind = _kind(path.name)
     size = path.stat().st_size
-    _check_size(path.name, size)
+    check_size(path.name, size)
     try:
         data = path.read_bytes()
     except OSError:
@@ -75,14 +75,14 @@ def read_notes(path: Path) -> ExtractedNotes:
 def read_notes_bytes(filename: str, data: bytes) -> ExtractedNotes:
     """The same checks and messages as `read_notes`, for an upload already in memory."""
     kind = _kind(filename)
-    _check_size(filename, len(data))
+    check_size(filename, len(data))
     return _extract(filename, kind, data, f"Can't open {filename}.")
 
 
 def check_upload(filename: str, size: int) -> None:
     """The checks that need only the name and size, for an upload too big to read whole."""
     _kind(filename)
-    _check_size(filename, size)
+    check_size(filename, size)
 
 
 def _kind(filename: str) -> str:
@@ -92,7 +92,8 @@ def _kind(filename: str) -> str:
     return kind
 
 
-def _check_size(filename: str, size: int) -> None:
+def check_size(filename: str, size: int) -> None:
+    """Refuses a file over MAX_BYTES; also for an upload known only by its size."""
     if size > MAX_BYTES:
         raise NotesError(
             f"{filename} is {format_megabytes(size)} — over the 20 MB limit. "

@@ -23,6 +23,23 @@ class NotesReport:
     fresh: list[tuple[str, str]]  # new (name, description)
 
 
+def too_many_copy(name: str) -> str:
+    return f"{name} can have at most {MAX_DOCUMENTS} files."
+
+
+def full_copy(name: str) -> str:
+    return f"{name} already has {MAX_DOCUMENTS} of {MAX_DOCUMENTS} files."
+
+
+def duplicate_copy(name: str, filename: str) -> str:
+    return f"{filename} is already in {name}."
+
+
+def room_copy(error: DocumentRefused, name: str, filename: str) -> str:
+    """What the learner is told when `ensure_room` or the store refuses a file."""
+    return full_copy(name) if error.reason == "full" else duplicate_copy(name, filename)
+
+
 def ensure_name_free(store: Store, user_id: UUID, name: str) -> str:
     """The stripped name; raises SubjectExists (naming the existing subject) if it is taken."""
     name = name.strip()

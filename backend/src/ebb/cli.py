@@ -31,10 +31,13 @@ from ebb.store import (
 from ebb.subjects import (
     NotesReport,
     add_notes,
+    duplicate_copy,
     ensure_name_free,
     ensure_room,
     find_note_concepts,
+    room_copy,
     subject_from_topic,
+    too_many_copy,
 )
 from ebb.ui import (
     DISPUTE_REASONS,
@@ -274,12 +277,12 @@ def new(
 def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[Path]) -> None:
     """All or nothing: every file is checked, then every concept call made, before any save."""
     if len(paths) > MAX_DOCUMENTS:
-        _fail(f"{topic} can have at most {MAX_DOCUMENTS} files.")
+        _fail(too_many_copy(topic))
     documents: list[NewDocument] = []
     for path in paths:
         document = _prepare(path)
         if any(d.sha256 == document.sha256 for d in documents):
-            _fail(f"{document.filename} is already in {topic}.")
+            _fail(duplicate_copy(topic, document.filename))
         documents.append(document)
     tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
@@ -303,18 +306,6 @@ def _exists_copy(name: str) -> str:
     return f"{name} already exists — add notes to it with: ebb add <file>"
 
 
-def _full_copy(subject: Subject) -> str:
-    return f"{subject.name} already has {MAX_DOCUMENTS} of {MAX_DOCUMENTS} files."
-
-
-def _duplicate_copy(subject: Subject, document: NewDocument) -> str:
-    return f"{document.filename} is already in {subject.name}."
-
-
-def _refusal_copy(error: DocumentRefused, subject: Subject, document: NewDocument) -> str:
-    return _full_copy(subject) if error.reason == "full" else _duplicate_copy(subject, document)
-
-
 @app.command()
 def add(
     path: Annotated[Path, typer.Argument(help="A PDF, TXT or MD file of your notes.")],
@@ -328,7 +319,7 @@ def add(
     try:
         ensure_room(store, user_id, chosen, document)
     except DocumentRefused as error:
-        _fail(_refusal_copy(error, chosen, document))
+        _fail(room_copy(error, chosen.name, document.filename))
     tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
     from ebb.llm.tutor import NOTES_REFUSED_NOTICE
@@ -340,7 +331,7 @@ def add(
             NOTES_REFUSED_NOTICE,
         )
     except DocumentRefused as error:  # another terminal got there first
-        _fail(_refusal_copy(error, chosen, document))
+        _fail(room_copy(error, chosen.name, document.filename))
     _print_report(document, report)
 
 
