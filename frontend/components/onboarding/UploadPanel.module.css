@@ -1,0 +1,125 @@
+/* tpl-Onboarding, "Upload notes" tab. */
+.upload {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* The Subject name field (the prototype's bottom-bar field, moved first by the spec). */
+.name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nameLabel {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.nameRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.nameInput {
+  height: 40px;
+  min-width: 260px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0 12px;
+  font: 500 15px var(--sans);
+}
+
+.nameInput:read-only {
+  color: var(--ink-2);
+}
+
+.startOver {
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font: 500 14px var(--sans);
+  cursor: pointer;
+}
+
+.note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.noteIcon {
+  flex: none;
+  margin-top: 1px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.noteStrong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.sources {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.empty {
+  margin: 0;
+  padding: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+/* System states, "Empty · no uploads": a subject with no notes yet. */
+.noSources {
+  border: 1.5px dashed var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+.noSourcesTitle {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 19px;
+}
+
+.noSourcesText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}

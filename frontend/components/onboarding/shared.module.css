@@ -1,0 +1,57 @@
+/* Pieces both tabs of tpl-Onboarding share: the bottom bar and its Start studying button. */
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.primary {
+  margin-top: 16px;
+  margin-left: auto;
+  height: 52px;
+  padding: 0 24px;
+  border-radius: 12px;
+  border: 0;
+  background: var(--primary-bg);
+  color: var(--primary-ink);
+  text-decoration: none;
+  font: 500 16px var(--sans);
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.primary:hover {
+  color: var(--primary-ink);
+}
+
+.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.arrow {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.busy {
+  animation: ebb-pulse 1.2s ease-in-out infinite;
+}
+
+/* An inline refusal under a field, in the upload error row's red. */
+.fieldError {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 500;
+  color: var(--incorrect);
+}

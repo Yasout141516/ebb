@@ -13,3 +13,8 @@ export function stageDots(stage: number): string {
 export function weekday(iso: string, tz?: string): string {
   return new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: tz }).format(new Date(iso));
 }
+
+/** A file size in megabytes with one decimal, as the API writes it ("26.4 MB"). */
+export function megabytes(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
