@@ -18,7 +18,7 @@ from ebb.config import Settings
 from ebb.db.migrate import MIGRATION_LOCK
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
-from ebb.study import Offer, Pending, StudySessions
+from ebb.study import Offer, Pending, Step, StudySessions
 from tests.fakes import FakeTutor
 
 pytestmark = pytest.mark.db
@@ -183,6 +183,50 @@ def test_service_finishes_a_cut_off_step_once_after_a_restart(
     assert last.payload["number"] == 2 and last.payload["feedback"]["value"] == "correct"
     assert attempt_count(pg_pool) == 1
     assert sessions.offer(ALICE, subject_id, "tab-b").busy is True  # tab-a's lease is live
+
+
+def test_service_stream_closed_mid_turn_finishes_the_turn(store, subject_id, pg_pool):
+    sessions = study_service(store, FakeTutor())
+    thread_id, _, events = sessions.start(ALICE, subject_id, "tab-a")
+    first = list(events)[-1]
+    events = sessions.reply(ALICE, thread_id, "tab-a", reply(first.payload))
+    assert next(events) == Step("Grading…")
+    events.close()  # the browser went away while grading
+
+    sessions = study_service(store, FakeTutor())
+    offer = sessions.offer(ALICE, subject_id, "tab-a")
+    resumed = list(sessions.resume(ALICE, thread_id, "tab-a"))
+
+    assert (offer.concept, offer.number, offer.busy) == ("DNS", 2, False)
+    [question] = resumed
+    assert isinstance(question, Pending)
+    assert question.payload["number"] == 2 and question.payload["feedback"]["value"] == "correct"
+    assert attempt_count(pg_pool) == 1
+
+
+def test_service_carries_on_a_step_cut_off_after_it_ran(store, subject_id, pg_pool):
+    sessions = study_service(store, FakeTutor())
+    thread_id, _, events = sessions.start(ALICE, subject_id, "tab-a")
+    first = list(events)[-1]
+    # A process that died mid-turn: grading ran, but no checkpoint was written after it.
+    graph = new_process(store)
+    stream = graph.stream(
+        Command(resume=reply(first.payload)),
+        {"configurable": {"thread_id": thread_id}},
+        stream_mode=["custom", "values"],
+    )
+    assert ("custom", {"step": "grade_answer", "label": "Grading…"}) in stream
+    stream.close()
+
+    sessions = study_service(store, FakeTutor())
+    offer = sessions.offer(ALICE, subject_id, "tab-a")
+    resumed = list(sessions.resume(ALICE, thread_id, "tab-a"))
+
+    assert (offer.concept, offer.number) == ("DNS", 1)
+    last = resumed[-1]
+    assert isinstance(last, Pending)
+    assert last.payload["number"] == 2 and last.payload["feedback"]["value"] == "correct"
+    assert attempt_count(pg_pool) == 1
 
 
 def test_state_with_nothing_pending_is_closed(store, subject_id, cli_on_postgres):

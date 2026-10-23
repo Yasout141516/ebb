@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.types import Command
 
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
@@ -36,7 +38,13 @@ class Setup:
     tutor: FakeTutor
     clock: Clock
     subject_id: UUID
+    graph: CompiledStateGraph
+    saver: InMemorySaver
     sessions: StudySessions
+
+    def another_process(self) -> StudySessions:
+        """A second service on the same database, as the API is to the CLI."""
+        return StudySessions(self.store, self.graph, self.saver, self.clock)
 
 
 @pytest.fixture
@@ -45,7 +53,8 @@ def s() -> Setup:
     subject_id = make_subject(store, USER, concepts=2)
     saver = InMemorySaver()
     graph = build_graph(tutor, store, saver, now=clock)
-    return Setup(store, tutor, clock, subject_id, StudySessions(store, graph, saver, clock))
+    sessions = StudySessions(store, graph, saver, clock)
+    return Setup(store, tutor, clock, subject_id, graph, saver, sessions)
 
 
 def ending(events: Iterator[Event]) -> Event:
@@ -295,6 +304,59 @@ def test_closing_the_events_mid_turn_releases_the_lock(s):
     events.close()  # the browser went away
 
     assert s.store.locks == set()
+
+
+def test_a_stream_closed_mid_turn_finishes_the_turn(s):
+    thread_id, first = started(s)
+    events = s.sessions.reply(USER, thread_id, "tab-a", right(first))
+    assert next(events) == Step("Grading…")
+    events.close()  # the browser went away while grading
+
+    offer = s.sessions.offer(USER, s.subject_id, "tab-a")
+    resumed = list(s.sessions.resume(USER, thread_id, "tab-a"))
+
+    assert (offer.concept, offer.number) == ("Concept 1", 2)
+    [question] = resumed  # the turn was finished when the stream closed
+    assert isinstance(question, Pending)
+    assert question.payload["number"] == 2 and question.payload["feedback"]["value"] == "correct"
+    assert len(s.store.attempts) == 1
+
+
+def test_a_step_cut_off_after_it_ran_is_carried_on_once(s):
+    thread_id, first = started(s)
+    # A process that died mid-turn: grading ran, but no checkpoint was written after it.
+    stream = s.graph.stream(
+        Command(resume=right(first)),
+        {"configurable": {"thread_id": thread_id}},
+        stream_mode=["custom", "values"],
+    )
+    assert ("custom", {"step": "grade_answer", "label": "Grading…"}) in stream
+    stream.close()
+
+    offer = s.sessions.offer(USER, s.subject_id, "tab-a")
+    resumed = list(s.sessions.resume(USER, thread_id, "tab-a"))
+    again = list(s.sessions.resume(USER, thread_id, "tab-a"))
+
+    assert (offer.concept, offer.number) == ("Concept 1", 1)
+    last = resumed[-1]
+    assert isinstance(last, Pending)
+    assert last.payload["number"] == 2 and last.payload["feedback"]["value"] == "correct"
+    assert again == [last]
+    assert len(s.store.attempts) == 1
+
+
+def test_a_call_refused_by_the_lock_claims_nothing(s):
+    cli = s.another_process()
+    thread_id, _, events = cli.start(USER, s.subject_id, "cli:1")
+    with cli.hold(USER, thread_id) as held:
+        assert held is True
+        ending(events)
+        with pytest.raises(SessionBusy):
+            list(s.sessions.resume(USER, thread_id, "tab-b"))
+        assert s.sessions.offer(USER, s.subject_id, "tab-b").busy is True
+
+    assert session(s, thread_id)["driver"] is None
+    assert s.another_process().offer(USER, s.subject_id, "cli:2").busy is False  # the CLI exited
 
 
 def test_pending_question_touches_the_session(s):

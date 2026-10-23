@@ -1,5 +1,6 @@
 """The CLI end to end with typed input, using the fakes instead of Postgres and the LLM."""
 
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -392,6 +393,28 @@ def test_session_a_browser_tab_is_driving_starts_fresh(fakes, monkeypatch):
     assert "Resume?" not in result.output
     assert old["ended_at"] is None and old["driver"] == "web:1"
     assert len(store.sessions) == 2
+
+
+def test_session_taken_while_deciding_starts_fresh(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    old_id, old = only_session(store)
+
+    with ExitStack() as elsewhere:
+
+        def another_terminal_resumes_first(question):
+            assert "Resume? [Y/n]" in question
+            elsewhere.enter_context(store.session_lock(old["user_id"], old["thread_id"]))
+            return True
+
+        monkeypatch.setattr(cli, "_confirm", another_terminal_resumes_first)
+        result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "That session is open in another tab or terminal." in result.output
+    assert "Nothing is due. Let's learn something new." in result.output
+    assert old["ended_at"] is None and len(store.sessions) == 2
 
 
 def test_other_subjects_session_is_not_offered(fakes, monkeypatch):

@@ -631,8 +631,9 @@ class PgStore:
                 with self.pool.connection() as conn:
                     closed += conn.execute(
                         "update study_sessions set ended_at = last_active_at"
-                        " where id = %s and ended_at is null and last_active_at <= %s",
-                        (row["id"], idle_since),
+                        " where id = %s and user_id = %s and ended_at is null"
+                        " and last_active_at <= %s",
+                        (row["id"], user_id, idle_since),
                     ).rowcount
         return closed
 

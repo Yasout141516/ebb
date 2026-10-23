@@ -67,13 +67,19 @@ def _config(thread_id: str) -> dict[str, Any]:
     return {"configurable": {"thread_id": thread_id}}
 
 
+def _cut_off(saved: StateSnapshot) -> bool:
+    """Whether the session stopped mid-turn: a step was due, or one ran but the checkpoint
+    after it was never written (its writes are saved, so carrying on applies them)."""
+    return bool(saved.next or saved.tasks)
+
+
 def _stopped_on(saved: StateSnapshot) -> tuple[str, int] | None:
     """The concept and question number a session stopped on; None if there is nothing to
     carry on with."""
     if saved.interrupts:
         payload = saved.interrupts[0].value
         return payload["concept"], payload["number"]
-    if saved.next and saved.values.get("concept"):
+    if _cut_off(saved) and saved.values.get("concept"):
         # Stopped mid-step, e.g. while grading: the answer is in the state but its step
         # never finished. The stored attempt_id makes re-running it count once.
         return saved.values["concept"]["name"], saved.values["asked_on_concept"] + 1
@@ -92,7 +98,8 @@ class StudySessions:
         now: Callable[[], datetime],
     ) -> None:
         self.store, self.graph, self.saver, self.now = store, graph, saver, now
-        self._held: set[str] = set()  # threads this instance holds the lock of
+        # Threads this instance holds the lock of (see `hold`), for every caller of it.
+        self._held: set[str] = set()
 
     def housekeeping(self, user_id: UUID) -> None:
         """Close sessions idle too long to resume, and drop old checkpoints."""
@@ -168,8 +175,9 @@ class StudySessions:
     @contextmanager
     def hold(self, user_id: UUID, thread_id: str) -> Iterator[bool]:
         """Hold the thread's lock for the block, as the CLI does for its whole run; yields
-        False if another tab or terminal is driving it. While it is held, this instance's
-        calls on the thread run without a lease or a lock of their own."""
+        False if another tab or terminal is driving it. While it is held, every call on the
+        thread through this instance runs without a lease or a lock of its own, whoever
+        makes it; so an instance shared by many drivers, as the API's is, must never hold."""
         with self.store.session_lock(user_id, thread_id) as free:
             leased_to = self.store.session_driver(user_id, thread_id, self.now(), LEASE)
             if not free or leased_to is not None:
@@ -187,7 +195,7 @@ class StudySessions:
         if self.store.get_session(user_id, thread_id) is None:
             # Ended: a repeated last reply gets the summary again.
             saved = self.graph.get_state(_config(thread_id))
-            if saved.values.get("user_id") != str(user_id) or saved.next:
+            if saved.values.get("user_id") != str(user_id) or _cut_off(saved):
                 raise LookupError(f"no open session {thread_id}")
             yield self._finished(user_id, saved.values)
             return
@@ -197,18 +205,18 @@ class StudySessions:
     def _drive(
         self, user_id: UUID, thread_id: str, driver: str, run: _Run, claim: bool = True
     ) -> Iterator[Event]:
-        """`run` as `driver`: under its lease (claimed first unless `claim` is False) and the
-        thread's lock, either refused with SessionBusy. The last event is handed over after
-        the lock is released, so a caller may stop reading there."""
+        """`run` as `driver`, under the thread's lock and then its lease (claimed unless
+        `claim` is False); either taken raises SessionBusy, and a call refused the lock
+        claims nothing. The last event is handed over after the lock is released, so a
+        caller may stop reading there."""
         if thread_id in self._held:
             last = yield from run
         else:
-            if claim and not self.store.claim_session(
-                user_id, thread_id, driver, self.now(), LEASE
-            ):
-                raise SessionBusy(thread_id)
             with self.store.session_lock(user_id, thread_id) as free:
-                if not free:
+                if not free or (
+                    claim
+                    and not self.store.claim_session(user_id, thread_id, driver, self.now(), LEASE)
+                ):
                     raise SessionBusy(thread_id)
                 last = yield from run
         yield last
@@ -223,8 +231,8 @@ class StudySessions:
             if reply is None or self._applied(user_id, saved.values, reply):
                 return self._pending(user_id, thread_id, driver, payload)
             graph_input: Any = Command(resume=dict(reply))
-        elif saved.next:
-            graph_input = None  # finish the step that was cut off
+        elif _cut_off(saved):
+            graph_input = None  # finish the turn that was cut off
         elif saved.values:
             return self._finished(user_id, saved.values)
         else:
@@ -245,14 +253,30 @@ class StudySessions:
         return False
 
     def _stream(self, user_id: UUID, thread_id: str, driver: str, graph_input: Any) -> _Run:
-        values: dict[str, Any] = {}
-        for mode, chunk in self.graph.stream(
+        stream = self.graph.stream(
             graph_input, _config(thread_id), stream_mode=["custom", "values"]
-        ):
-            if mode == "custom":
-                yield Step(chunk["label"])
-            else:
-                values = chunk
+        )
+        values: dict[str, Any] = {}
+        try:
+            for mode, chunk in stream:
+                if mode == "custom":
+                    yield Step(chunk["label"])
+                else:
+                    values = chunk
+        except GeneratorExit:
+            # The reader went away mid-turn (a tab closed or refreshed). Finish the turn,
+            # still under the lock, so the answer counts and the next question is waiting.
+            for mode, chunk in stream:
+                if mode == "values":
+                    values = chunk
+            self._stopped(user_id, thread_id, driver, values)
+            raise
+        return self._stopped(user_id, thread_id, driver, values)
+
+    def _stopped(
+        self, user_id: UUID, thread_id: str, driver: str, values: dict[str, Any]
+    ) -> Pending | Finished:
+        """Where a run stopped, from its last values."""
         if "__interrupt__" in values:
             return self._pending(user_id, thread_id, driver, values["__interrupt__"][0].value)
         return self._finished(user_id, values)
