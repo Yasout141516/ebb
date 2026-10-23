@@ -14,6 +14,7 @@ from ebb.ui import (
     format_day,
     format_tide,
     greeting,
+    next_review_line,
     notes_report,
     read_reply,
     read_yes_no,
@@ -177,6 +178,35 @@ def test_caught_up_line_in_the_time_zone():
     due = datetime(2026, 10, 16, 20, tzinfo=UTC)
     assert caught_up_line(due, DHAKA) == "You're all caught up — next review Sat 17 Oct."
     assert caught_up_line(None, DHAKA) == "You're all caught up."
+
+
+def _scheduled(stage: int, at: datetime | None) -> Concept:
+    return Concept(uuid4(), uuid4(), "c", "d", stage=stage, next_review_at=at)
+
+
+def test_next_review_line_counts_the_soonest_local_day():
+    concepts = [
+        _scheduled(2, datetime(2026, 10, 16, 20, tzinfo=UTC)),  # Sat 02:00 in Dhaka
+        _scheduled(1, datetime(2026, 10, 17, 10, tzinfo=UTC)),  # Sat 16:00
+        _scheduled(3, datetime(2026, 10, 17, 19, tzinfo=UTC)),  # Sun 01:00
+        _scheduled(0, None),  # new: not scheduled
+    ]
+    assert next_review_line(concepts, NOW, DHAKA) == "Next review: Saturday · 2 concepts"
+    assert next_review_line(concepts[2:], NOW, DHAKA) == "Next review: Sunday · 1 concept"
+
+
+def test_next_review_line_counts_an_overdue_concept_as_today():
+    concepts = [
+        _scheduled(1, NOW - timedelta(days=3)),
+        _scheduled(2, NOW + timedelta(hours=2)),
+        _scheduled(2, NOW + timedelta(days=1)),
+    ]
+    assert next_review_line(concepts, NOW, ZoneInfo("UTC")) == "Next review: Thursday · 2 concepts"
+
+
+def test_next_review_line_without_a_scheduled_concept_is_none():
+    assert next_review_line([_scheduled(0, None)], NOW, DHAKA) is None
+    assert next_review_line([], NOW, DHAKA) is None
 
 
 def test_notes_report_for_a_pdf_with_matches_and_new_concepts():

@@ -124,6 +124,20 @@ def test_a_dispute_sent_twice_is_rechecked_once(s):
     assert twice == [once]
 
 
+def test_pending_is_the_waiting_question_for_its_user_only(s):
+    thread_id, first = started(s)
+
+    assert s.sessions.pending(USER, thread_id) == first.payload
+    assert s.sessions.pending(uuid4(), thread_id) is None
+    assert s.sessions.pending(USER, str(uuid4())) is None
+    answer = right(first)
+    second = ending(s.sessions.reply(USER, thread_id, "tab-a", answer))
+    assert s.sessions.pending(USER, thread_id, right(second)) == second.payload
+    assert s.sessions.pending(USER, thread_id, answer) is None  # sent again: already applied
+    ending(s.sessions.reply(USER, thread_id, "tab-a", {"quit": True}))
+    assert s.sessions.pending(USER, thread_id) is None
+
+
 def test_quit_finishes_with_the_summary_and_a_repeat_gets_it_again(s):
     thread_id, first = started(s)
     ending(s.sessions.reply(USER, thread_id, "tab-a", right(first)))
@@ -132,6 +146,7 @@ def test_quit_finishes_with_the_summary_and_a_repeat_gets_it_again(s):
     again = list(s.sessions.reply(USER, thread_id, "tab-a", {"quit": True}))
 
     assert isinstance(finished, Finished)
+    assert finished.subject_id == s.subject_id
     assert [r["concept"] for r in finished.results] == ["Concept 1"]
     assert finished.final == {"grade": None, "lesson": None, "notices": []}
     assert finished.caught_up is False

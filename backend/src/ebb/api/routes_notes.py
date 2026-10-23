@@ -5,7 +5,7 @@ Each upload answers with Server-Sent Events, `event: file`, one per step of that
 """
 
 import json
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from uuid import UUID
 
 from fastapi import APIRouter, Request
@@ -18,6 +18,7 @@ from ebb import notes
 from ebb.api.drafts import Event, Say, refused, run_detached, tutor_refusal
 from ebb.api.schemas import CommittedDraft, CreatedDraft, NewDraft
 from ebb.api.services import Services, owned_subject, services_of
+from ebb.api.sse import event_stream
 from ebb.config import ConfigError
 from ebb.domain import NewDocument, Subject
 from ebb.llm.tutor import TutorUnavailable
@@ -35,14 +36,9 @@ READING: Event = {"status": "reading"}
 
 
 def _stream(events: Iterator[Event]) -> EventSourceResponse:
-    """Each event as `event: file`. The events are pulled off the event loop; a reader
-    that goes away only stops pulling (the work behind them carries on)."""
-
-    async def body() -> AsyncIterator[bytes]:
-        while (event := await run_in_threadpool(next, events, None)) is not None:
-            yield format_sse_event(event="file", data_str=json.dumps(event))
-
-    return EventSourceResponse(body(), headers={"Cache-Control": "no-cache"})
+    """Each event as `event: file`. A reader that goes away only stops the events: the work
+    behind them carries on."""
+    return event_stream(events, lambda e: format_sse_event(event="file", data_str=json.dumps(e)))
 
 
 async def _read_upload(file: UploadFile) -> bytes:

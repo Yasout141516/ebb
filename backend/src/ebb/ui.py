@@ -100,6 +100,21 @@ def caught_up_line(next_review: datetime | None, tz: ZoneInfo) -> str:
     return f"You're all caught up — next review {format_day(next_review, tz)}."
 
 
+def next_review_line(concepts: Sequence[Concept], now: datetime, tz: ZoneInfo) -> str | None:
+    """D4's line: the local day of the soonest review and how many concepts fall on it; an
+    overdue concept counts as today. None when nothing is scheduled."""
+    days = [
+        max(c.next_review_at, now).astimezone(tz).date()
+        for c in concepts
+        if c.stage >= 1 and c.next_review_at is not None
+    ]
+    if not days:
+        return None
+    soonest = min(days)
+    n = days.count(soonest)
+    return f"Next review: {soonest.strftime('%A')} · {n} concept{'' if n == 1 else 's'}"
+
+
 def status_table(concepts: Sequence[Concept], now: datetime, tz: ZoneInfo) -> Table:
     table = Table(title="Memory", title_justify="left")
     table.add_column("Concept")

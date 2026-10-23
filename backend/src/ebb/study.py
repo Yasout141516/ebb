@@ -52,6 +52,7 @@ class Pending:
 
 @dataclass(frozen=True)
 class Finished:
+    subject_id: UUID
     results: list[dict[str, Any]]
     final: dict[str, Any]  # the last turn's grade, lesson and notices
     caught_up: bool
@@ -157,6 +158,20 @@ class StudySessions:
         explanation}} or {quit: True}. A reply already applied is not applied again; the
         session's current turn comes back instead."""
         return self._carry_on(user_id, thread_id, driver, reply)
+
+    def pending(
+        self, user_id: UUID, thread_id: str, reply: Mapping[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """The question waiting for `reply` (for any reply if None), as the last turn showed
+        it; None if there is none, or if `reply` was already applied: sent again, it is not
+        answering this question but gets the current turn back."""
+        saved = self.graph.get_state(_config(thread_id))
+        if saved.values.get("user_id") != str(user_id) or not saved.interrupts:
+            return None
+        if reply is not None and self._applied(user_id, saved.values, reply):
+            return None
+        payload: dict[str, Any] = saved.interrupts[0].value
+        return payload
 
     def discard(self, user_id: UUID, thread_id: str) -> None:
         """Start fresh: end the session, unless another tab or terminal is driving it."""
@@ -294,7 +309,9 @@ class StudySessions:
 
     def _finished(self, user_id: UUID, values: Mapping[str, Any]) -> Finished:
         filled = fill_defaults(values)
+        subject_id = UUID(filled["subject_id"])
         return Finished(
+            subject_id=subject_id,
             results=filled.get("results", []),
             final={
                 "grade": filled.get("grade"),
@@ -302,5 +319,5 @@ class StudySessions:
                 "notices": filled.get("notices", []),
             },
             caught_up=bool(filled.get("caught_up")),
-            next_review_at=self.store.next_review_at(user_id, UUID(filled["subject_id"])),
+            next_review_at=self.store.next_review_at(user_id, subject_id),
         )

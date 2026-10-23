@@ -1,10 +1,12 @@
 """Request and response bodies. Each route adds its own here."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
+
+from ebb.domain import DisputeReason
 
 
 class Health(BaseModel):
@@ -83,3 +85,51 @@ class Concepts(BaseModel):
     concepts: list[ConceptState]
     due_count: int
     next_review_at: datetime | None
+
+
+# The id a browser tab drives sessions by.
+type DriverId = Annotated[str, Field(min_length=1, max_length=100)]
+
+
+class Driver(BaseModel):
+    driver: DriverId
+
+
+class Offer(BaseModel):
+    thread_id: str
+    concept: str
+    number: int
+    last_active_at: datetime
+    busy: bool
+
+
+class SessionOffer(BaseModel):
+    offer: Offer | None
+
+
+class _Reply(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # one kind of reply, never a mix of them
+
+
+class AnswerReply(_Reply):
+    attempt_id: UUID
+    answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+
+
+class DisputeRequest(_Reply):
+    id: UUID
+    reason: DisputeReason
+    explanation: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)] = ""
+
+
+class DisputeReply(_Reply):
+    dispute: DisputeRequest
+
+
+class QuitReply(_Reply):
+    quit: Literal[True]
+
+
+class ReplyBody(BaseModel):
+    driver: DriverId
+    reply: AnswerReply | DisputeReply | QuitReply
