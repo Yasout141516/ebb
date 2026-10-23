@@ -19,7 +19,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from ebb.config import ConfigError, Settings, resolve_timezone
-from ebb.db.migrate import migrate, migration_lock
+from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
 from ebb.domain import NewDocument, Subject
@@ -345,13 +345,9 @@ def add(
 
 
 def _checkpointer(store: PgStore) -> BaseCheckpointSaver:
-    from langgraph.checkpoint.postgres import PostgresSaver
+    from ebb.db.saver import postgres_saver
 
-    saver = PostgresSaver(store.pool)
-    # setup() creates or upgrades its own tables; two first runs at once must not race.
-    with migration_lock(store.pool):
-        saver.setup()
-    return saver
+    return postgres_saver(store)
 
 
 def _confirm(question: str) -> bool | None:
@@ -567,3 +563,14 @@ def eval_run(
     path.write_text(text, encoding="utf-8")
     console.print(escape(agreement_line(result)))
     console.print(f"Report: {escape(str(path))}")
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option(help="Address to listen on.")] = "0.0.0.0",  # noqa: S104
+    port: Annotated[int, typer.Option(help="Port to listen on.")] = 8000,
+) -> None:
+    """Run the web API."""
+    import uvicorn
+
+    uvicorn.run("ebb.api.app:app_from_env", factory=True, host=host, port=port)

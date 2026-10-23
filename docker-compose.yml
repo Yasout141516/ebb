@@ -36,5 +36,20 @@ services:
     stdin_open: true
     tty: true
 
+  api:
+    build: ./backend
+    command: ["serve"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://ebb:ebb@db:5432/ebb
+    init: true
+
 volumes:
   ebb-pgdata:

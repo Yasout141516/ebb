@@ -1,0 +1,33 @@
+"""The FastAPI app and its uvicorn factory."""
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from ebb.api.errors import install_error_handlers
+from ebb.api.schemas import Health
+from ebb.api.services import Services, build_services
+from ebb.config import Settings
+
+
+def create_app(services: Services) -> FastAPI:
+    app = FastAPI(title="Ebb")
+    app.state.services = services
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[services.settings.ebb_web_origin],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    install_error_handlers(app)
+
+    @app.get("/health")
+    def health() -> Health:
+        # The services only exist once the database answered at startup.
+        return Health(database="ok", tutor=services.config_error or "ok")
+
+    return app
+
+
+def app_from_env() -> FastAPI:
+    """The factory `uvicorn --factory` calls."""
+    return create_app(build_services(Settings()))

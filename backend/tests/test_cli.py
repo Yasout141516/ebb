@@ -1025,3 +1025,15 @@ def test_add_with_no_calls_left_shows_the_daily_limit_and_exits_1(fakes, tmp_pat
     assert result.exit_code == 1
     assert DAILY_LIMIT in flat(result.output)
     assert store.documents == {}
+
+
+def test_cli_serve_starts_uvicorn_with_the_factory(monkeypatch):
+    import uvicorn
+
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    result = runner.invoke(cli.app, ["serve", "--port", "9000"])
+    assert result.exit_code == 0
+    assert calls == [
+        (("ebb.api.app:app_from_env",), {"factory": True, "host": "0.0.0.0", "port": 9000})
+    ]
