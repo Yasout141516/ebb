@@ -24,6 +24,15 @@ export default function NewSubject() {
     return () => controller.abort();
   }, []);
 
+  // Roving tabindex: Tab reaches the selected tab, the arrow keys move between them.
+  function onTabKey(e: React.KeyboardEvent) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const next: Tab = tab === "upload" ? "topic" : "upload";
+    setTab(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  }
+
   const tabButton = (value: Tab, label: string) => (
     <button
       type="button"
@@ -31,6 +40,7 @@ export default function NewSubject() {
       id={`tab-${value}`}
       aria-selected={tab === value}
       aria-controls={`panel-${value}`}
+      tabIndex={tab === value ? 0 : -1}
       onClick={() => setTab(value)}
       className={styles.tab}
     >
@@ -45,7 +55,12 @@ export default function NewSubject() {
       title="What are you studying?"
       lede="Type a topic and Ebb will build questions from general knowledge, or upload your notes so every grade can cite them."
     >
-      <div role="tablist" aria-label="How to add a subject" className={styles.tabs}>
+      <div
+        role="tablist"
+        aria-label="How to add a subject"
+        onKeyDown={onTabKey}
+        className={styles.tabs}
+      >
         {tabButton("upload", "Upload notes")}
         {tabButton("topic", "Type a topic")}
       </div>

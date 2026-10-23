@@ -27,7 +27,10 @@ class FakeXhr {
   send(body: FormData) {
     this.body = body;
   }
-  abort() {}
+  aborted = false;
+  abort() {
+    this.aborted = true;
+  }
 
   sent(loaded: number, total: number) {
     this.upload.onprogress?.({ lengthComputable: true, loaded, total } as ProgressEvent);
@@ -92,6 +95,16 @@ describe("uploadFile", () => {
       message: "This upload expired — add the files again.",
     });
     expect(events).toEqual([]);
+  });
+
+  it("aborts the request when its signal is aborted", async () => {
+    vi.stubGlobal("XMLHttpRequest", FakeXhr);
+    const controller = new AbortController();
+    const done = uploadFile("/drafts/d1/files", new File(["x"], "a.md"), vi.fn(), vi.fn(), controller.signal);
+    const xhr = FakeXhr.last;
+    controller.abort();
+    expect(xhr.aborted).toBe(true);
+    await expect(done).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("rejects when the connection fails", async () => {

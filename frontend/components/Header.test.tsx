@@ -24,6 +24,14 @@ describe("Header", () => {
     expect(screen.getByText("Tutor ready · backup model")).toBeInTheDocument();
   });
 
+  it("shows only the mark and the toggle when minimal", () => {
+    render(<Header minimal />);
+    expect(screen.getByText("Ebb")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /switch to/i })).toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("toggles data-theme and remembers it", async () => {
     render(<Header backup={false} />);
     await userEvent.click(screen.getByRole("button", { name: /switch to/i }));

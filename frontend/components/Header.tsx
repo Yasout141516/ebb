@@ -9,8 +9,11 @@ type Theme = "light" | "dark";
 
 export const THEME_KEY = "ebb-theme";
 
-/** `backup`: the tutor is answering from its backup model. */
-export default function Header({ backup }: { backup: boolean }) {
+/**
+ * `backup`: the tutor is answering from its backup model. `minimal`: onboarding's header,
+ * only the mark and the theme toggle.
+ */
+export default function Header({ backup = false, minimal = false }: { backup?: boolean; minimal?: boolean }) {
   const pathname = usePathname();
   const [theme, setTheme] = useState<Theme>("light");
 
@@ -45,7 +48,7 @@ export default function Header({ backup }: { backup: boolean }) {
   };
 
   return (
-    <header className={styles.header}>
+    <header className={`${styles.header} ${minimal ? styles.minimal : ""}`}>
       <div className={styles.left}>
         <div className={styles.brand}>
           <svg width="16" height="23" viewBox="0 0 18 26" aria-hidden="true">
@@ -54,16 +57,20 @@ export default function Header({ backup }: { backup: boolean }) {
           </svg>
           <span className={styles.name}>Ebb</span>
         </div>
-        <nav aria-label="Main" className={styles.nav}>
-          {link("/study", "Study")}
-          {link("/progress", "Progress")}
-        </nav>
+        {!minimal && (
+          <nav aria-label="Main" className={styles.nav}>
+            {link("/study", "Study")}
+            {link("/progress", "Progress")}
+          </nav>
+        )}
       </div>
-      <div className={styles.right}>
-        <span role="status" className={styles.status}>
-          <span aria-hidden="true" className={styles.dot} />
-          {backup ? "Tutor ready · backup model" : "Tutor ready"}
-        </span>
+      <div className={`${styles.right} ${minimal ? styles.minimalRight : ""}`}>
+        {!minimal && (
+          <span role="status" className={styles.status}>
+            <span aria-hidden="true" className={styles.dot} />
+            {backup ? "Tutor ready · backup model" : "Tutor ready"}
+          </span>
+        )}
         <button
           type="button"
           onClick={toggleTheme}

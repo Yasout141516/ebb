@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
 import { ApiError, del, postJson, uploadFile } from "@/lib/api";
 import { MAX_FILES, uploadRefusal } from "@/lib/notes";
@@ -53,6 +53,13 @@ export default function UploadPanel(props: Props) {
   const queue = useRef<Promise<void>>(Promise.resolve());
   // Bumped by Start over: uploads from the discarded draft no longer touch the page.
   const generation = useRef(0);
+  // The uploads in flight, aborted by Start over and when the page goes away.
+  const uploads = useRef(new Set<AbortController>());
+
+  useEffect(() => {
+    const inFlight = uploads.current;
+    return () => inFlight.forEach((c) => c.abort());
+  }, []);
 
   const trimmed = name.trim();
   const taken = draftMode
@@ -84,29 +91,37 @@ export default function UploadPanel(props: Props) {
 
   function enqueue(row: Row, path: string) {
     const gen = generation.current;
-    const update = (state: RowState) => {
-      if (generation.current === gen) setRow(row.key, state);
-    };
     let started: () => void = () => {};
     const turn = new Promise<void>((resolve) => (started = resolve));
     const previous = queue.current;
     queue.current = turn;
-    void previous.then(() => send(row, path, gen, update, started)).finally(started);
+    void previous.then(() => send(row, path, gen, started)).finally(started);
   }
 
-  async function send(
-    row: Row,
-    path: string,
-    gen: number,
-    update: (state: RowState) => void,
-    started: () => void,
-  ) {
+  async function send(row: Row, path: string, gen: number, started: () => void) {
+    if (generation.current !== gen) return; // queued before Start over
+    const update = (state: RowState) => {
+      if (generation.current === gen) setRow(row.key, state);
+    };
+    // Progress can trail the first event: it never moves a row back to uploading.
+    const progressed = (progress: number) => {
+      if (generation.current !== gen) return;
+      setRows((current) =>
+        current.map((r) =>
+          r.key === row.key && r.state.status === "uploading"
+            ? { ...r, state: { status: "uploading", progress } }
+            : r,
+        ),
+      );
+    };
+    const controller = new AbortController();
+    uploads.current.add(controller);
     let ended = false;
     try {
       await uploadFile(
         path,
         row.file,
-        (progress) => update({ status: "uploading", progress }),
+        progressed,
         ({ event, data }) => {
           if (event !== "file") return;
           started();
@@ -118,9 +133,11 @@ export default function UploadPanel(props: Props) {
           } else update({ status: file.status });
           ended = file.status !== "reading" && file.status !== "finding";
         },
+        controller.signal,
       );
       if (!ended) update({ status: "refused", message: CUT_OFF, retry: true });
     } catch (e) {
+      if (controller.signal.aborted) return; // Start over, or the page went away
       if (e instanceof ApiError && e.status === 410) {
         // The draft is gone: the card says so, and every row goes with Start over.
         if (generation.current === gen) {
@@ -131,6 +148,8 @@ export default function UploadPanel(props: Props) {
       }
       const retry = !(e instanceof ApiError) || e.status === 0 || e.status === 200;
       update({ status: "refused", message: messageOf(e), retry });
+    } finally {
+      uploads.current.delete(controller);
     }
   }
 
@@ -206,10 +225,20 @@ export default function UploadPanel(props: Props) {
     }
   }
 
-  /** Discard the draft (the API drops it within the hour) and free the name. */
+  /**
+   * Discard the draft and free the name: cancel its uploads, and take its ready files back
+   * out of it (best effort; the API drops an unused draft within the hour anyway).
+   */
   function startOver() {
     generation.current += 1;
+    uploads.current.forEach((c) => c.abort());
+    uploads.current.clear();
     queue.current = Promise.resolve();
+    for (const row of rows) {
+      if (row.state.status === "ready" && draftId !== null) {
+        del(`/drafts/${draftId}/files/${row.state.ready.file_id}`).catch(() => {});
+      }
+    }
     setDraftId(null);
     setRows([]);
     setExpired(null);

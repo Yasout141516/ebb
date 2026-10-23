@@ -39,6 +39,12 @@ describe("HealthGate", () => {
     expect(await screen.findByText(down)).toBeInTheDocument();
   });
 
+  it("names the tutor's problem first when both are down", async () => {
+    vi.mocked(getJson).mockResolvedValue({ database: "Database down.", tutor: "Tutor not set up." });
+    render(page());
+    expect(await screen.findByText("Tutor not set up.")).toBeInTheDocument();
+  });
+
   it("offers Retry when the API can't be reached", async () => {
     vi.mocked(getJson).mockRejectedValueOnce(new TypeError("Failed to fetch"));
     vi.mocked(getJson).mockResolvedValueOnce({ database: "ok", tutor: "ok" });

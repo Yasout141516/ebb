@@ -46,10 +46,22 @@ function meta(size: number | undefined, state: RowState): string {
   }
 }
 
-/** "8 concepts found:", naming how many are new when an earlier file found some (R18). */
-function foundLine({ concepts, new: fresh }: DraftFileReady): string {
-  const some = fresh.length < concepts.length ? ` · ${fresh.length} new` : "";
-  return `${concepts.length} concepts found${some}:`;
+/** What a screen reader hears as the row moves on; the visible line also carries progress. */
+function announcement(filename: string, state: RowState): string {
+  switch (state.status) {
+    case "uploading":
+      return `${filename}: uploading`;
+    case "reading":
+      return `${filename}: reading`;
+    case "finding":
+      return `${filename}: finding concepts`;
+    case "ready":
+      return `${filename}: ready, ${state.ready.concepts.length} concepts found`;
+    case "saved":
+      return `${filename}: saved`;
+    default:
+      return "";
+  }
 }
 
 /** What `ebb add` reports: "9 concepts in these notes — 2 already here (…), 7 new". */
@@ -122,6 +134,11 @@ export default function UploadRow({ filename, size, state, onRemove, onRetry }: 
           <span className={styles.filename}>{filename}</span>
           <span className={styles.meta}>{meta(size, state)}</span>
         </div>
+        {state.status !== "stored" && (
+          <span aria-live="polite" className={styles.srOnly}>
+            {announcement(filename, state)}
+          </span>
+        )}
         {(state.status === "ready" || state.status === "saved") && (
           <span className={styles.done}>
             <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" className={styles.check}>
@@ -149,15 +166,18 @@ export default function UploadRow({ filename, size, state, onRemove, onRetry }: 
       )}
       {state.status === "ready" && (
         <div className={styles.concepts}>
-          <span className={styles.found}>{foundLine(state.ready)}</span>
-          {state.ready.concepts.map((name) => (
-            <span
-              key={name}
-              className={`${styles.chip} ${state.ready.new.includes(name) ? "" : styles.known}`}
-            >
-              {name}
-            </span>
-          ))}
+          <span className={styles.found}>{state.ready.concepts.length} concepts found:</span>
+          {state.ready.concepts.map((name) => {
+            // R18: every concept is listed; the ones this file adds are marked new.
+            const fresh = state.ready.new.includes(name);
+            const marked = fresh && state.ready.new.length < state.ready.concepts.length;
+            return (
+              <span key={name} className={`${styles.chip} ${fresh ? "" : styles.known}`}>
+                {name}
+                {marked && <span className={styles.srOnly}> (new)</span>}
+              </span>
+            );
+          })}
         </div>
       )}
       {state.status === "saved" && (

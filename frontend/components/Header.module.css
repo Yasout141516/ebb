@@ -9,6 +9,19 @@
   gap: 12px;
 }
 
+/* tpl-Onboarding's header: the mark and the toggle only. */
+.minimal {
+  height: 64px;
+  min-height: 0;
+  padding: 0 clamp(16px, 3vw, 32px);
+  flex-wrap: nowrap;
+  gap: 16px;
+}
+
+.minimalRight {
+  gap: 10px;
+}
+
 .left {
   display: flex;
   align-items: center;

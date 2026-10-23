@@ -39,7 +39,9 @@ export default function DropZone({ title, disabled, multiple, onFiles }: Props) 
       <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true" className={styles.icon}>
         <path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" />
       </svg>
-      <p className={styles.title}>{title}</p>
+      <p aria-live="polite" className={styles.title}>
+        {title}
+      </p>
       <p className={styles.limits}>PDF, TXT or MD · up to 20 MB per file · 5 files per subject</p>
       <button
         type="button"

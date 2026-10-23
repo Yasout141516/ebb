@@ -21,6 +21,7 @@ const EXPIRED = "This upload expired — add the files again.";
 type Upload = {
   path: string;
   file: File;
+  signal?: AbortSignal;
   progress: (percent: number) => void;
   emit: (data: DraftFileEvent | SourceFileEvent) => void;
   end: () => void;
@@ -30,12 +31,17 @@ let uploads: Upload[];
 beforeEach(() => {
   vi.clearAllMocks();
   uploads = [];
+  vi.mocked(del).mockResolvedValue(undefined);
   vi.mocked(uploadFile).mockImplementation(
-    (path, file, onProgress, onEvent: (e: SseEvent) => void) =>
-      new Promise<void>((resolve) => {
+    (path, file, onProgress, onEvent: (e: SseEvent) => void, signal?: AbortSignal) =>
+      new Promise<void>((resolve, reject) => {
+        signal?.addEventListener("abort", () =>
+          reject(new DOMException("Upload cancelled", "AbortError")),
+        );
         uploads.push({
           path,
           file,
+          signal,
           progress: (p) => act(() => onProgress(p)),
           emit: (data) => act(() => onEvent({ event: "file", data })),
           end: () => act(() => resolve()),
@@ -78,7 +84,7 @@ async function named(name = "Networks") {
   return user;
 }
 
-/** Choose `files`, and play each upload to `outcome` in order. */
+/** Choose `files` in the drop zone's file input. */
 async function addFiles(user: ReturnType<typeof userEvent.setup>, files: File[]) {
   await user.upload(input(), files);
 }
@@ -147,7 +153,29 @@ describe("UploadPanel, a new subject", () => {
     const upload = await nextUpload(0);
     upload.emit(ready(1, ["Subnetting", "NAT", "UDP"], ["UDP"]));
     upload.end();
-    expect(screen.getByText("3 concepts found · 1 new:")).toBeInTheDocument();
+    expect(screen.getByText("3 concepts found:")).toBeInTheDocument();
+    expect(screen.getAllByText("(new)")).toHaveLength(1);
+    expect(screen.getByText("(new)").parentElement).toHaveTextContent("UDP");
+  });
+
+  it("announces each step of a row politely", async () => {
+    const user = await named();
+    await addFiles(user, [pdf("w1.pdf")]);
+    const upload = await nextUpload(0);
+    upload.emit({ status: "finding" });
+    expect(screen.getByText("w1.pdf: finding concepts")).toHaveAttribute("aria-live", "polite");
+    upload.emit(ready(1));
+    upload.end();
+    expect(screen.getByText("w1.pdf: ready, 1 concepts found")).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("ignores upload progress once the file is being read", async () => {
+    const user = await named();
+    await addFiles(user, [pdf("w1.pdf", 4.2 * 1024 * 1024)]);
+    const upload = await nextUpload(0);
+    upload.emit({ status: "reading" });
+    upload.progress(100);
+    expect(screen.getByText("4.2 MB · Reading…")).toBeInTheDocument();
   });
 
   it("refuses a wrong type or an oversize file on its row without uploading", async () => {
@@ -181,6 +209,34 @@ describe("UploadPanel, a new subject", () => {
     expect(chooseButton()).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
     expect(startButton()).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("w5.pdf is already in Networks.");
+  });
+
+  it("removes a refused row with ✕, without asking the API", async () => {
+    const user = await named();
+    await addFiles(user, [pdf("slides.pptx")]);
+    await user.click(await screen.findByRole("button", { name: "Remove slides.pptx" }));
+    expect(screen.queryByText("Ebb reads PDF, TXT or MD files.")).not.toBeInTheDocument();
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("Start over cancels the draft's uploads and takes back its ready files", async () => {
+    const user = await named();
+    await addFiles(user, [pdf("w1.pdf"), pdf("w2.pdf"), pdf("w3.pdf")]);
+    const first = await nextUpload(0);
+    first.emit(ready(1));
+    first.end();
+    const second = await nextUpload(1); // in flight; w3 waits for its first event
+    expect(uploads).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Start over" }));
+    expect(second.signal?.aborted).toBe(true);
+    expect(del).toHaveBeenCalledWith("/drafts/d1/files/f1");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(uploads).toHaveLength(2); // w3 never went to the old draft
+    expect(screen.queryByText("w2.pdf")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Subject name")).not.toHaveAttribute("readonly");
   });
 
   it("uploads files one at a time, in the order added", async () => {

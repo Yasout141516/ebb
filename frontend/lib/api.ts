@@ -1,7 +1,7 @@
 // sse.ts imports from this module too; each side uses the other only inside functions.
 import { CUT_OFF, parseSse, type SseEvent } from "./sse";
 
-export const API_URL =process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export class ApiError extends Error {
   status: number;
@@ -67,14 +67,17 @@ export function del(path: string, signal?: AbortSignal): Promise<void> {
  * Upload `file` (multipart field `file`, its name also in `?name=`) and hand each
  * server-sent event of the answer to `onEvent` as it arrives. XMLHttpRequest, not fetch,
  * because only it reports how much of the body has been sent: `onProgress` gets 0–100.
+ * Aborting `signal` aborts the request and rejects with an AbortError.
  */
 export function uploadFile(
   path: string,
   file: File,
   onProgress: (percent: number) => void,
   onEvent: (e: SseEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException("Upload cancelled", "AbortError"));
     const xhr = new XMLHttpRequest();
     const separator = path.includes("?") ? "&" : "?";
     xhr.open("POST", `${API_URL}${path}${separator}name=${encodeURIComponent(file.name)}`);
@@ -83,8 +86,10 @@ export function uploadFile(
     let carry = "";
     let failed = false;
     const ok = () => xhr.status >= 200 && xhr.status < 300;
+    const onAbort = () => fail(new DOMException("Upload cancelled", "AbortError"));
     const fail = (error: unknown) => {
       failed = true;
+      signal?.removeEventListener("abort", onAbort);
       xhr.abort();
       reject(error);
     };
@@ -113,11 +118,13 @@ export function uploadFile(
       if (failed) return;
       // The server ends every event with a blank line: anything left over was cut off.
       if (carry.trim() !== "") return fail(new ApiError(200, CUT_OFF));
+      signal?.removeEventListener("abort", onAbort);
       resolve();
     };
     xhr.onerror = () => {
       if (!failed) fail(new ApiError(0, CUT_OFF));
     };
+    signal?.addEventListener("abort", onAbort);
     const form = new FormData();
     form.append("file", file);
     xhr.send(form);

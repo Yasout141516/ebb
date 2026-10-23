@@ -13,7 +13,8 @@ type Loaded = { subjects: SubjectSummary[]; subject: SubjectSummary; sources: So
 /** Add source: the onboarding upload screen in "add to {subject}" mode, as `ebb add`. */
 export default function AddSource() {
   const { id } = useParams<{ id: string }>();
-  const [loaded, setLoaded] = useState<Loaded | "missing" | null>(null);
+  const [loaded, setLoaded] = useState<Loaded | "missing" | "failed" | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -26,16 +27,28 @@ export default function AddSource() {
         setLoaded(subject ? { subjects, subject, sources } : "missing");
       })
       .catch((error) => {
-        // An API that can't be reached shows through the health check instead.
-        if (error?.status === 404 || error?.status === 422) setLoaded("missing");
+        if (error?.name === "AbortError") return;
+        setLoaded(error?.status === 404 || error?.status === 422 ? "missing" : "failed");
       });
     return () => controller.abort();
-  }, [id]);
+  }, [id, attempt]);
 
-  if (loaded === null || loaded === "missing") {
+  if (loaded === null || loaded === "missing" || loaded === "failed") {
     return (
       <OnboardingShell subjects={[]} eyebrow="Sources" title="Add notes" lede="">
         {loaded === "missing" && <ErrorCard title="Not found." />}
+        {loaded === "failed" && (
+          <ErrorCard
+            title="Couldn't load this subject's sources."
+            action={{
+              label: "Retry",
+              onClick: () => {
+                setLoaded(null);
+                setAttempt((n) => n + 1);
+              },
+            }}
+          />
+        )}
       </OnboardingShell>
     );
   }

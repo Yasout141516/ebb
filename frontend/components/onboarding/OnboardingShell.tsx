@@ -18,7 +18,7 @@ type Props = {
 export default function OnboardingShell({ subjects, eyebrow, title, lede, children }: Props) {
   return (
     <div className={styles.page}>
-      <Header backup={false} />
+      <Header minimal />
       <HealthGate>
         <div className={styles.body}>
           <aside className={styles.aside}>

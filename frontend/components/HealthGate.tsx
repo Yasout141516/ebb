@@ -21,8 +21,8 @@ export default function HealthGate({ children }: { children: React.ReactNode }) 
     const controller = new AbortController();
     getJson<Health>("/health", controller.signal)
       .then((health) => {
-        if (health.database !== "ok") setState({ kind: "down", message: health.database });
-        else if (health.tutor !== "ok") setState({ kind: "down", message: health.tutor });
+        if (health.tutor !== "ok") setState({ kind: "down", message: health.tutor });
+        else if (health.database !== "ok") setState({ kind: "down", message: health.database });
         else setState({ kind: "ok" });
       })
       .catch((error) => {
