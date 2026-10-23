@@ -1,0 +1,294 @@
+"use client";
+
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { ApiError, getJson, postJson } from "@/lib/api";
+import { clockTime } from "@/lib/format";
+import {
+  activeThread,
+  answered,
+  applyFinished,
+  applyTurn,
+  type Card,
+  disputeSent,
+  driverId,
+  forgetThread,
+  loadThread,
+  type QuestionCard,
+  rememberThread,
+  saveThread,
+  uuid,
+  waitingQuestion,
+} from "@/lib/session";
+import { streamPost, type SseEvent } from "@/lib/sse";
+import type { DisputeReason, Finished, Offer, SessionOffer, Started, StreamError, TurnPayload } from "@/lib/types";
+
+const FALLBACK = "Switched to a backup model while the main one is busy.";
+const SOMETHING_WRONG = "Something went wrong — try again.";
+const UNREACHABLE = "Can't reach the API.";
+
+/** A failure shown as the error card; `retry` sends the failed request again. */
+export type StudyError = { message: string; retry: (() => void) | null };
+
+export type Study = {
+  cards: Card[];
+  /** An open session to resume, shown as the Resume card. */
+  offer: Offer | null;
+  /** The step the tutor is on, until its cards arrive. */
+  step: string | null;
+  error: StudyError | null;
+  /** A configuration problem: the tutor can't run at all; shown full width. */
+  fatal: string | null;
+  /** A request is in flight. */
+  running: boolean;
+  /** A turn said the tutor switched to its backup model. */
+  backup: boolean;
+  /** The question waiting for an answer, if one is and nothing is in flight. */
+  waiting: QuestionCard | null;
+  /** The session is under way: its End session button shows. */
+  open: boolean;
+  answer: (text: string, choice: number | null) => void;
+  dispute: (gradeId: string, reason: DisputeReason, explanation: string) => void;
+  end: () => void;
+  resume: () => void;
+  startFresh: () => void;
+};
+
+function messageOf(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof TypeError) return UNREACHABLE; // fetch's "Failed to fetch"
+  return SOMETHING_WRONG;
+}
+
+const dayCard = (): Card => ({ kind: "day", id: uuid(), text: `Today · ${clockTime(new Date())}` });
+
+/**
+ * One subject's study session in this tab: opening it (reconnect, Resume card or a new
+ * start), its streamed turns, and the learner's replies. Every request that fails can be
+ * sent again as it was, so a resent answer keeps its attempt id.
+ */
+export default function useStudy(subjectId: string): Study {
+  const [cards, setCards] = useState<Card[]>([]);
+  const [offer, setOffer] = useState<Offer | null>(null);
+  const [step, setStep] = useState<string | null>(null);
+  const [error, setError] = useState<StudyError | null>(null);
+  const [fatal, setFatal] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const thread = useRef<string | null>(null); // the open session's id, once known
+  const inFlight = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    if (thread.current) saveThread(thread.current, cards);
+  }, [cards]);
+
+  /** A new request: the one before it (if any) is abandoned. */
+  function begin(): AbortSignal {
+    inFlight.current?.abort();
+    const controller = new AbortController();
+    inFlight.current = controller;
+    setRunning(true);
+    setError(null);
+    setStep(null);
+    return controller.signal;
+  }
+
+  function settle(signal: AbortSignal) {
+    if (inFlight.current?.signal !== signal) return;
+    inFlight.current = null;
+    setRunning(false);
+    setStep(null);
+  }
+
+  function onEvent(event: SseEvent, retry: () => void) {
+    switch (event.event) {
+      case "started": {
+        const { thread_id, greeting } = event.data as Started;
+        thread.current = thread_id;
+        rememberThread(subjectId, thread_id);
+        setCards((c) => [...c, { kind: "tutor", id: uuid(), text: greeting }]);
+        break;
+      }
+      case "step":
+        setStep((event.data as { label: string }).label);
+        break;
+      case "turn":
+        setStep(null);
+        setCards((c) => applyTurn(c, (event.data as { payload: TurnPayload }).payload));
+        break;
+      case "finished":
+        setStep(null);
+        setCards((c) => applyFinished(c, event.data as Finished));
+        forgetThread(subjectId);
+        thread.current = null;
+        break;
+      case "error": {
+        setStep(null);
+        const data = event.data as StreamError;
+        if ("notice" in data) setError({ message: data.notice, retry });
+        else if (data.error === SOMETHING_WRONG) setError({ message: data.error, retry });
+        else setFatal(data.error);
+        break;
+      }
+    }
+  }
+
+  /**
+   * POST and read the events. `refused` handles a 404 or 409 answer itself (true: handled);
+   * any other failure becomes the error card, whose Retry runs `retry`.
+   */
+  async function stream(
+    path: string,
+    body: unknown,
+    retry: () => void,
+    refused?: (error: ApiError) => boolean,
+  ): Promise<void> {
+    const signal = begin();
+    try {
+      await streamPost(path, body, (e) => onEvent(e, retry), signal);
+    } catch (e) {
+      if (signal.aborted) return;
+      if (refused && e instanceof ApiError && (e.status === 404 || e.status === 409) && refused(e)) return;
+      setError({ message: messageOf(e), retry });
+    } finally {
+      settle(signal);
+    }
+  }
+
+  function start() {
+    setOffer(null);
+    thread.current = null;
+    setCards([dayCard()]);
+    // Once `started` has named the session, carry on with it rather than start another.
+    const retry = () => (thread.current ? reconnect(thread.current, false) : start());
+    void stream(`/subjects/${subjectId}/session`, { driver: driverId() }, retry);
+  }
+
+  /** Carry on with a session; `silent`: this tab's own, which may have ended meanwhile. */
+  function reconnect(threadId: string, silent: boolean) {
+    const retry = () => reconnect(threadId, silent);
+    const gone = () => {
+      forgetThread(subjectId);
+      thread.current = null;
+      setCards([]);
+      void lookForOffer();
+      return true;
+    };
+    void stream(`/sessions/${threadId}/resume`, { driver: driverId() }, retry, silent ? gone : undefined);
+  }
+
+  async function lookForOffer() {
+    const signal = begin();
+    try {
+      const driver = encodeURIComponent(driverId());
+      const found = await getJson<SessionOffer>(`/subjects/${subjectId}/session?driver=${driver}`, signal);
+      if (signal.aborted) return;
+      settle(signal);
+      if (found.offer) setOffer(found.offer);
+      else start();
+    } catch (e) {
+      if (signal.aborted) return;
+      settle(signal);
+      setError({ message: messageOf(e), retry: () => void lookForOffer() });
+    }
+  }
+
+  function open() {
+    const saved = activeThread(subjectId);
+    const savedCards = saved ? loadThread(saved) : null;
+    if (saved && savedCards) {
+      thread.current = saved;
+      setCards(savedCards);
+      reconnect(saved, true);
+      return;
+    }
+    if (saved) forgetThread(subjectId);
+    void lookForOffer();
+  }
+
+  const opening = useEffectEvent(open);
+  useEffect(() => {
+    // Deferred, so a development double mount doesn't start two sessions.
+    const timer = setTimeout(opening, 0);
+    return () => {
+      clearTimeout(timer);
+      inFlight.current?.abort();
+    };
+  }, []);
+
+  function resume() {
+    if (!offer) return;
+    const threadId = offer.thread_id;
+    setOffer(null);
+    thread.current = threadId;
+    rememberThread(subjectId, threadId);
+    setCards([dayCard()]);
+    reconnect(threadId, false);
+  }
+
+  async function discardAndStart(old: Offer) {
+    const signal = begin();
+    try {
+      await postJson(`/sessions/${old.thread_id}/discard`, undefined, signal);
+    } catch (e) {
+      if (signal.aborted) return;
+      settle(signal);
+      setError({ message: messageOf(e), retry: () => void discardAndStart(old) });
+      return;
+    }
+    settle(signal);
+    start();
+  }
+
+  function startFresh() {
+    if (!offer) return;
+    const old = offer;
+    setOffer(null);
+    void discardAndStart(old);
+  }
+
+  /** Send a reply to the open session; Retry sends exactly the same reply again. */
+  function reply(body: Record<string, unknown>) {
+    const threadId = thread.current;
+    if (!threadId) return;
+    const sent = { driver: driverId(), reply: body };
+    const send = () => void stream(`/sessions/${threadId}/reply`, sent, send);
+    send();
+  }
+
+  const finished = cards.some((c) => c.kind === "summary");
+  const waiting = running || error ? null : waitingQuestion(cards);
+
+  function answer(text: string, choice: number | null) {
+    if (!waiting) return;
+    const shown = choice === null ? text : waiting.question.options[choice];
+    const attempt = { attempt_id: uuid(), text: shown, choice };
+    setCards((c) => answered(c, attempt));
+    reply({ attempt_id: attempt.attempt_id, answer: choice === null ? text : String(choice + 1) });
+  }
+
+  function dispute(gradeId: string, reason: DisputeReason, explanation: string) {
+    if (running) return;
+    setCards((c) => disputeSent(c, gradeId));
+    reply({ dispute: { id: uuid(), reason, explanation } });
+  }
+
+  function end() {
+    if (!running) reply({ quit: true });
+  }
+
+  return {
+    cards,
+    offer,
+    step,
+    error,
+    fatal,
+    running,
+    backup: cards.some((c) => c.kind === "notice" && c.text.startsWith(FALLBACK)),
+    waiting,
+    open: !finished && offer === null && cards.some((c) => c.kind === "question"),
+    answer,
+    dispute,
+    end,
+    resume,
+    startFresh,
+  };
+}

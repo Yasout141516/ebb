@@ -108,7 +108,7 @@ export type Question = {
   prompt: string;
   options: string[];
   source: "notes" | "web" | "general";
-  source_line: string;
+  source_line: string | null;
 };
 
 export type DisputeReason = "correct" | "ambiguous" | "notes_differ" | "other";

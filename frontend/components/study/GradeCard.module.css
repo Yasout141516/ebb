@@ -1,0 +1,156 @@
+/* tpl-Workspace's grade card (isGrade), with its dispute states. */
+.card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: visible;
+  box-shadow: var(--shadow);
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: 13px 13px 0 0;
+}
+
+.correct {
+  background: var(--correct-soft);
+  color: var(--correct);
+}
+
+.partial {
+  background: var(--partial-soft);
+  color: var(--partial);
+}
+
+.incorrect {
+  background: var(--incorrect-soft);
+  color: var(--incorrect);
+}
+
+.verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.half {
+  fill: currentColor;
+}
+
+.body {
+  padding: 18px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.explanation {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+/* The prototype's general-knowledge label (isGK). */
+.general {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.general svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.checking {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 14px;
+  color: var(--ink-2);
+  animation: ebb-pulse 1.2s ease-in-out infinite;
+}
+
+.resolved {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.strong {
+  font-weight: 600;
+}
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.footText {
+  font-size: 13px;
+  color: var(--ink-3);
+  padding-top: 10px;
+}
+
+.dispute {
+  margin-top: 10px;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font: 500 13px var(--sans);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dispute svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

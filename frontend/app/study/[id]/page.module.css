@@ -1,0 +1,9 @@
+/* tpl-Workspace's root. */
+.page {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  display: flex;
+  flex-direction: column;
+}
