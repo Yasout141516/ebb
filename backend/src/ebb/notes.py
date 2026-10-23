@@ -62,22 +62,42 @@ class ExtractedNotes:
 def read_notes(path: Path) -> ExtractedNotes:
     if not path.is_file():
         raise NotesError(f"Can't open {path}.")
-    kind = KINDS.get(path.suffix.lower())
-    if kind is None:
-        raise NotesError("Ebb reads PDF, TXT or MD files.")
+    kind = _kind(path.name)
     size = path.stat().st_size
-    if size > MAX_BYTES:
-        raise NotesError(
-            f"{path.name} is {format_megabytes(size)} — over the 20 MB limit. "
-            "Split it into chapters, or upload just the pages you're studying."
-        )
+    _check_size(path.name, size)
     try:
         data = path.read_bytes()
     except OSError:
         raise NotesError(f"Can't open {path}.") from None
+    return _extract(path.name, kind, data, f"Can't open {path}.")
+
+
+def read_notes_bytes(filename: str, data: bytes) -> ExtractedNotes:
+    """The same checks and messages as `read_notes`, for an upload already in memory."""
+    kind = _kind(filename)
+    _check_size(filename, len(data))
+    return _extract(filename, kind, data, f"Can't open {filename}.")
+
+
+def _kind(filename: str) -> str:
+    kind = KINDS.get(Path(filename).suffix.lower())
+    if kind is None:
+        raise NotesError("Ebb reads PDF, TXT or MD files.")
+    return kind
+
+
+def _check_size(filename: str, size: int) -> None:
+    if size > MAX_BYTES:
+        raise NotesError(
+            f"{filename} is {format_megabytes(size)} — over the 20 MB limit. "
+            "Split it into chapters, or upload just the pages you're studying."
+        )
+
+
+def _extract(filename: str, kind: str, data: bytes, unopenable: str) -> ExtractedNotes:
     pages: tuple[str, ...] | None = None
     if kind == "pdf":
-        pages = _pdf_pages(path, data)
+        pages = _pdf_pages(data, unopenable)
         text = "\n\n".join(pages)
         # An image-only PDF has no text at all, so this also covers "empty" for PDFs.
         if _is_scanned(pages):
@@ -89,13 +109,13 @@ def read_notes(path: Path) -> ExtractedNotes:
         try:
             text = data.decode("utf-8-sig")
         except UnicodeDecodeError:
-            raise NotesError(f"Couldn't read {path.name} as text — save it as UTF-8.") from None
+            raise NotesError(f"Couldn't read {filename} as text — save it as UTF-8.") from None
         if not text.strip():
-            raise NotesError(f"{path.name} has no text in it.")
+            raise NotesError(f"{filename} has no text in it.")
     return ExtractedNotes(
-        filename=path.name,
+        filename=filename,
         kind=kind,
-        size_bytes=size,
+        size_bytes=len(data),
         sha256=hashlib.sha256(data).hexdigest(),
         pages=pages,
         text=text,
@@ -106,12 +126,12 @@ def fold_ligatures(text: str) -> str:
     return text.translate(_LIGATURES)
 
 
-def _pdf_pages(path: Path, data: bytes) -> tuple[str, ...]:
+def _pdf_pages(data: bytes, unopenable: str) -> tuple[str, ...]:
     try:
         reader = pypdf.PdfReader(io.BytesIO(data))
         return tuple(fold_ligatures(page.extract_text() or "") for page in reader.pages)
     except _DAMAGED_PDF:
-        raise NotesError(f"Can't open {path}.") from None
+        raise NotesError(unopenable) from None
 
 
 def _is_scanned(pages: tuple[str, ...]) -> bool:
@@ -121,7 +141,14 @@ def _is_scanned(pages: tuple[str, ...]) -> bool:
 
 
 def prepare(path: Path) -> NewDocument:
-    notes = read_notes(path)
+    return _document(read_notes(path))
+
+
+def prepare_bytes(filename: str, data: bytes) -> NewDocument:
+    return _document(read_notes_bytes(filename, data))
+
+
+def _document(notes: ExtractedNotes) -> NewDocument:
     return NewDocument(
         filename=notes.filename,
         kind=notes.kind,

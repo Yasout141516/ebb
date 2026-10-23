@@ -22,13 +22,13 @@ from ebb.config import ConfigError, Settings, resolve_timezone
 from ebb.db.migrate import migrate, migration_lock
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
-from ebb.domain import Concept, NewDocument, Subject
+from ebb.domain import NewDocument, Subject
 from ebb.store import (
     MAX_DOCUMENTS,
     DocumentRefused,
     SubjectExists,
-    merge_note_concepts,
 )
+from ebb.subjects import NotesReport, add_notes, find_note_concepts, subject_from_topic
 from ebb.ui import (
     DISPUTE_REASONS,
     NOT_DISPUTABLE,
@@ -196,35 +196,37 @@ def _prepare(path: Path) -> NewDocument:
         _fail(message)
 
 
-def _find_concepts(
-    tutor: Tutor,
-    subject: str,
-    known: list[tuple[str, str]],
-    document: NewDocument,
-) -> tuple[list[str], list[tuple[str, str]]]:
-    """Ask for the concepts in one file; returns (matched names, new (name, description))."""
-    from ebb.chunking import digest
-    from ebb.llm.tutor import NOTES_REFUSED_NOTICE, TutorRefused, TutorUnavailable
+def _ai[T](doing: str, call: Callable[[], T], refused: str | None = None) -> T:
+    """`call()` behind a spinner; a tutor failure or a missing key exits with its message
+    (`refused` replaces the notice of a refusal)."""
+    from ebb.llm.tutor import TutorRefused, TutorUnavailable
 
-    # Placeholders: the prompt only uses names and descriptions, so these ids are never stored.
-    placeholder = uuid4()
-    existing = [Concept(uuid4(), placeholder, name, text) for name, text in known]
-    with console.status("Finding the concepts in your notes…"):
+    with console.status(doing):
         try:
-            generated = tutor.concepts_from_notes(subject, existing, digest(document.chunks))
+            return call()
         except TutorRefused as error:
-            _exhausted(error, NOTES_REFUSED_NOTICE)
+            _exhausted(error, refused)
         except TutorUnavailable as error:
             _exhausted(error)
         except ConfigError as error:
             _fail(str(error), code=2)
-    found = [(c.name, c.description, c.same_as) for c in generated.value]
-    return merge_note_concepts([name for name, _ in known], found)
 
 
-def _print_report(document: NewDocument, matched: list[str], fresh: list[tuple[str, str]]) -> None:
+def _find_concepts(
+    tutor: Tutor, subject: str, known: list[tuple[str, str]], document: NewDocument
+) -> NotesReport:
+    from ebb.llm.tutor import NOTES_REFUSED_NOTICE
+
+    return _ai(
+        "Finding the concepts in your notes…",
+        lambda: find_note_concepts(tutor, subject, known, document),
+        NOTES_REFUSED_NOTICE,
+    )
+
+
+def _print_report(document: NewDocument, report: NotesReport) -> None:
     pages, chunks = document.page_count, len(document.chunks)
-    for line in notes_report(document.filename, pages, chunks, matched, fresh):
+    for line in notes_report(document.filename, pages, chunks, report.matched, report.fresh):
         console.print(escape(line))
 
 
@@ -237,8 +239,6 @@ def new(
     ] = None,
 ) -> None:
     """Create a subject from a topic, or from your notes: Ebb lists its core concepts."""
-    from ebb.llm.tutor import TutorUnavailable
-
     topic = topic.strip()
     if not topic:
         _fail('Give a topic, e.g. ebb new "Computer Networks"')
@@ -251,16 +251,10 @@ def new(
         _new_from_notes(settings, store, topic, notes)
         return
     tutor = _capped(_tutor(settings), settings, store)
-    with console.status("Mapping the topic…"):
-        try:
-            generated = tutor.extract_concepts(topic)
-        except TutorUnavailable as error:
-            _exhausted(error)
-        except ConfigError as error:
-            _fail(str(error), code=2)
-    concepts = [(c.name, c.description) for c in generated.value]
     try:
-        store.create_subject(user_id, topic, concepts)
+        _, concepts = _ai(
+            "Mapping the topic…", lambda: subject_from_topic(tutor, store, user_id, topic)
+        )
     except SubjectExists:  # another terminal got there first
         _fail(_exists_copy(topic))
     console.print(f"[bold]{escape(topic)}[/bold] · {len(concepts)} concepts")
@@ -282,18 +276,18 @@ def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[
     tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
     known: list[tuple[str, str]] = []
-    reports: list[tuple[NewDocument, list[str], list[tuple[str, str]]]] = []
+    reports: list[tuple[NewDocument, NotesReport]] = []
     for document in documents:
-        matched, fresh = _find_concepts(tutor, topic, known, document)
-        known += fresh
-        reports.append((document, matched, fresh))
+        report = _find_concepts(tutor, topic, known, document)
+        known += report.fresh
+        reports.append((document, report))
     try:
         store.create_subject_with_notes(settings.ebb_dev_user_id, topic, documents, known)
     except SubjectExists:  # another terminal got there first
         _fail(_exists_copy(topic))
     console.print(f"[bold]{escape(topic)}[/bold]")
-    for document, matched, fresh in reports:
-        _print_report(document, matched, fresh)
+    for document, report in reports:
+        _print_report(document, report)
     console.print("\nStart with: [bold]ebb study[/bold]")
 
 
@@ -325,13 +319,17 @@ def add(
         _fail(_duplicate_copy(chosen, document))
     tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
-    known = [(c.name, c.description) for c in store.list_concepts(user_id, chosen.id)]
-    matched, fresh = _find_concepts(tutor, chosen.name, known, document)
+    from ebb.llm.tutor import NOTES_REFUSED_NOTICE
+
     try:
-        store.add_document(user_id, chosen.id, document, fresh)
+        report = _ai(
+            "Finding the concepts in your notes…",
+            lambda: add_notes(tutor, store, user_id, chosen, document),
+            NOTES_REFUSED_NOTICE,
+        )
     except DocumentRefused as error:  # another terminal got there first
         _fail(_full_copy(chosen) if error.reason == "full" else _duplicate_copy(chosen, document))
-    _print_report(document, matched, fresh)
+    _print_report(document, report)
 
 
 def _checkpointer(store: PgStore) -> BaseCheckpointSaver:
