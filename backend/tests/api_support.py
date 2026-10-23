@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
 
 from ebb.api.app import create_app
+from ebb.api.drafts import Drafts
 from ebb.api.services import Services
 from ebb.config import Settings
 from ebb.graph.build import build_graph
@@ -32,12 +33,14 @@ def make_services(**overrides: Any) -> Services:
         config_error=None,
         web=None,
         sessions=StudySessions(store, graph, saver, lambda: NOW),
-        drafts=None,
+        # Reads `services` when called, so it sees the tutor the overrides put in.
+        drafts=Drafts(lambda: services.require_tutor(), lambda: NOW),
         user_id=USER,
         tz=ZoneInfo("UTC"),
         now=lambda: NOW,
     )
-    return replace(services, **overrides)
+    services = replace(services, **overrides)
+    return services
 
 
 def client(services: Services) -> TestClient:

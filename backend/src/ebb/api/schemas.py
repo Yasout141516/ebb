@@ -1,9 +1,10 @@
 """Request and response bodies. Each route adds its own here."""
 
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field
 
 
 class Health(BaseModel):
@@ -18,16 +19,19 @@ class SubjectSummary(BaseModel):
     due_count: int
 
 
-class NewSubject(BaseModel):
-    topic: str = Field(min_length=1, max_length=120)
+def _not_blank(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise ValueError("must not be blank")
+    return name
 
-    @field_validator("topic")
-    @classmethod
-    def not_blank(cls, topic: str) -> str:
-        topic = topic.strip()
-        if not topic:
-            raise ValueError("topic must not be blank")
-        return topic
+
+# A subject's name, stripped: the stores don't strip.
+type SubjectName = Annotated[str, Field(min_length=1, max_length=120), AfterValidator(_not_blank)]
+
+
+class NewSubject(BaseModel):
+    topic: SubjectName
 
 
 class ConceptBrief(BaseModel):
@@ -39,6 +43,18 @@ class CreatedSubject(BaseModel):
     id: UUID
     name: str
     concepts: list[ConceptBrief]
+
+
+class NewDraft(BaseModel):
+    name: SubjectName
+
+
+class CreatedDraft(BaseModel):
+    id: str
+
+
+class CommittedDraft(BaseModel):
+    subject_id: UUID
 
 
 class Source(BaseModel):

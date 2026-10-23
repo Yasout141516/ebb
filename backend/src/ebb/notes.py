@@ -79,6 +79,12 @@ def read_notes_bytes(filename: str, data: bytes) -> ExtractedNotes:
     return _extract(filename, kind, data, f"Can't open {filename}.")
 
 
+def check_upload(filename: str, size: int) -> None:
+    """The checks that need only the name and size, for an upload too big to read whole."""
+    _kind(filename)
+    _check_size(filename, size)
+
+
 def _kind(filename: str) -> str:
     kind = KINDS.get(Path(filename).suffix.lower())
     if kind is None:

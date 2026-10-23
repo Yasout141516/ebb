@@ -15,7 +15,6 @@ from ebb.api.schemas import (
     SubjectSummary,
 )
 from ebb.api.services import Services
-from ebb.config import ConfigError
 from ebb.domain import Subject
 from ebb.subjects import subject_from_topic
 from ebb.ui import pages_prefix
@@ -55,10 +54,8 @@ def list_subjects(request: Request) -> list[SubjectSummary]:
 @router.post("/subjects", status_code=201)
 def create_subject(body: NewSubject, request: Request) -> CreatedSubject:
     services = _services(request)
-    if services.tutor is None:
-        raise ConfigError(services.config_error or "The tutor is not configured.")
     subject_id, concepts = subject_from_topic(
-        services.tutor, services.store, services.user_id, body.topic
+        services.require_tutor(), services.store, services.user_id, body.topic
     )
     return CreatedSubject(
         id=subject_id,

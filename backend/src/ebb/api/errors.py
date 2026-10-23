@@ -3,6 +3,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from ebb.api.drafts import EXPIRED, DraftExpired, EmptyDraft
 from ebb.config import ConfigError
 from ebb.llm.tutor import TutorUnavailable
 from ebb.store import SubjectExists
@@ -31,6 +32,14 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(SessionBusy)
     async def session_busy(request: Request, error: SessionBusy) -> JSONResponse:
         return _reply(409, {"error": BUSY})
+
+    @app.exception_handler(DraftExpired)
+    async def draft_expired(request: Request, error: DraftExpired) -> JSONResponse:
+        return _reply(410, {"error": EXPIRED})
+
+    @app.exception_handler(EmptyDraft)
+    async def empty_draft(request: Request, error: EmptyDraft) -> JSONResponse:
+        return _reply(422, {"error": "Add a file first."})
 
     @app.exception_handler(LookupError)
     async def not_found(request: Request, error: LookupError) -> JSONResponse:
