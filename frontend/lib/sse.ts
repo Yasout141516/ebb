@@ -1,4 +1,7 @@
-import { API_URL, errorOf } from "./api";
+import { API_URL, ApiError, errorOf } from "./api";
+
+export const UNREADABLE = "The answer came back garbled. Try again.";
+export const CUT_OFF = "The connection closed before the answer finished. Try again.";
 
 export type SseEvent = { event: string; data: unknown };
 
@@ -7,9 +10,13 @@ export type SseEvent = { event: string; data: unknown };
  * The new carry is the unfinished tail. Comment lines (keep-alives) are ignored.
  */
 export function parseSse(chunk: string, carry: string): { events: SseEvent[]; carry: string } {
-  const text = (carry + chunk).replace(/\r\n?/g, "\n");
+  let text = carry + chunk;
+  // A "\r" ending the text may be the first half of "\r\n": hold it for the next chunk.
+  const held = text.endsWith("\r") ? "\r" : "";
+  if (held) text = text.slice(0, -1);
+  text = text.replace(/\r\n?/g, "\n");
   const blocks = text.split("\n\n");
-  const rest = blocks.pop() ?? "";
+  const rest = (blocks.pop() ?? "") + held;
   const events: SseEvent[] = [];
   for (const block of blocks) {
     let event = "message";
@@ -24,7 +31,11 @@ export function parseSse(chunk: string, carry: string): { events: SseEvent[]; ca
       else if (field === "data") data.push(value);
     }
     if (data.length === 0) continue;
-    events.push({ event, data: JSON.parse(data.join("\n")) });
+    try {
+      events.push({ event, data: JSON.parse(data.join("\n")) });
+    } catch {
+      throw new ApiError(200, UNREADABLE);
+    }
   }
   return { events, carry: rest };
 }
@@ -54,7 +65,11 @@ export async function readEvents(response: Response, onEvent: (e: SseEvent) => v
   let carry = "";
   for (;;) {
     const { done, value } = await reader.read();
-    if (done) return; // the server ends every event with a blank line; a cut-off tail is dropped
+    if (done) {
+      // The server ends every event with a blank line: anything left over was cut off.
+      if (carry.trim() !== "") throw new ApiError(200, CUT_OFF);
+      return;
+    }
     const parsed = parseSse(decoder.decode(value, { stream: true }), carry);
     carry = parsed.carry;
     for (const event of parsed.events) onEvent(event);

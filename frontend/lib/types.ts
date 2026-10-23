@@ -95,6 +95,7 @@ export type Grade = {
   value: GradeValue;
   explanation: string;
   misconception: string | null;
+  claims: { source: string; quote: string }[];
   citations: Citation[];
   general_knowledge: boolean;
 };
@@ -113,15 +114,18 @@ export type Question = {
 export type DisputeReason = "correct" | "ambiguous" | "notes_differ" | "other";
 export type DisputeOutcome = "changed" | "voided" | "upheld" | "refused" | "failed";
 
-export type DisputeResult = {
-  outcome: DisputeOutcome;
-  original_grade: GradeValue;
-  new_grade: GradeValue | null;
-  explanation: string;
-  citations: Citation[];
-  concept: string;
-  stage: number;
-};
+// A refused or failed re-check carries only its outcome.
+export type DisputeResult =
+  | { outcome: "refused" | "failed" }
+  | {
+      outcome: "changed" | "voided" | "upheld";
+      original_grade: GradeValue;
+      new_grade: GradeValue | null;
+      explanation: string;
+      citations: Citation[];
+      concept: string;
+      stage: number;
+    };
 
 export type TurnPayload = {
   concept: string;
@@ -150,7 +154,7 @@ export type Finished = {
   final: { grade: Grade | null; lesson: Lesson | null; notices: string[] };
   caught_up: boolean;
   next_review_at: string | null;
-  next_review_line: string;
+  next_review_line: string | null;
 };
 
 export type Started = { thread_id: string; greeting: string };

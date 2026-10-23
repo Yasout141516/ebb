@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
-import { parseSse, streamPost } from "./sse";
+import { CUT_OFF, UNREADABLE, parseSse, streamPost } from "./sse";
 
 describe("parseSse", () => {
   it("parses an event with JSON data", () => {
@@ -32,6 +32,20 @@ describe("parseSse", () => {
   it("handles CRLF line endings", () => {
     const { events } = parseSse('event: x\r\ndata: {"a":1}\r\n\r\n', "");
     expect(events).toEqual([{ event: "x", data: { a: 1 } }]);
+  });
+
+  it("handles a CRLF split across chunks", () => {
+    const first = parseSse('event: x\r\ndata: {"a":1}\r\n\r', "");
+    expect(first.events).toEqual([]);
+    const second = parseSse("\nevent: y\r\ndata: 2\r\n\r\n", first.carry);
+    expect(second.events).toEqual([
+      { event: "x", data: { a: 1 } },
+      { event: "y", data: 2 },
+    ]);
+  });
+
+  it("rejects data that is not JSON", () => {
+    expect(() => parseSse("event: x\ndata: {oops\n\n", "")).toThrow(UNREADABLE);
   });
 
   it("names an event without an event line 'message'", () => {
@@ -84,5 +98,21 @@ describe("streamPost", () => {
     const error = await streamPost("/x", {}, () => {}).catch((e) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 503, message: "Tutor is down." });
+  });
+
+  it("rejects when the stream ends mid-event", async () => {
+    const body = streamOf(['event: step\ndata: {"label":"a"}\n\nevent: turn\ndata: {"x"']);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    const seen: unknown[] = [];
+    const error = await streamPost("/x", {}, (e) => seen.push(e)).catch((e) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.message).toBe(CUT_OFF);
+    expect(seen).toEqual([{ event: "step", data: { label: "a" } }]);
+  });
+
+  it("rejects when a data line is not JSON", async () => {
+    const body = streamOf(["event: step\ndata: nope\n\n"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    await expect(streamPost("/x", {}, () => {})).rejects.toMatchObject({ message: UNREADABLE });
   });
 });
