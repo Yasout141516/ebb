@@ -259,6 +259,5 @@ def test_commit_saves_subject_files_concepts_in_one_transaction(pg_pool, monkeyp
 
     subject_id = drafts.commit(draft, store, USER)  # the draft survives a failed commit
     assert [s.name for s in store.list_subjects(USER)] == ["Biology"]
-    # One transaction gives both rows the same created_at, so their order isn't fixed here.
-    assert sorted(d.filename for d in store.list_documents(USER, subject_id)) == ["a.txt", "b.txt"]
+    assert [d.filename for d in store.list_documents(USER, subject_id)] == ["a.txt", "b.txt"]
     assert [c.name for c in store.list_concepts(USER, subject_id)] == ["Cells", "Genes"]

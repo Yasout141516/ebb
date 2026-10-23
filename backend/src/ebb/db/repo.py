@@ -124,8 +124,10 @@ def _insert_document(
     conn: Connection, user_id: UUID, subject_id: UUID, document: NewDocument
 ) -> None:
     row = conn.execute(
+        # clock_timestamp(), not now(): files saved in one transaction keep their order.
         "insert into documents (user_id, subject_id, filename, kind, size_bytes, page_count,"
-        " sha256) values (%s, %s, %s, %s, %s, %s, %s) returning id",
+        " sha256, created_at) values (%s, %s, %s, %s, %s, %s, %s, clock_timestamp())"
+        " returning id",
         (
             user_id,
             subject_id,

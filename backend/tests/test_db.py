@@ -500,6 +500,19 @@ def test_create_subject_with_notes_stores_everything_in_order(store):
     assert [d.filename for d in store.list_documents(ALICE, subject_id)] == ["a.txt"]
 
 
+@pytest.mark.parametrize("kind", ["memory", "postgres"])
+def test_files_saved_together_keep_their_order(kind, request):
+    store = MemoryStore() if kind == "memory" else PgStore(request.getfixturevalue("pg_pool"))
+    store.ensure_profile(ALICE)
+    names = ["e.txt", "a.txt", "d.txt", "b.txt", "c.txt"]
+
+    subject_id = store.create_subject_with_notes(
+        ALICE, "Networks", [new_document(n, "text") for n in names], []
+    )
+
+    assert [d.filename for d in store.list_documents(ALICE, subject_id)] == names
+
+
 def test_create_subject_with_notes_is_one_transaction(store):
     bad = NewDocument("a.txt", "bad-kind", 1, None, "s", (ChunkDraft(0, "x", None, 1, 1, ()),))
 
