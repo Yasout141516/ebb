@@ -173,6 +173,10 @@ class PgStore:
     def __init__(self, pool: ConnectionPool) -> None:
         self.pool = pool
 
+    def ping(self) -> None:
+        with self.pool.connection(timeout=2) as conn:
+            conn.execute("select 1")
+
     def ensure_profile(self, user_id: UUID) -> None:
         with self.pool.connection() as conn:
             conn.execute(

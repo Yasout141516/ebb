@@ -19,9 +19,9 @@ dependencies = [
     "pypdf>=6.21.1,<7",
     "tavily-python>=0.8.5,<0.9",
     "langchain-mistralai>=1.1.6,<2",
-    "fastapi>=0.161.1",
-    "uvicorn>=0.54.0",
-    "python-multipart>=0.0.32",
+    "fastapi>=0.161.1,<1",
+    "uvicorn>=0.54.0,<1",
+    "python-multipart>=0.0.32,<1",
 ]
 
 [project.scripts]

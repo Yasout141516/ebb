@@ -1,5 +1,6 @@
 """The FastAPI app and its uvicorn factory."""
 
+import psycopg
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -7,6 +8,7 @@ from ebb.api.errors import install_error_handlers
 from ebb.api.schemas import Health
 from ebb.api.services import Services, build_services
 from ebb.config import Settings
+from ebb.db.pool import DATABASE_DOWN
 
 
 def create_app(services: Services) -> FastAPI:
@@ -22,8 +24,12 @@ def create_app(services: Services) -> FastAPI:
 
     @app.get("/health")
     def health() -> Health:
-        # The services only exist once the database answered at startup.
-        return Health(database="ok", tutor=services.config_error or "ok")
+        try:
+            services.store.ping()
+            database = "ok"
+        except psycopg.Error:
+            database = DATABASE_DOWN
+        return Health(database=database, tutor=services.config_error or "ok")
 
     return app
 

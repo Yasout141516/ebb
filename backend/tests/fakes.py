@@ -78,6 +78,9 @@ class MemoryStore:
         self.ai_calls: dict[tuple[UUID, date], int] = {}
         self.locks: set[str] = set()
 
+    def ping(self) -> None:
+        pass
+
     def ensure_profile(self, user_id: UUID) -> None:
         self.profiles.add(user_id)
 

@@ -1159,3 +1159,7 @@ def test_answer_history_is_scoped_to_the_user_and_subject(store):
     assert store.subject_answers(BOB, subject_id) == []
     assert store.answer_times(BOB) == []
     assert len(store.answer_times(ALICE)) == 1
+
+
+def test_ping_reaches_the_database(store):
+    store.ping()

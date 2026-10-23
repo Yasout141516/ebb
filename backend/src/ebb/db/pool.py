@@ -6,6 +6,8 @@ from psycopg_pool import ConnectionPool
 
 from ebb.config import ConfigError
 
+DATABASE_DOWN = "Can't reach the database. Is it running? Try: docker compose up -d"
+
 
 def make_pool(url: str, max_size: int = 8, timeout: int = 5) -> ConnectionPool:
     # One direct connection first: fails fast with a clear message instead of the
@@ -13,9 +15,7 @@ def make_pool(url: str, max_size: int = 8, timeout: int = 5) -> ConnectionPool:
     try:
         psycopg.connect(url, connect_timeout=timeout).close()
     except psycopg.OperationalError as error:
-        raise ConfigError(
-            "Can't reach the database. Is it running? Try: docker compose up -d"
-        ) from error
+        raise ConfigError(DATABASE_DOWN) from error
     # A study session holds one connection for its terminal lock the whole time, while
     # the checkpointer and the store take others. PostgresSaver needs prepare_threshold 0.
     return ConnectionPool(

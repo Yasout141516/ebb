@@ -162,6 +162,10 @@ def concept_after_dispute(
 
 
 class Store(Protocol):
+    def ping(self) -> None:
+        """Raises psycopg.Error when the database can't be reached."""
+        ...
+
     def ensure_profile(self, user_id: UUID) -> None: ...
 
     def create_subject(self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]) -> UUID:
