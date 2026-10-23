@@ -27,9 +27,11 @@ type Props = {
  * to it again. Null unless the latest turn (its failure notice at `failure`) is such a one.
  */
 function failedAnswer(cards: Card[], waiting: QuestionModel | null, failure: number): QuestionModel | null {
-  if (!waiting || failure < 0 || failure < cards.findLastIndex((c) => c.kind === "user")) return null;
-  const tried = cards.findLast((c): c is QuestionModel => c.kind === "question" && c.answer !== null);
-  return tried && tried.result === null && tried.question.prompt === waiting.question.prompt ? tried : null;
+  if (!waiting) return null;
+  const at = cards.findLastIndex((c) => c.kind === "question" && c.answer !== null);
+  const tried = cards[at];
+  if (tried?.kind !== "question" || failure < at) return null;
+  return tried.result === null && tried.question.prompt === waiting.question.prompt ? tried : null;
 }
 
 /** The middle column: the session's thread of cards, then the composer. */
@@ -46,7 +48,22 @@ export default function Thread({ study, onDispute }: Props) {
   function render(card: Card, index: number) {
     switch (card.kind) {
       case "day":
-        return <p className={styles.day}>{card.text}</p>;
+        // The thread's header: its day and time, and End session while the session is open.
+        return (
+          <div className={styles.dayRow}>
+            <p className={styles.day}>{card.text}</p>
+            {study.open && (
+              <button
+                type="button"
+                onClick={study.end}
+                disabled={study.running}
+                className={`${styles.endButton} hov`}
+              >
+                End session
+              </button>
+            )}
+          </div>
+        );
       case "tutor":
         return (
           <div className={styles.tutor}>
@@ -54,8 +71,6 @@ export default function Thread({ study, onDispute }: Props) {
             <p className={styles.text}>{card.text}</p>
           </div>
         );
-      case "user":
-        return <div className={styles.user}>{card.text}</div>;
       case "grade":
         return <GradeCard card={card} onDispute={onDispute} />;
       case "lesson":
@@ -87,20 +102,6 @@ export default function Thread({ study, onDispute }: Props) {
 
   return (
     <main aria-label="Study thread" className={styles.main}>
-      {study.open && (
-        <div className={styles.bar}>
-          <div className={styles.barInner}>
-            <button
-              type="button"
-              onClick={study.end}
-              disabled={waiting === null}
-              className={`${styles.endButton} hov`}
-            >
-              End session
-            </button>
-          </div>
-        </div>
-      )}
       <div className={styles.thread}>
         {cards.map((card, i) => (
           <Fragment key={card.id}>{render(card, i)}</Fragment>

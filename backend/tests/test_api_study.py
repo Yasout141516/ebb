@@ -10,12 +10,14 @@ from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+import psycopg
 from fastapi.sse import format_sse_event
 from langgraph.checkpoint.memory import InMemorySaver
 
 from ebb.api.app import create_app
 from ebb.api.services import NoTutor, Services
 from ebb.api.sse import event_stream
+from ebb.db.pool import DATABASE_DOWN
 from ebb.graph.build import build_graph
 from ebb.llm.quota import CappedTutor, UserQuotaExceeded
 from ebb.llm.tutor import EXHAUSTED_NOTICE, AllProvidersExhausted, Tutor
@@ -391,13 +393,22 @@ def test_a_tutor_failure_escaping_the_graph_sends_an_error_event_with_its_notice
     assert events[-1] == ("error", {"notice": EXHAUSTED_NOTICE})
 
 
+def test_a_database_failure_is_a_notice_the_learner_can_retry():
+    services = replace(make_services(), sessions=_Failing(psycopg.OperationalError("gone")))
+    subject_id = make_subject(services.store, USER, concepts=2)
+
+    _, events = _start(client(services), subject_id)
+
+    assert events[-1] == ("error", {"notice": DATABASE_DOWN})
+
+
 def test_an_unexpected_failure_still_ends_the_stream():
     services = replace(make_services(), sessions=_Failing(RuntimeError("bug")))
     subject_id = make_subject(services.store, USER, concepts=2)
 
     _, events = _start(client(services), subject_id)
 
-    assert events[-1] == ("error", {"error": "Something went wrong — try again."})
+    assert events[-1] == ("error", {"notice": "Something went wrong — try again."})
 
 
 def test_a_key_error_is_a_failure_not_a_404_before_or_during_the_stream():
@@ -407,7 +418,7 @@ def test_a_key_error_is_a_failure_not_a_404_before_or_during_the_stream():
 
         _, events = _start(client(services), subject_id)
 
-        assert events[-1] == ("error", {"error": "Something went wrong — try again."})
+        assert events[-1] == ("error", {"notice": "Something went wrong — try again."})
         assert len(events) == (2 if at_once else 3)  # started, [step], error
 
 

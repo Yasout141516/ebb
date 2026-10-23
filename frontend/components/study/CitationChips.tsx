@@ -7,13 +7,20 @@ import styles from "./CitationChips.module.css";
 /** A citation the learner can open: one with a label and a quote. */
 const usable = (c: Citation) => c.label.trim() !== "" && c.quote.trim() !== "";
 
-/** The citations a card shows: notes first, then the web, numbered on from 1 across both. */
+/** The citations a card shows: the usable ones, notes first, then the web. */
 export function shownCitations(citations: Citation[]): Citation[] {
   const valid = citations.filter(usable);
   return [...valid.filter((c) => c.kind !== "web"), ...valid.filter((c) => c.kind === "web")];
 }
 
-/** The "Sources" row of numbered chips; a chip opens its label and quoted sentence. */
+/** A chip's text, in the prototype's style: "Notes p.12", "Notes § TTL", "Notes", or the site. */
+function chipLabel(c: Citation): string {
+  if (c.kind === "web") return c.name || c.label;
+  if (c.page !== null) return `Notes p.${c.page}`;
+  return c.heading ? `Notes § ${c.heading}` : "Notes";
+}
+
+/** The "Sources" row of chips; a chip opens its label and quoted sentence. */
 export default function CitationChips({ citations }: { citations: Citation[] }) {
   const [open, setOpen] = useState<number | null>(null);
   const chips = useRef<(HTMLButtonElement | null)[]>([]);
@@ -43,7 +50,7 @@ export default function CitationChips({ citations }: { citations: Citation[] }) 
           title={`${c.kind === "web" ? "From the web" : "From your notes"} · ${c.label}`}
           className={`${styles.chip} hov`}
         >
-          [{i + 1}]
+          [{chipLabel(c)}]
         </button>
       ))}
       {current && (

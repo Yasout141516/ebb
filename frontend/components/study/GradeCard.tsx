@@ -7,13 +7,13 @@ import styles from "./GradeCard.module.css";
 const NAME: Record<GradeValue, string> = { correct: "Correct", partial: "Partial", incorrect: "Incorrect" };
 const RANK: Record<GradeValue, number> = { incorrect: 0, partial: 1, correct: 2 };
 
-/** A re-check's outcome in the CLI's words (backend ui.dispute_line). */
+/** A re-check's outcome in the CLI's words (backend ui.dispute_line), the failure in the spec's. */
 export function disputeLine(result: DisputeResult): string {
   switch (result.outcome) {
     case "refused":
       return "Only short-answer grades from this session can be disputed.";
     case "failed":
-      return "Couldn't re-check right now — the grade stands. Try again with d.";
+      return "Couldn't re-check right now — the grade stands.";
     case "upheld":
       return `Re-check: the grade stands — ${result.explanation}`;
     case "voided":

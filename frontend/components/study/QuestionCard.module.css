@@ -32,6 +32,30 @@
   color: var(--ink-3);
 }
 
+/* A short answer, as sent: tpl-Workspace isShort's "Your answer" box. */
+.answer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.answerLabel {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.answerText {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-size: 15px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .top {
   display: flex;
   justify-content: space-between;

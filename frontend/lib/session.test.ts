@@ -10,6 +10,7 @@ import {
   forgetThread,
   loadThread,
   rememberThread,
+  restored,
   saveThread,
   waitingQuestion,
 } from "./session";
@@ -108,10 +109,17 @@ describe("the thread", () => {
     const q = waitingQuestion(cards)!;
     cards = answered(cards, { attempt_id: "a1", text: "62", choice: 1 });
     expect(waitingQuestion(cards)).toBeNull();
-    expect(cards.at(-1)).toMatchObject({ kind: "user", text: "62" });
+    expect(cards.at(-1)).toMatchObject({ kind: "question", answer: { text: "62", choice: 1 } });
+    expect(cards).toHaveLength(2); // no separate bubble
     expect(cards.find((c) => c.kind === "grade")).toMatchObject({ canDispute: false });
     cards = applyTurn(cards, turn({ number: 3, feedback: grade("correct") }));
     expect(cards.find((c) => c.id === q.id)).toMatchObject({ result: "correct" });
+  });
+
+  it("puts cards back as they were when a reply is refused", () => {
+    const before = applyTurn([], turn({ feedback: grade(), can_dispute: true }));
+    const after = answered(before, { attempt_id: "a1", text: "62", choice: 1 });
+    expect(restored(after, before)).toEqual(before);
   });
 
   it("ignores the waiting question coming back on a reconnect", () => {
@@ -149,7 +157,7 @@ describe("the thread", () => {
     let cards = applyTurn([], turn({ feedback: grade(), can_dispute: true }));
     cards = answered(cards, { attempt_id: "a1", text: "62", choice: 1 });
     cards = applyFinished(cards, finished);
-    expect(kinds(cards)).toEqual(["grade", "question", "user", "grade", "notice", "summary"]);
+    expect(kinds(cards)).toEqual(["grade", "question", "grade", "notice", "summary"]);
     expect(cards.filter((c) => c.kind === "grade").every((c) => !c.canDispute)).toBe(true);
   });
 });

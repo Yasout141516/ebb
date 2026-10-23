@@ -73,10 +73,27 @@ describe("QuestionCard", () => {
     expect(screen.queryByRole("button", { name: "Check answer" })).not.toBeInTheDocument();
   });
 
-  it("shows a short-answer question without options", () => {
+  it("tags the chosen option as the learner's answer from the moment it is sent", () => {
+    render(
+      <QuestionCard
+        card={mcq({ answer: { attempt_id: "a1", text: "126", choice: 3 } })}
+        active={false}
+        onChoose={() => {}}
+      />,
+    );
+    expect(screen.getByRole("radio", { name: /126/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /126/ })).toHaveAccessibleName("126, your answer");
+  });
+
+  it("shows a short-answer question without options, then the answer inside it", () => {
     const question = { ...mcq().question, type: "short" as const, options: [], source_line: null };
-    render(<QuestionCard card={mcq({ question })} active onChoose={() => {}} />);
+    const { rerender } = render(<QuestionCard card={mcq({ question })} active onChoose={() => {}} />);
     expect(screen.getByText("Short answer · Subnetting · Q2")).toBeInTheDocument();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByText("Your answer")).not.toBeInTheDocument();
+    const answer = { attempt_id: "a1", text: "Caching saves the full walk.", choice: null };
+    rerender(<QuestionCard card={mcq({ question, answer })} active={false} onChoose={() => {}} />);
+    expect(screen.getByText("Your answer")).toBeInTheDocument();
+    expect(screen.getByText("Caching saves the full walk.")).toBeInTheDocument();
   });
 });

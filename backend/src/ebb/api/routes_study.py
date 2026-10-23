@@ -138,6 +138,8 @@ def _items(
 
 
 def _failure(error: Exception) -> Sse:
+    """The `error` event: {error} only for a configuration problem (nothing to retry);
+    {notice} for a failure worth trying again."""
     match error:
         case TutorUnavailable():
             return "error", {"notice": error.notice}
@@ -145,10 +147,10 @@ def _failure(error: Exception) -> Sse:
             return "error", {"error": str(error)}
         case psycopg.Error():
             log.error("study run failed: database error", exc_info=error)
-            return "error", {"error": DATABASE_DOWN}
+            return "error", {"notice": DATABASE_DOWN}
         case _:  # the traceback goes to the log
             log.error("study run failed", exc_info=error)
-            return "error", {"error": SOMETHING_WRONG}
+            return "error", {"notice": SOMETHING_WRONG}
 
 
 def _sse(services: Services, event: Event) -> Sse:

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import Composer from "./Composer";
@@ -21,6 +21,17 @@ describe("Composer", () => {
     await userEvent.keyboard("{Enter}");
     expect(onSend).toHaveBeenCalledWith("Caching saves time.\nTTL decides.");
     expect(box).toHaveValue("");
+  });
+
+  it("ignores Enter while an input method is composing", () => {
+    const onSend = vi.fn();
+    render(<Composer enabled onSend={onSend} />);
+    const box = screen.getByLabelText("Your answer");
+    fireEvent.change(box, { target: { value: "にほん" } });
+    fireEvent.keyDown(box, { key: "Enter", isComposing: true });
+    expect(onSend).not.toHaveBeenCalled();
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onSend).toHaveBeenCalledWith("にほん");
   });
 
   it("sends with the button, trimmed", async () => {

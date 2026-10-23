@@ -37,24 +37,25 @@ const card = (over: Partial<Model> = {}): Model => ({
 });
 
 describe("GradeCard", () => {
-  it("numbers notes then web chips 1..n and never shows an empty chip", () => {
+  it("labels chips as the prototype does, notes before web, and never shows an empty chip", () => {
     const citations = [
-      cite({ kind: "web", ref: "w1", label: "cloudflare.com · What is DNS?", quote: "Resolvers cache." }),
+      cite({ kind: "web", ref: "w1", label: "cloudflare.com · What is DNS?", quote: "Resolvers cache.", name: "cloudflare.com" }),
       cite({ ref: "c1" }),
       cite({ ref: "c2", label: "", quote: "No label." }),
-      cite({ ref: "c3", label: "networks.md · § TTL", page: null, quote: "  " }),
-      cite({ ref: "c4", label: "networks.md · § TTL", page: null, quote: "Each record carries a TTL." }),
+      cite({ ref: "c3", label: "networks.md · § TTL", page: null, heading: "TTL", quote: "  " }),
+      cite({ ref: "c4", label: "networks.md · § TTL", page: null, heading: "TTL", quote: "Each record carries a TTL." }),
+      cite({ ref: "c5", label: "notes.txt", page: null, quote: "Resolvers cache answers." }),
     ];
     render(<GradeCard card={card({ grade: grade({ citations }) })} onDispute={() => {}} />);
-    const chips = screen.getAllByRole("button", { name: /^\[\d+\]$/ });
-    expect(chips.map((c) => c.textContent)).toEqual(["[1]", "[2]", "[3]"]);
+    const chips = screen.getAllByRole("button", { name: /^\[.+\]$/ });
+    expect(chips.map((c) => c.textContent)).toEqual(["[Notes p.12]", "[Notes § TTL]", "[Notes]", "[cloudflare.com]"]);
     expect(chips[0]).toHaveAccessibleDescription("From your notes · CSE321_Wk1-6.pdf · p. 12");
-    expect(chips[2]).toHaveAccessibleDescription("From the web · cloudflare.com · What is DNS?");
+    expect(chips[3]).toHaveAccessibleDescription("From the web · cloudflare.com · What is DNS?");
   });
 
   it("opens a popover with the label and the quote, and no link", async () => {
     render(<GradeCard card={card({ grade: grade({ citations: [cite({})] }) })} onDispute={() => {}} />);
-    await userEvent.click(screen.getByRole("button", { name: "[1]" }));
+    await userEvent.click(screen.getByRole("button", { name: "[Notes p.12]" }));
     const popover = screen.getByRole("dialog", { name: "Source snippet" });
     expect(within(popover).getByText("CSE321_Wk1-6.pdf · p. 12")).toBeInTheDocument();
     expect(popover).toHaveTextContent("“A recursive resolver caches each answer it receives.”");
@@ -103,7 +104,7 @@ describe("GradeCard", () => {
       "Re-check complete. Re-check: raised to Correct — Subnetting back to ●●●○○ level 3.",
     );
     expect(screen.getByRole("article", { name: "Grade: Correct" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "[1]" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "[Notes p.12]" })).toHaveLength(1);
   });
 
   it("words every re-check outcome as the CLI does", () => {
@@ -111,7 +112,7 @@ describe("GradeCard", () => {
     expect(screen.getByText("Only short-answer grades from this session can be disputed.")).toBeInTheDocument();
     expect(screen.queryByText("Re-check complete.")).not.toBeInTheDocument();
     rerender(<GradeCard card={card({ dispute: { outcome: "failed" } })} onDispute={() => {}} />);
-    expect(screen.getByText("Couldn't re-check right now — the grade stands. Try again with d.")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't re-check right now — the grade stands.")).toBeInTheDocument();
     const base = { original_grade: "correct" as const, citations: [], concept: "DNS", stage: 1 };
     rerender(
       <GradeCard

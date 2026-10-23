@@ -136,7 +136,7 @@ describe("Thread", () => {
     expect(screen.getByText("Multiple choice · Subnetting · Q1")).toBeInTheDocument();
   });
 
-  it("sends an MCQ answer as a bubble, and Retry re-sends the same attempt", async () => {
+  it("keeps an MCQ answer locked in its card, and Retry re-sends the same attempt", async () => {
     await startedAt(mcq());
     await userEvent.keyboard("2{Enter}");
     const reply = await lastStream();
@@ -145,10 +145,13 @@ describe("Thread", () => {
     expect(sent.driver).toBe("drv-1");
     expect(sent.reply.answer).toBe("2");
     expect(sent.reply.attempt_id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(screen.getByText("62", { selector: "div" })).toBeInTheDocument();
+    const chosen = screen.getByRole("radio", { name: "62, your answer" });
+    expect(chosen).toBeChecked();
+    expect(chosen).toBeDisabled();
 
     await reply.fail(new ApiError(200, CUT_OFF));
     expect(screen.getByRole("alert")).toHaveTextContent(CUT_OFF);
+    expect(screen.getByRole("button", { name: "End session" })).toBeEnabled();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     const again = await lastStream();
     expect(streams).toHaveLength(3);
@@ -156,15 +159,41 @@ describe("Thread", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("shows a tutor failure in the stream as the error card with Retry", async () => {
+  it("shows a failure in the stream as the error card with Retry, whatever its words", async () => {
     await startedAt(short());
     await userEvent.type(screen.getByLabelText("Your answer"), "Speed.{Enter}");
     const reply = await lastStream();
-    reply.emit("error", { notice: EXHAUSTED });
+    const down = "Can't reach the database. Is it running? Try: docker compose up -d";
+    reply.emit("error", { notice: down });
     await reply.end();
-    expect(screen.getByRole("alert")).toHaveTextContent(EXHAUSTED);
+    expect(screen.getByRole("alert")).toHaveTextContent(down);
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect((await lastStream()).body).toEqual(reply.body);
+  });
+
+  it("shows the busy card when another tab took the session over", async () => {
+    await startedAt(mcq());
+    await userEvent.keyboard("1{Enter}");
+    const reply = await lastStream();
+    await reply.fail(new ApiError(409, "That session is open in another tab or terminal."));
+    expect(screen.getByText("That session is open in another tab or terminal.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "End session" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+    expect(postJson).toHaveBeenCalledWith("/sessions/t1/discard", undefined, expect.anything());
+    expect((await lastStream()).path).toBe("/subjects/s1/session");
+  });
+
+  it("gives a refused answer back to its question, without a Retry that can't succeed", async () => {
+    await startedAt(short());
+    await userEvent.type(screen.getByLabelText("Your answer"), "Speed.{Enter}");
+    const reply = await lastStream();
+    await reply.fail(new ApiError(422, "Something about the answer."));
+    expect(screen.getByRole("alert")).toHaveTextContent("Something about the answer.");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Your answer", { selector: "span" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Your answer")).toBeEnabled();
   });
 
   it("shows a configuration error full width", async () => {
@@ -233,6 +262,37 @@ describe("Thread", () => {
     await sent.end();
     expect(screen.getByText(/Re-check: raised to Correct — Subnetting back to ●●●○○ level 3\./)).toBeInTheDocument();
     expect(screen.getAllByText("Multiple choice · Subnetting · Q1")).toHaveLength(1);
+  });
+
+  it("puts a refused dispute's card back as it was, with the error shown", async () => {
+    function Disputing() {
+      const study = useStudy("s1");
+      return <Thread study={study} onDispute={(id) => study.dispute(id, "other", "")} />;
+    }
+    render(<Disputing />);
+    const start = await lastStream();
+    start.emit("started", { thread_id: "t1", greeting: "Hello." });
+    start.emit("turn", {
+      payload: mcq({
+        can_dispute: true,
+        feedback: {
+          value: "partial",
+          explanation: "Close.",
+          misconception: null,
+          claims: [],
+          citations: [],
+          general_knowledge: false,
+        },
+      }),
+    });
+    await start.end();
+    await userEvent.click(screen.getByRole("button", { name: "Dispute grade" }));
+    await (await lastStream()).fail(new ApiError(404, "Not found."));
+    expect(screen.getByRole("alert")).toHaveTextContent("Not found.");
+    expect(screen.queryByText(/Dispute sent/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dispute grade" })).toBeInTheDocument();
+    const saved = JSON.parse(window.sessionStorage.getItem("ebb-thread:t1")!) as Card[];
+    expect(saved.find((c) => c.kind === "grade")).toMatchObject({ dispute: null, canDispute: true });
   });
 
   it("offers Retry on a failed grade, sending the same answer to the question it brought back", async () => {
@@ -312,7 +372,8 @@ describe("Thread", () => {
     start.emit("turn", { payload: short() });
     await start.end();
     await userEvent.type(screen.getByLabelText("Your answer"), "Speed.{Enter}");
-    expect(screen.getByText("Speed.")).toBeInTheDocument();
+    const card = screen.getByRole("article", { name: "Short-answer question" });
+    expect(card).toHaveTextContent("Your answerSpeed.");
     const reply = await lastStream();
     reply.emit("turn", {
       payload: mcq({

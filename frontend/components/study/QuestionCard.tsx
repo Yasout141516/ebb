@@ -25,6 +25,12 @@ export default function QuestionCard({ card, active, onChoose }: Props) {
         <span className={styles.label}>{label}</span>
         <h3 className={styles.prompt}>{question.prompt}</h3>
         {source}
+        {card.answer && (
+          <div className={styles.answer}>
+            <span className={styles.answerLabel}>Your answer</span>
+            <p className={styles.answerText}>{card.answer.text}</p>
+          </div>
+        )}
       </article>
     );
   }
@@ -91,6 +97,7 @@ function Choice({
               name={`question-${card.id}`}
               checked={chosen === i}
               onChange={() => setPick(i)}
+              aria-label={answer && i === chosen ? `${text}, your answer` : text}
               disabled={locked}
               className={styles.radio}
             />
@@ -98,7 +105,7 @@ function Choice({
               {i + 1}
             </span>
             <span className={styles.text}>{text}</span>
-            <span className={styles.tag}>{i === chosen && card.result ? "Your answer" : ""}</span>
+            <span className={styles.tag}>{answer && i === chosen ? "Your answer" : ""}</span>
           </label>
         ))}
       </fieldset>

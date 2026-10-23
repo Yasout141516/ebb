@@ -27,7 +27,6 @@ export type GradeCard = {
 export type Card =
   | { kind: "day"; id: string; text: string }
   | { kind: "tutor"; id: string; text: string }
-  | { kind: "user"; id: string; text: string }
   | GradeCard
   | { kind: "lesson"; id: string; lesson: Lesson }
   | { kind: "notice"; id: string; text: string }
@@ -170,11 +169,16 @@ export function applyTurn(cards: Card[], payload: TurnPayload): Card[] {
   return [...before, ...added, questionCard(payload)];
 }
 
-/** The learner answered the waiting question: it locks, and the answer is their bubble. */
+/** The learner answered the waiting question: it locks, holding their answer. */
 export function answered(cards: Card[], answer: Answer): Card[] {
   const waiting = waitingQuestion(cards);
-  const marked = closeDisputes(cards).map((c) => (c === waiting ? { ...c, answer } : c));
-  return [...marked, { kind: "user", id: uuid(), text: answer.text }];
+  return closeDisputes(cards).map((c) => (c === waiting ? { ...c, answer } : c));
+}
+
+/** Put `originals` back in place of the cards with their ids (a reply the API refused). */
+export function restored(cards: Card[], originals: Card[]): Card[] {
+  const byId = new Map(originals.map((c) => [c.id, c]));
+  return cards.map((c) => byId.get(c.id) ?? c);
 }
 
 /** A dispute was sent for a grade card: it shows the re-check running. */

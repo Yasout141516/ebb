@@ -15,6 +15,7 @@ import {
   loadThread,
   type QuestionCard,
   rememberThread,
+  restored,
   saveThread,
   uuid,
   waitingQuestion,
@@ -122,9 +123,9 @@ export default function useStudy(subjectId: string): Study {
         break;
       case "error": {
         setStep(null);
+        // R33: {notice} is worth trying again; {error} is the tutor's setup, shown full width.
         const data = event.data as StreamError;
         if ("notice" in data) setError({ message: data.notice, retry });
-        else if (data.error === SOMETHING_WRONG) setError({ message: data.error, retry });
         else setFatal(data.error);
         break;
       }
@@ -132,8 +133,9 @@ export default function useStudy(subjectId: string): Study {
   }
 
   /**
-   * POST and read the events. `refused` handles a 404 or 409 answer itself (true: handled);
-   * any other failure becomes the error card, whose Retry runs `retry`.
+   * POST and read the events. A refusal (4xx) goes to `refused` first, which returns true
+   * if it dealt with it; otherwise it shows as the error card, without a Retry that would
+   * only be refused again. Any other failure's error card retries with `retry`.
    */
   async function stream(
     path: string,
@@ -146,7 +148,10 @@ export default function useStudy(subjectId: string): Study {
       await streamPost(path, body, (e) => onEvent(e, retry), signal);
     } catch (e) {
       if (signal.aborted) return;
-      if (refused && e instanceof ApiError && (e.status === 404 || e.status === 409) && refused(e)) return;
+      if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
+        if (!refused?.(e)) setError({ message: e.message, retry: null });
+        return;
+      }
       setError({ message: messageOf(e), retry });
     } finally {
       settle(signal);
@@ -165,7 +170,8 @@ export default function useStudy(subjectId: string): Study {
   /** Carry on with a session; `silent`: this tab's own, which may have ended meanwhile. */
   function reconnect(threadId: string, silent: boolean) {
     const retry = () => reconnect(threadId, silent);
-    const gone = () => {
+    const gone = (e: ApiError) => {
+      if (e.status !== 404 && e.status !== 409) return false;
       forgetThread(subjectId);
       thread.current = null;
       setCards([]);
@@ -245,30 +251,54 @@ export default function useStudy(subjectId: string): Study {
     void discardAndStart(old);
   }
 
-  /** Send a reply to the open session; Retry sends exactly the same reply again. */
-  function reply(body: Record<string, unknown>) {
+  /** Another tab or terminal took the session over: only Start fresh is left. */
+  function takenOver(threadId: string) {
+    const last = cards.findLast((c) => c.kind === "question");
+    forgetThread(subjectId);
+    thread.current = null;
+    setOffer({
+      thread_id: threadId,
+      concept: last?.concept ?? "",
+      number: last?.number ?? 1,
+      last_active_at: new Date().toISOString(),
+      busy: true,
+    });
+  }
+
+  /**
+   * Send a reply to the open session; Retry sends exactly the same reply again. If the API
+   * refuses it, the cards it changed (`originals`, as they were before) are put back.
+   */
+  function reply(body: Record<string, unknown>, originals: Card[] = []) {
     const threadId = thread.current;
     if (!threadId) return;
     const sent = { driver: driverId(), reply: body };
-    const send = () => void stream(`/sessions/${threadId}/reply`, sent, send);
+    const refused = (e: ApiError) => {
+      setCards((c) => restored(c, originals));
+      if (e.status !== 409) return false;
+      takenOver(threadId);
+      return true;
+    };
+    const send = () => void stream(`/sessions/${threadId}/reply`, sent, send, refused);
     send();
   }
 
   const finished = cards.some((c) => c.kind === "summary");
-  const waiting = running || error ? null : waitingQuestion(cards);
+  const waiting = running || offer ? null : waitingQuestion(cards);
 
   function answer(text: string, choice: number | null) {
     if (!waiting) return;
     const shown = choice === null ? text : waiting.question.options[choice];
     const attempt = { attempt_id: uuid(), text: shown, choice };
+    const changed = cards.filter((c) => c === waiting || (c.kind === "grade" && c.canDispute));
     setCards((c) => answered(c, attempt));
-    reply({ attempt_id: attempt.attempt_id, answer: choice === null ? text : String(choice + 1) });
+    reply({ attempt_id: attempt.attempt_id, answer: choice === null ? text : String(choice + 1) }, changed);
   }
 
   function dispute(gradeId: string, reason: DisputeReason, explanation: string) {
     if (running) return;
     setCards((c) => disputeSent(c, gradeId));
-    reply({ dispute: { id: uuid(), reason, explanation } });
+    reply({ dispute: { id: uuid(), reason, explanation } }, cards.filter((c) => c.id === gradeId));
   }
 
   function end() {
