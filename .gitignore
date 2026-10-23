@@ -4,3 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 notes/
+node_modules/
+.next/
+test-results/
+playwright-report/

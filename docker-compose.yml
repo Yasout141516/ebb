@@ -51,5 +51,12 @@ services:
       DATABASE_URL: postgresql://ebb:ebb@db:5432/ebb
     init: true
 
+  web:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
 volumes:
   ebb-pgdata:
