@@ -2,7 +2,7 @@
 
 from bisect import bisect_right
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -89,8 +89,13 @@ def build_progress(
                 stage=stage,
                 concepts=[
                     StagedConcept(name=c.name, next_review_at=c.next_review_at)
-                    for c in concepts
-                    if c.stage == stage
+                    for c in sorted(
+                        (c for c in concepts if c.stage == stage),
+                        key=lambda c: (
+                            c.next_review_at or datetime.max.replace(tzinfo=UTC),
+                            c.name,
+                        ),
+                    )
                 ],
             )
             for stage in range(1, MAX_STAGE + 1)

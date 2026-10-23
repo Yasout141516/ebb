@@ -1,9 +1,11 @@
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from ebb import mastery, progress
-from ebb.domain import Answer, GradeValue
+from ebb.api.routes_progress import build_progress
+from ebb.domain import Answer, Concept, GradeValue
 from tests.api_support import NOW, USER, client, make_services
 
 
@@ -100,19 +102,19 @@ def test_progress_average_is_null_with_nothing_studied():
 def test_progress_stages_group_concepts():
     services = make_services()
     subject = _subject(services, concepts=[("A", "a"), ("B", "b"), ("C", "c"), ("D", "d")])
-    for name, stage in [("A", 1), ("B", 3), ("C", 3)]:
+    for name, stage, due in [("A", 1, -1), ("B", 3, 2), ("C", 3, -1), ("D", 3, -1)]:
         concept = _concept(services, name)
         services.store.concepts[concept.id] = (
             USER,
-            replace(concept, stage=stage, next_review_at=NOW - timedelta(days=1)),
+            replace(concept, stage=stage, next_review_at=NOW + timedelta(days=due)),
         )
     body = _get(services, subject)
     assert [s["stage"] for s in body["stages"]] == [1, 2, 3, 4, 5]
     by_stage = {s["stage"]: [c["name"] for c in s["concepts"]] for s in body["stages"]}
     assert by_stage[1] == ["A"]
     assert by_stage[2] == []
-    assert sorted(by_stage[3]) == ["B", "C"]
-    assert sorted(d["name"] for d in body["due"]) == ["A", "B", "C"]
+    assert by_stage[3] == ["C", "D", "B"]  # soonest first, then by name
+    assert sorted(d["name"] for d in body["due"]) == ["A", "C", "D"]
 
 
 def test_progress_chart_now_point_matches_concepts_route():
@@ -140,3 +142,49 @@ def test_progress_of_another_users_subject_is_not_found():
     other = services.store.create_subject(USER, "Mine", [])
     response = client(replace(services, user_id=uuid4())).get(f"/subjects/{other}/progress")
     assert response.status_code == 404
+
+
+def test_build_progress_follows_local_days_in_dhaka():
+    dhaka = ZoneInfo("Asia/Dhaka")
+    now = datetime(2026, 10, 23, 19, 0, tzinfo=UTC)  # 01:00 on 24 Oct in Dhaka
+    concept = Concept(uuid4(), uuid4(), "Cells", "a")
+    moments = [
+        datetime(2026, 10, 21, 17, 0, tzinfo=UTC),  # 21 Oct 23:00 in Dhaka
+        datetime(2026, 10, 21, 19, 30, tzinfo=UTC),  # 22 Oct 01:30
+        datetime(2026, 10, 22, 19, 30, tzinfo=UTC),  # 23 Oct 01:30
+    ]
+    answers = [progress.AnswerPoint(concept.id, m, GradeValue.INCORRECT) for m in moments]
+    result = build_progress([concept], answers, moments, now, dhaka)
+    # Dhaka days 21, 22, 23 (UTC would see only 21 and 22); today is the 24th.
+    assert result.streak.last14 == [False] * 10 + [True, True, True, False]
+    assert (result.streak.current, result.streak.best) == (3, 3)
+    assert result.chart.enough_days is True
+    assert result.average.since == "2026-09-24"  # 30 days before 01:00 on 24 Oct, local
+    utc = build_progress([concept], answers, moments, now, ZoneInfo("UTC"))
+    assert utc.chart.enough_days is False
+    assert utc.average.since == "2026-09-23"
+
+
+def test_build_progress_stored_state_wins_over_the_replay():
+    now = NOW
+    concept = Concept(uuid4(), uuid4(), "Cells", "a")
+    answers = [progress.AnswerPoint(concept.id, now - timedelta(days=10), GradeValue.INCORRECT)]
+    # Stored as if a week had passed since: reviewed more recently, higher stage, due now.
+    stored = replace(
+        concept,
+        stage=2,
+        last_reviewed_at=now - timedelta(days=1),
+        next_review_at=now - timedelta(hours=1),
+        review_count=2,
+    )
+    replayed = progress.replay(concept, answers)[-1][1]
+    assert mastery.tide(replayed, now) != mastery.tide(stored, now)
+    result = build_progress([stored], answers, [a.graded_at for a in answers], now, ZoneInfo("UTC"))
+    expected = mastery.tide(stored, now)
+    line = result.chart.concepts[0]
+    assert line.now == expected
+    assert line.past[-1] == (now, expected)
+    assert line.ahead[0][1] == mastery.tide(stored, now + timedelta(hours=6))
+    assert result.average.now == expected
+    assert [(d.name, d.tide) for d in result.due] == [("Cells", expected)]
+    assert [c.name for c in result.stages[1].concepts] == ["Cells"]
