@@ -1,6 +1,6 @@
 # Ebb — handoff for the next chat
 
-Last updated 2026-10-22. Read this first, then the files it points to.
+Last updated 2026-10-27. Read this first, then the files it points to.
 
 ## What Ebb is
 
@@ -9,7 +9,9 @@ you, grades answers against your own notes with cited quotes, teaches what you g
 brings concepts back before you forget them (Leitner stages + a "tide" forgetting-curve gauge).
 Code makes every decision; the LLM only generates questions, grades short answers and teaches.
 
-- Repo: https://github.com/Yasout141516/ebb (public), local `E:\ebb`, branch `main`.
+- Repo: https://github.com/Yasout141516/ebb (public), local `E:\ebb`, branch `main`. Milestone 4
+  lives on branch `m4-web-app` (worktree `E:\ebb\.claude\worktrees\m4-web-app`) until the owner
+  OKs the merge.
 - Owner's plan: `Ebb — Requirements & System Design.pdf` (6 milestones), plan reviews in
   `docs/plan-reviews.md`, clickable UI prototype `ebb-prototype.html`.
 
@@ -20,24 +22,32 @@ Code makes every decision; the LLM only generates questions, grades short answer
 | 1. Core quiz loop in the terminal (FR-1–FR-5) | Done, merged |
 | 2. Spaced review + resumable sessions (FR-6, FR-7) | Done, merged at `05c0f1f` |
 | 3. Uploads with cited answers, web questions, grade disputes, grading eval (FR-8, FR-9, NFR-2) | Done, merged to `main` and pushed on 2026-10-22 |
-| 4. FastAPI backend + Next.js frontend from the prototype | Next; brainstorm paused (see below) |
+| 4. FastAPI backend + Next.js frontend from the prototype | Built on `m4-web-app` (26 tasks); final review, `/code-review`, `/simplify` and the owner's hands-on test still to do |
 | 5. Flashcards, exam mode, PDF export, resource search (FR-10–FR-13) | Later |
 | 6. Auth (Supabase) and deployment (FR-14, NFR-13, NFR-14) | Later |
 
 ## Where things stand
 
-- **Milestone 3 is merged to `main` and pushed (2026-10-22).** 17 tasks (14 planned + Task 16
-  providers switch + Task 17 misconception cap), each reviewed, then a whole-branch review and
-  its fix wave, `/code-review` (8 fixes) and `/simplify` (11 refactors). 575 tests pass, ruff is
-  clean. The branch and its worktree were removed after the merge.
-- Every decision taken on the owner's behalf: `docs/superpowers/m3-rulings.md`.
-- **The owner will test milestone 3 hands-on once the milestone 4 frontend exists.** Until
-  then nothing needs running.
-- **The real `ebb` database is still at migration `002`.** Ebb applies pending migrations
-  automatically the first time any `ebb` command (or the API) connects, so the first run on
-  `main` will upgrade it to `003`. Back it up just before that first run:
+- **Milestone 4 is built on `m4-web-app`, not merged.** `docker compose up` starts the database,
+  the API (port 8000) and the website (http://localhost:3000): onboarding (a typed topic or
+  uploaded notes), the study workspace (questions, grades, lessons, citations, disputes, the
+  memory panel, End session) and the progress dashboard, built like `ebb-prototype.html`. Chat
+  is dropped; Flashcards/Exam are hidden until milestone 5. Checks: 808 backend tests, 191
+  frontend tests, ruff, typecheck, lint, and one browser test (`npm run e2e`) that passed on
+  2026-10-27. 38 controller rulings (R1-R38) are in the SDD ledger
+  (`.superpowers/sdd/2026-10-23-web-app/progress.md`); minor leftovers are in
+  `docs/superpowers/m4-followups.md`.
+- Milestone 3 is merged to `main` (2026-10-22). Every decision taken on the owner's behalf:
+  `docs/superpowers/m3-rulings.md`.
+- **The owner tests milestone 4 hands-on** (the spec's *Done when* list is the acceptance check).
+- **The real `ebb` database is still at migration `002`.** The API (and any `ebb` command)
+  applies pending migrations when it first connects, so the first `docker compose up` on this
+  code upgrades it to `004`. Back it up first, with nothing else connected to `ebb`
+  (`docker compose up -d db`, then):
   `docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre003 template ebb"`
-  (no other connections may be open to `ebb`).
+- Set `EBB_TIMEZONE` in `.env` (e.g. `Asia/Dhaka`): Docker defaults to UTC, while the website
+  shows dates in the browser's zone (R35). `EBB_DAILY_AI_CALLS` (default 300) caps AI calls per
+  user per day.
 - **Owner's decision 2026-10-22: Groq only for now.** Mistral is abandoned until its account has
   an active plan; the owner was advised to comment out `MISTRAL_API_KEY` in `.env`.
 - The real-data test used **`ebb_m3`**, a copy of the owner's database (created from template
@@ -48,9 +58,12 @@ Code makes every decision; the LLM only generates questions, grades short answer
   fallback today and `ebb eval build` can't run. Details in `docs/superpowers/m3-followups.md`.
 
 Key documents, newest first:
+- Milestone 4 design: `docs/superpowers/specs/2026-10-23-web-app-design.md`
+- Milestone 4 plan: `docs/superpowers/plans/2026-10-23-web-app.md`
+- Milestone 4 deferred items: `docs/superpowers/m4-followups.md`
 - Milestone 3 design: `docs/superpowers/specs/2026-10-18-uploads-citations-disputes-design.md`
 - Milestone 3 plan: `docs/superpowers/plans/2026-10-18-uploads-citations-disputes.md`
-- Milestone 3 deferred items: `docs/superpowers/m3-followups.md`
+- Milestone 3 deferred items: `docs/superpowers/m3-followups.md` (milestone 4 resolved many)
 - Milestone 2 design and plan: `docs/superpowers/specs/2026-10-16-spaced-review-design.md`,
   `docs/superpowers/plans/2026-10-16-spaced-review.md`
 - Milestone 1 design and plan: `docs/superpowers/specs/2026-10-15-core-loop-design.md`,
@@ -72,11 +85,24 @@ Key documents, newest first:
 - `llm/`: `tutor.py` (Groq primary, Mistral fallback, error classification), `schemas.py`,
   prompts in `llm/prompts/*.md`.
 - `store.py` (Store protocol, every method takes `user_id` first), `db/` (psycopg 3 PgStore,
-  SQL migrations `001`/`002`/`003`, advisory locks, full-text search over `document_chunks`).
-- `cli.py` (Typer: `new [--notes FILE]`, `add`, `study`, `status`, `eval build|run`), `ui.py` (Rich).
+  SQL migrations `001`-`004`, advisory locks, full-text search over `document_chunks`).
+- `cli.py` (Typer: `new [--notes FILE]`, `add`, `study`, `status`, `serve`, `eval build|run`),
+  `ui.py` (Rich).
+- `study.py` (`StudySessions`: the one service the CLI and the API both drive the graph through:
+  start, resume, reply, discard, heartbeat, driver leases) and `subjects.py` (creating subjects
+  from a topic or notes, adding notes, shared checks and refusal copy).
+- `api/` (FastAPI: `app.py` factory and `/health`, `routes_subjects.py`, `routes_notes.py` with
+  drafts and SSE uploads, `routes_study.py` SSE sessions, `routes_progress.py`, `schemas.py`,
+  `services.py`, `drafts.py`, `errors.py`); `progress.py` (streak, average tide, chart data).
+- `frontend/` (Next.js 16, React 19, CSS Modules, no UI library): `app/` pages (`new`,
+  `study/[id]`, `progress/[id]`, `subjects/[id]/add`), `components/` (`onboarding`, `study`,
+  `progress`), `lib/` (API client, SSE reader, types, session reducer), `e2e/` (Playwright).
+  All data is fetched in the browser from `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
 
 Tests in `backend/tests/` (fakes: `MemoryStore`, `FakeTutor`, `FakeWebSearch`; test PDFs built
-with reportlab). No test calls a real model or Tavily. CI: `.github/workflows/ci.yml`.
+with reportlab). No test calls a real model or Tavily. CI: `.github/workflows/ci.yml` (backend,
+frontend, e2e and docker jobs). `backend/tests/e2e_server.py` is the API the browser test runs
+against (memory store, fake tutor, no database).
 
 The grading eval runs with `ebb eval build` (a writer model generates 50 labelled cases into
 `backend/evals/grading.jsonl`) and `ebb eval run` (the primary model grades them; a dated
@@ -88,9 +114,11 @@ by Groq `qwen/qwen3.8-27b` (Mistral, the intended writer, is blocked) and graded
 
 ```powershell
 cd E:\ebb
-docker compose up -d                       # Postgres 18.6 (container ebb-db-1)
-docker compose run --rm ebb study          # or: new "<topic>" [--notes notes/x.pdf], add, status
+docker compose up                          # database, API (8000) and website: http://localhost:3000
+docker compose up -d db                    # only Postgres 18.6 (container ebb-db-1), for tests
+docker compose run --rm ebb study          # the terminal app: new "<topic>" [--notes x.pdf], add, status
 cd backend; $env:EBB_REQUIRE_DB=1; $env:LANGGRAPH_STRICT_MSGPACK='true'; uv run pytest -q
+cd frontend; npm test; npm run typecheck; npm run lint; npm run e2e   # e2e: npx playwright install chromium once
 ```
 
 - `.env` lives at `E:\ebb\.env` (git-ignored). Never print or commit it.
@@ -98,7 +126,8 @@ cd backend; $env:EBB_REQUIRE_DB=1; $env:LANGGRAPH_STRICT_MSGPACK='true'; uv run 
   - `MISTRAL_API_KEY` (optional fallback, and the `eval build` writer; leave it out while the
     Mistral account is inactive, or every Groq failure also waits on a Mistral 429).
   - `TAVILY_API_KEY` (optional: web questions when Ebb repeats itself).
-  - Optional: `EBB_TIMEZONE` (e.g. `Asia/Dhaka`; Docker defaults to UTC), `EBB_PRIMARY_MODEL`,
+  - Optional: `EBB_TIMEZONE` (e.g. `Asia/Dhaka`; Docker defaults to UTC), `EBB_DAILY_AI_CALLS`
+    (default 300), `EBB_WEB_ORIGIN` (default `http://localhost:3000`), `EBB_PRIMARY_MODEL`,
     `EBB_FALLBACK_MODEL`.
 - Default models: `openai/gpt-oss-120b` on Groq (primary), `mistral-medium-latest` (fallback).
   Providers retire models; if one disappears, Ebb exits with
@@ -133,31 +162,19 @@ cd backend; $env:EBB_REQUIRE_DB=1; $env:LANGGRAPH_STRICT_MSGPACK='true'; uv run 
   concepts plainly when asked (they have asked about Docker, Compose, volumes, tide vs stage).
 - At the end of each milestone, list every decision you made on their behalf ("Rulings I made").
 
-## Next steps (milestone 4)
+## Next steps
 
-1. **Start here:** resume the milestone 4 brainstorm (`superpowers:brainstorming`), paused on
-   2026-10-20 while milestone 3 finished. The owner's decisions so far — don't ask again:
-   - Runs only on the owner's PC: `docker compose up` starts the database, the API and the
-     website on localhost:3000. No online deploy until sign-in (milestone 6).
-   - Screens: onboarding (adding a subject or notes matters most), the study workspace (Quiz)
-     and the progress dashboard. **Chat mode is dropped.** Flashcards/Exam stay in milestone 5,
-     sign-in in milestone 6.
-   - Styling: port the prototype's CSS (variables + styles) into CSS Modules — no
-     Tailwind/shadcn.
-   - Citation popover: **no** "Open page N in notes" link (uploaded files aren't stored; only
-     their extracted text is).
-   - Still to cover: play back the onboarding guesses (single dev user, the CLI keeps working,
-     Flashcards/Exam buttons hidden — not yet confirmed), then the study workspace, the
-     dashboard, streaming (NFR-1), and the "Before the milestone 4 API" items in
-     `docs/superpowers/m2-followups.md` and `docs/superpowers/m3-followups.md` (the graph
-     refactors deferred from `/simplify` are listed there).
-   Then the usual flow: written design → `writing-plans` → subagent-driven development in a
-   new worktree → `/code-review` → `/simplify` → merge with the owner's OK.
-2. Before the first `ebb` run on `main` (including milestone 4's API against the real
-   database): back up `ebb` (command above); the run then migrates it to `003`.
-3. When Mistral's account is active: re-test it, then rebuild the eval set with Mistral as the
+1. **The owner tests milestone 4 hands-on** against the spec's *Done when* list (back up `ebb`
+   first, see above), and says what to change.
+2. Merge: whole-branch review, `/code-review` and `/simplify` (after the review fixes, not in
+   parallel), a message-only rewrite of the commits that carry "Claude Sonnet 5.5" instead of
+   the required "Claude Opus 5.5" trailer (ruling R17), then `finishing-a-development-branch`
+   with the owner's OK. Push only with the owner's OK.
+3. Milestone 5: flashcards, exam mode, PDF export, resource search (FR-10-FR-13). Start with
+   `superpowers:brainstorming`; the Flashcards/Exam buttons are hidden in the UI until then.
+4. When Mistral's account is active: re-test it, then rebuild the eval set with Mistral as the
    writer (`cd backend; uv run ebb eval build --force`, then `eval run`) and commit the results.
-4. Open decisions carried from the plan: the backend host for milestone 6 (Cloud Run vs Render,
+5. Open decisions carried from the plan: the backend host for milestone 6 (Cloud Run vs Render,
    see `docs/plan-reviews.md`).
-5. `docs/superpowers/m3-followups.md` also lists the safety gaps (before other people use Ebb),
-   eval improvements (stricter grading prompt, stricter writer) and terminal polish.
+6. `docs/superpowers/m3-followups.md` still lists eval improvements (stricter grading prompt,
+   stricter writer) and terminal polish; `m4-followups.md` lists the milestone 4 leftovers.

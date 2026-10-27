@@ -291,3 +291,30 @@ before milestone 6, and land E1 and E9 before any data from a second user exists
   citations failed and keeps the rest (the design said the whole batch); a retried grade keeps
   its first value; a verified quote needs at least 3 words and 12 characters; a notes file may
   yield 1–12 concepts (the design said 3–12).
+
+## Amendments in milestone 4
+
+From the milestone 4 design (`docs/superpowers/specs/2026-10-23-web-app-design.md`):
+
+- **E9: JWT verification moves to milestone 6.** With one user on localhost there is no token to
+  verify. The API takes the user id from one place (the dev-user setting today, the verified JWT
+  in milestone 6), and every store call keeps taking `user_id` first (E1).
+- **NFR-1: first visible progress within 2 s**, not "first token in about 2 s". A Server-Sent
+  Event names each step as it starts; each card appears complete (no token streaming).
+- **D3: the mode chips.** Chat is dropped, so the composer has no mode toggle. The Flashcards and
+  Exam actions are hidden (not greyed) until milestone 5.
+- **NFR-15 and the stack: CSS Modules, not shadcn/ui and Tailwind.** The prototype's CSS is ported
+  class by class. Accessibility stays WCAG AA; D6's 375 px layouts for the Workspace and the
+  Dashboard still apply.
+
+The owner's later fidelity decisions (the website is built like `ebb-prototype.html`):
+
+- **Fonts follow the prototype**: Newsreader, IBM Plex Sans and IBM Plex Mono, not the PDF's
+  Fraunces and Inter (ruling R27).
+- **Tide band labels keep D7's names** ("high tide / ebbing / low tide"), not the prototype's
+  "Strong / Steady / Fading" (R36). The streak grid shows 35 days and the dashboard has the
+  prototype's sixth "Not started" column (R37, R38).
+- Answers appear inside their question cards, as in the prototype, rather than as separate chat
+  bubbles, and citation chips use the prototype's labels ("Notes p.12", the domain) (R31, R32).
+- The website shows dates in the browser's time zone; lines the server writes use `EBB_TIMEZONE`
+  (R35).

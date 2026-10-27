@@ -11,9 +11,10 @@ routing) and the LLM only generates questions, grades and teaches.
 
 ## Status
 
-Milestone 3 of 6 is built: notes uploads with cited answers, web questions when Ebb
-repeats itself, grade disputes and a grading eval (first baseline: 70%). Next: the API
-(milestone 4).
+Milestone 4 of 6 is built: Ebb now has a website (onboarding, the study workspace and a
+progress dashboard) on top of a FastAPI backend, next to the terminal app. Milestone 3 added
+notes uploads with cited answers, web questions when Ebb repeats itself, grade disputes and a
+grading eval (first baseline: 70%). Next: flashcards and exam mode (milestone 5).
 
 ## Run it
 
@@ -21,15 +22,37 @@ You need Docker and a free Groq API key from https://console.groq.com.
 
 ```bash
 cp .env.example .env              # then put your key in GROQ_API_KEY
-docker compose up -d              # starts Postgres
+docker compose up                 # starts Postgres, the API (port 8000) and the website
+```
+
+Then open http://localhost:3000. The first start builds the images, which takes a few minutes.
+
+**First start on an existing database:** the API upgrades the `ebb` database to the newest
+migration the first time it connects. Back it up first, with nothing else connected to `ebb`
+(`docker compose up -d db` starts only the database):
+
+```bash
+docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre003 template ebb"
+```
+
+The terminal app still works, next to the website and on the same data:
+
+```bash
 docker compose run --rm ebb new "Computer Networks"
 docker compose run --rm ebb study
 docker compose run --rm ebb status
 ```
 
-Dates show in `EBB_TIMEZONE`, an IANA name such as `Asia/Dhaka` (set it in `.env`).
-Without it, Ebb running outside Docker uses the computer's time zone, or UTC if it can't tell;
-inside Docker the default is UTC.
+Settings in `.env`:
+
+- `EBB_TIMEZONE`: your IANA time zone, for example `Asia/Dhaka`. Docker defaults to UTC, which
+  can name the wrong day near midnight. The website shows dates in the browser's time zone, so
+  set this to match it: lines the server writes ("Next review: Thursday") and "due today" use it.
+  Outside Docker, Ebb uses the computer's time zone, or UTC if it can't tell.
+- `EBB_DAILY_AI_CALLS`: the most AI calls (questions, grades, lessons) one user may make per day,
+  counted in that time zone. Default 300; the website and the terminal show a clear message when
+  it is reached.
+- `EBB_WEB_ORIGIN`: the website's address, which the API allows (default `http://localhost:3000`).
 
 Ebb grades and writes with Groq (`openai/gpt-oss-120b`). Optional keys in `.env`:
 `MISTRAL_API_KEY` (free plan at https://console.mistral.ai) adds Mistral as a fallback when
@@ -48,7 +71,8 @@ docker compose run --rm ebb add notes/lecture2.pdf "Computer Networks"          
 docker compose run --rm ebb status "Computer Networks"                           # lists its sources
 ```
 
-Without Docker, pass any path (`uv run ebb add ~/lecture2.pdf`). Limits: PDF, TXT or MD,
+On the website, add notes while creating a subject or later with "Upload notes". Without Docker,
+pass any path (`uv run ebb add ~/lecture2.pdf`). Limits: PDF, TXT or MD,
 20 MB per file, 5 files per subject; scanned (image-only) PDFs are refused, so export a text
 PDF. Don't upload sensitive documents: the files' text is sent to an AI model (Groq, or
 Mistral when Groq fails) to find concepts, write questions and cite answers.
@@ -58,7 +82,8 @@ tied to your notes, it is marked as general knowledge.
 
 ### Disputes
 
-If a short-answer grade looks wrong, type `d` at the next prompt after the grade. Pick a
+If a short-answer grade looks wrong, press "Dispute grade" on the website, or type `d` at the
+next prompt in the terminal. Pick a
 reason, optionally explain, and Ebb re-checks the answer with a stricter grader. The result can
 change the grade, void the answer (it stops counting) or uphold it.
 
@@ -91,10 +116,17 @@ cd backend
 uv sync
 uv run pytest                     # database tests need the compose db
 uv run ebb study
+uv run ebb serve                  # the API on port 8000; then, in frontend/: npm install && npm run dev
 ```
 
+The website's checks run from `frontend/`: `npm test`, `npm run typecheck`, `npm run lint`, and
+`npm run e2e`, a browser test (Playwright) of onboarding, a short study session and the progress
+page against a fake tutor, so it needs no database or API key. The first time, install its
+browser with `npx playwright install chromium`.
+
 **Try spaced review now:** pretend a week has passed, so every concept whose next review
-was within the next 7 days becomes due:
+was within the next 7 days becomes due. The same statement moves the answer history and the
+sessions back too, so the progress dashboard and the streak agree:
 
 ```bash
 # Pretend a week has passed: reviews due within the next 7 days become due now
@@ -137,5 +169,5 @@ repeats a question you have already answered.
 ## Planned stack
 
 LangGraph + LangChain · Groq (primary) with a Mistral fallback · Tavily web search ·
-FastAPI · Supabase Postgres, Auth and Storage · Postgres full-text search · Next.js +
-shadcn/ui. Free tiers throughout.
+FastAPI · Supabase Postgres, Auth and Storage · Postgres full-text search · Next.js with
+CSS Modules (fonts: Newsreader and IBM Plex, as in the prototype). Free tiers throughout.

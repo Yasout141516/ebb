@@ -2,6 +2,14 @@
 
 Items found while building and reviewing milestone 3 that were deliberately left for
 later. Earlier items: [m1-followups.md](m1-followups.md), [m2-followups.md](m2-followups.md).
+Milestone 4's own leftovers: [m4-followups.md](m4-followups.md).
+
+> **Resolved in milestone 4** (struck through below): the graph refactors deferred from
+> `/simplify` (state defaults in `fill_defaults`, one candidate-run object, typed regrade result,
+> summary tallies from the store, structured citation labels, one `current_question_id`), safety
+> fencing and refusals, the per-user rate limit (`EBB_DAILY_AI_CALLS`), latest attempt by
+> `graded_at`, voided counts, the malformed dispute id, and duplicate subject names. "One retry
+> mechanism" too (Task 6).
 
 ## Providers and the eval (owner action)
 
@@ -27,24 +35,24 @@ later. Earlier items: [m1-followups.md](m1-followups.md), [m2-followups.md](m2-f
 
 ## Safety (before milestone 4/6, when other people use Ebb)
 
-- **A provider's safety refusal is treated as an ordinary failure**: it is retried and then
-  falls back to Mistral. Detect a refusal, show a clear message, and never fall back.
+- ~~**A provider's safety refusal is treated as an ordinary failure**: it is retried and then
+  falls back to Mistral. Detect a refusal, show a clear message, and never fall back.~~ *Resolved in milestone 4.*
 - **No content check of our own** on topics or uploaded notes; we rely on the providers' filters.
-- **`ebb new` topics and concept names go into prompts unfenced** (and `concepts_from_notes`
+- ~~**`ebb new` topics and concept names go into prompts unfenced** (and `concepts_from_notes`
   interpolates them un-neutralised, so a newline could break the listing). Answers and notes are
-  fenced; fence these too, and the LLM-generated question text.
-- **Per-user rate limits** for model and search calls.
+  fenced; fence these too, and the LLM-generated question text.~~ *Resolved in milestone 4.*
+- ~~**Per-user rate limits** for model and search calls.~~ *Resolved in milestone 4.*
 
 ## Correctness to fix
 
-- **Answer counts over `attempts` must exclude voided ones.** Any count or "answered prompts" query
-  that reads `attempts` has to skip answers whose dispute was voided.
-- **"Latest attempt" uses `graded_at`, not insertion order.** Two simultaneous sessions on one
-  concept could void the wrong snapshot.
-- **A malformed dispute id** raises outside the pre-check (the CLI builds the id, so only a
-  future API caller can hit it).
-- Two terminals racing `ebb new` on one name create **two subjects with the same name**: there
-  is no unique constraint on subject names.
+- ~~**Answer counts over `attempts` must exclude voided ones.** Any count or "answered prompts" query
+  that reads `attempts` has to skip answers whose dispute was voided.~~ *Resolved in milestone 4.*
+- ~~**"Latest attempt" uses `graded_at`, not insertion order.** Two simultaneous sessions on one
+  concept could void the wrong snapshot.~~ *Resolved in milestone 4.*
+- ~~**A malformed dispute id** raises outside the pre-check (the CLI builds the id, so only a
+  future API caller can hit it).~~ *Resolved in milestone 4.*
+- ~~Two terminals racing `ebb new` on one name create **two subjects with the same name**: there
+  is no unique constraint on subject names.~~ *Resolved in milestone 4.*
 
 ## Trade-offs kept on purpose
 
@@ -100,21 +108,21 @@ later. Earlier items: [m1-followups.md](m1-followups.md), [m2-followups.md](m2-f
 Found by the `/simplify` review and left out because they reshape the graph right before a
 merge. Worth doing before the API wraps the graph.
 
-- **One place that fills state defaults.** New keys are read with `state.get(key, default)` in
+- ~~**One place that fills state defaults.** New keys are read with `state.get(key, default)` in
   many nodes (for checkpoints saved by milestone 2); normalise once at the resume boundary
-  instead.
-- **One retry mechanism.** Question batches retry through a graph loop (`citation_retries`,
+  instead.~~ *Resolved in milestone 4.*
+- ~~**One retry mechanism.** Question batches retry through a graph loop (`citation_retries`,
   `citation_failures`, `citation_failing`), grades and lessons inside `_verified` with
-  per-call `keep` lambdas; unify them, ideally with the tutor returning only a citation fix.
-- **A typed regrade result** instead of the `(Grade, bool)` tuple.
-- **One candidate-run object** instead of the notes/web `generation_mode` flag threaded through
-  `generate_questions`, `verify_citations` and `search_web`.
-- **Summary tallies from the store** instead of correcting `tally` and `results` copies after a
-  dispute.
-- **Structured citation labels** (domain, title, heading, page) instead of `source_line`
-  parsing the label string that `citations.py` built.
-- **One `current_question_id`** instead of `pending_question_id` plus `retry_question`, and the
-  lesson as `{text, citations}` instead of a separate `lesson_citations` key.
+  per-call `keep` lambdas; unify them, ideally with the tutor returning only a citation fix.~~ *Resolved in milestone 4.*
+- ~~**A typed regrade result** instead of the `(Grade, bool)` tuple.~~ *Resolved in milestone 4.*
+- ~~**One candidate-run object** instead of the notes/web `generation_mode` flag threaded through
+  `generate_questions`, `verify_citations` and `search_web`.~~ *Resolved in milestone 4.*
+- ~~**Summary tallies from the store** instead of correcting `tally` and `results` copies after a
+  dispute.~~ *Resolved in milestone 4.*
+- ~~**Structured citation labels** (domain, title, heading, page) instead of `source_line`
+  parsing the label string that `citations.py` built.~~ *Resolved in milestone 4.*
+- ~~**One `current_question_id`** instead of `pending_question_id` plus `retry_question`, and the
+  lesson as `{text, citations}` instead of a separate `lesson_citations` key.~~ *Resolved in milestone 4.*
 
 ## Small leftovers from `/code-review` and its fixes
 

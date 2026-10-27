@@ -19,12 +19,17 @@ later. Earlier items: [m1-followups.md](m1-followups.md).
 
 ## Before the milestone 4 API (long-lived process)
 
-- The pool `reset` callback (`pg_advisory_unlock_all`) routes every connection return through a
-  pool worker; for a server, close the lock connection on error inside `session_lock` instead.
-- The due rule exists in `mastery.is_due` and again in SQL (`count_due`); keep them in step or
-  derive the counts from `list_concepts`.
-- Ctrl+C during startup housekeeping or `get_state` prints a traceback.
-- The resume branching in `cli.study` could become one "first graph input" decision.
+Resolved in milestone 4 unless marked open.
+
+- ~~The pool `reset` callback (`pg_advisory_unlock_all`) routes every connection return through a
+  pool worker; for a server, close the lock connection on error inside `session_lock` instead.~~
+  Resolved (Task 9).
+- ~~The due rule exists in `mastery.is_due` and again in SQL (`count_due`); keep them in step or
+  derive the counts from `list_concepts`.~~ Resolved: counts derive from `reviews_due` (Task 8).
+- Ctrl+C during startup housekeeping or `get_state` prints a traceback. **Still open** (listed in
+  [m4-followups.md](m4-followups.md)).
+- ~~The resume branching in `cli.study` could become one "first graph input" decision.~~
+  Resolved: the CLI and the API share `StudySessions` (Task 13).
 
 ## Before milestone 6 (remote database)
 
