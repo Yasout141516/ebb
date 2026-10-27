@@ -20,7 +20,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.sse import EventSourceResponse, format_sse_event
 
-from ebb.api.drafts import SOMETHING_WRONG
+from ebb.api.notices import SOMETHING_WRONG
 from ebb.api.schemas import AnswerReply, Driver, DriverId, Offer, ReplyBody, SessionOffer
 from ebb.api.services import Services, owned_subject, services_of
 from ebb.api.sse import close, event_stream

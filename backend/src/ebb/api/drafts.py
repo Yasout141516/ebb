@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 
 import psycopg
 
+from ebb.api.notices import SOMETHING_WRONG
 from ebb.config import ConfigError
 from ebb.db.pool import DATABASE_DOWN
 from ebb.domain import NewDocument
@@ -33,7 +34,6 @@ from ebb.subjects import duplicate_copy, find_note_concepts, too_many_copy
 
 DRAFT_TTL = timedelta(hours=1)
 EXPIRED = "This upload expired — add the files again."
-SOMETHING_WRONG = "Something went wrong — try again."
 
 log = logging.getLogger(__name__)
 

@@ -19,7 +19,7 @@ from fastapi.sse import format_sse_event
 from langgraph.checkpoint.memory import InMemorySaver
 
 from ebb.api.app import create_app
-from ebb.api.drafts import SOMETHING_WRONG
+from ebb.api.notices import SOMETHING_WRONG
 from ebb.api.services import NoTutor, Services
 from ebb.api.sse import event_stream
 from ebb.db.pool import DATABASE_DOWN
