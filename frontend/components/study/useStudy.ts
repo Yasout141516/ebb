@@ -33,6 +33,8 @@ const FINISHING = "Finishing your last answer…";
 /** How long a reconnect waits for that turn before offering the session instead. */
 const FINISHING_MS = 30_000;
 
+type Streaming = { refused?: (error: ApiError) => boolean; step?: string | null; resumed?: boolean };
+
 /** A failure shown as the error card; `retry` sends the failed request again. */
 export type StudyError = { message: string; retry: (() => void) | null };
 
@@ -108,7 +110,7 @@ export default function useStudy(subjectId: string): Study {
     setStep(null);
   }
 
-  function onEvent(event: SseEvent, retry: () => void) {
+  function onEvent(event: SseEvent, retry: () => void, resumed: boolean) {
     switch (event.event) {
       case "started": {
         const { thread_id, greeting } = event.data as Started;
@@ -122,7 +124,7 @@ export default function useStudy(subjectId: string): Study {
         break;
       case "turn":
         setStep(null);
-        setCards((c) => applyTurn(c, (event.data as { payload: TurnPayload }).payload));
+        setCards((c) => applyTurn(c, (event.data as { payload: TurnPayload }).payload, resumed));
         setUpdates((n) => n + 1);
         break;
       case "finished":
@@ -144,20 +146,20 @@ export default function useStudy(subjectId: string): Study {
   }
 
   /**
-   * POST and read the events. A refusal (4xx) goes to `refused` first, which returns true
-   * if it dealt with it; otherwise it shows as the error card, without a Retry that would
-   * only be refused again. Any other failure's error card retries with `retry`.
+   * POST and read the events, showing `step` until the API names one. A refusal (4xx) goes
+   * to `refused` first, which returns true if it dealt with it; otherwise it shows as the
+   * error card, without a Retry that would only be refused again. Any other failure's error
+   * card retries with `retry`. `resumed`: the request fetches the session's waiting turn.
    */
   async function stream(
     path: string,
     body: unknown,
     retry: () => void,
-    refused?: (error: ApiError) => boolean,
-    step: string | null = null,
+    { refused, step = null, resumed = false }: Streaming = {},
   ): Promise<void> {
     const signal = begin(step);
     try {
-      await streamPost(path, body, (e) => onEvent(e, retry), signal);
+      await streamPost(path, body, (e) => onEvent(e, retry, resumed), signal);
     } catch (e) {
       if (signal.aborted) return;
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
@@ -200,8 +202,11 @@ export default function useStudy(subjectId: string): Study {
       return true;
     };
     const again = silent && delay > 1_000; // already waiting: the step line stays
-    const path = `/sessions/${threadId}/resume`;
-    void stream(path, { driver: driverId() }, retry, silent ? gone : undefined, again ? FINISHING : null);
+    void stream(`/sessions/${threadId}/resume`, { driver: driverId() }, retry, {
+      refused: silent ? gone : undefined,
+      step: again ? FINISHING : null,
+      resumed: true,
+    });
   }
 
   /** Show that this tab's last turn is finishing, then carry on (`then`) `delay` ms later. */
@@ -315,7 +320,7 @@ export default function useStudy(subjectId: string): Study {
       takenOver(threadId);
       return true;
     };
-    const send = () => void stream(`/sessions/${threadId}/reply`, sent, send, refused);
+    const send = () => void stream(`/sessions/${threadId}/reply`, sent, send, { refused });
     send();
   }
 

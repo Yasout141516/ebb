@@ -147,8 +147,11 @@ const questionCard = (payload: TurnPayload): QuestionCard => ({
   result: null,
 });
 
-/** A turn's cards, in the spec's order: grade, lesson, notices, question. */
-export function applyTurn(cards: Card[], payload: TurnPayload): Card[] {
+/**
+ * A turn's cards, in the spec's order: grade, lesson, notices, question. `reconnected`: the
+ * turn the session is waiting on, fetched again rather than sent in reply to an answer.
+ */
+export function applyTurn(cards: Card[], payload: TurnPayload, reconnected = false): Card[] {
   const checking = cards.findLast((c) => c.kind === "grade" && c.dispute === "checking");
   if (payload.dispute_result && checking) {
     // The re-check's result goes on the disputed card; the question is shown again.
@@ -160,6 +163,11 @@ export function applyTurn(cards: Card[], payload: TurnPayload): Card[] {
   }
   const waiting = waitingQuestion(cards);
   if (waiting && sameQuestion(waiting, payload)) return cards; // a reconnect: already shown
+  const last = cards.findLast((c) => c.kind === "question" || c.kind === "summary");
+  if (reconnected && last?.kind === "question" && last.result === null && sameQuestion(last, payload)) {
+    // The answer sent to it never counted (lost on the way): it is still the question waiting.
+    return cards.map((c) => (c === last ? { ...c, answer: null } : c));
+  }
   const before = closeDisputes(graded(cards, payload.feedback));
   const added = feedbackCards(payload.feedback, payload.lesson, payload.notices, payload.can_dispute);
   if (payload.dispute_result) {

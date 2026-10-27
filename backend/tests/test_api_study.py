@@ -3,10 +3,12 @@
 import asyncio
 import contextlib
 import json
+import re
 import threading
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -420,6 +422,13 @@ def test_malformed_dispute_id_is_422():
         assert _reply(web, thread_id, {"dispute": dispute}).status_code == 422
     assert _reply(web, thread_id, {"quit": False}).status_code == 422
     assert services.store.disputes == {}
+
+
+def test_the_website_knows_the_exhausted_notice_by_this_text():
+    # The website turns this notice into an error card with Retry: its copy must match.
+    notices = Path(__file__).parents[2] / "frontend" / "lib" / "notices.ts"
+    [text] = re.findall(r'export const EXHAUSTED_NOTICE =\s*"([^"]*)";', notices.read_text("utf-8"))
+    assert text == EXHAUSTED_NOTICE
 
 
 def test_the_daily_cap_reaches_the_stream_as_notices():

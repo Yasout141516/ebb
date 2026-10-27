@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useRef } from "react";
 import ErrorCard from "@/components/ErrorCard";
+import { EXHAUSTED_NOTICE as EXHAUSTED } from "@/lib/notices";
 import type { Card, QuestionCard as QuestionModel } from "@/lib/session";
 import Composer from "./Composer";
 import GradeCard from "./GradeCard";
@@ -13,8 +14,6 @@ import StepRow from "./StepRow";
 import SummaryCard from "./SummaryCard";
 import styles from "./Thread.module.css";
 import type { Study } from "./useStudy";
-
-const EXHAUSTED = "The tutor couldn't respond — your progress is saved. Try again in a minute.";
 
 type Props = {
   study: Study;

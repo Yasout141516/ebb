@@ -127,6 +127,23 @@ describe("the thread", () => {
     expect(applyTurn(cards, turn())).toBe(cards);
   });
 
+  it("reopens an answer the API never got when a reconnect brings its question back", () => {
+    // The reply was lost on the way, then the tab was refreshed: the same turn comes back.
+    const shown = applyTurn([], turn({ feedback: grade("correct") }));
+    const sent = answered(shown, { attempt_id: "a1", text: "62", choice: 1 });
+    const back = applyTurn(sent, turn({ feedback: grade("correct") }), true);
+    expect(kinds(back)).toEqual(kinds(shown)); // the earlier grade isn't shown twice
+    expect(waitingQuestion(back)).toMatchObject({ id: waitingQuestion(shown)!.id, answer: null });
+  });
+
+  it("keeps the answer and adds the question again when a reply brings it back", () => {
+    // e.g. its grade failed: the notice and the question come back for a retry.
+    const sent = answered(applyTurn([], turn()), { attempt_id: "a1", text: "62", choice: 1 });
+    const back = applyTurn(sent, turn({ notices: ["The tutor couldn't respond."] }));
+    expect(kinds(back)).toEqual(["question", "notice", "question"]);
+    expect(back[0]).toMatchObject({ answer: { attempt_id: "a1" } });
+  });
+
   it("puts a re-check's result on the disputed card and shows the question again", () => {
     let cards = applyTurn([], turn({ feedback: grade(), can_dispute: true }));
     const gradeCard = cards[0];

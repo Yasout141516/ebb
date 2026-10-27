@@ -449,6 +449,17 @@ describe("this tab's own session", () => {
     expect(sessionLookups()).toHaveLength(0);
   });
 
+  it("reopens an answer the API never got, rather than showing its question twice", async () => {
+    refreshedMidTurn();
+    const stream = await lastStream();
+    stream.emit("turn", { payload: mcq() }); // the reply was lost: the same question still waits
+    await stream.end();
+    expect(screen.getAllByText("Multiple choice · Subnetting · Q1")).toHaveLength(1);
+    await userEvent.keyboard("2{Enter}");
+    const sent = (await lastStream()).body as { reply: { answer: string } };
+    expect(sent.reply.answer).toBe("2");
+  });
+
   it("offers the session once it has waited about 30 seconds", async () => {
     refreshedMidTurn();
     let waited = 0;
