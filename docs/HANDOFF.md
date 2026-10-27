@@ -34,7 +34,7 @@ Code makes every decision; the LLM only generates questions, grades short answer
   memory panel, End session) and the progress dashboard, built like `ebb-prototype.html`. Chat
   is dropped; Flashcards/Exam are hidden until milestone 5. Checks: 808 backend tests, 191
   frontend tests, ruff, typecheck, lint, and one browser test (`npm run e2e`) that passed on
-  2026-10-27. 38 controller rulings (R1-R38) are in the SDD ledger
+  2026-10-27. 39 controller rulings (R1-R39) are in the SDD ledger
   (`.superpowers/sdd/2026-10-23-web-app/progress.md`); minor leftovers are in
   `docs/superpowers/m4-followups.md`.
 - Milestone 3 is merged to `main` (2026-10-22). Every decision taken on the owner's behalf:

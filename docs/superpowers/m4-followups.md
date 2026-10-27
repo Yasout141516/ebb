@@ -3,7 +3,7 @@
 Minor items found while building and reviewing milestone 4 that were deliberately left for later,
 grouped. Earlier items: [m1-followups.md](m1-followups.md), [m2-followups.md](m2-followups.md),
 [m3-followups.md](m3-followups.md). The decisions taken on the owner's behalf during milestone 4
-are in the SDD ledger (rulings R1–R38).
+are in the SDD ledger (rulings R1–R39).
 
 ## Worth a look with the owner
 

@@ -20,20 +20,23 @@ grading eval (first baseline: 70%). Next: flashcards and exam mode (milestone 5)
 
 You need Docker and a free Groq API key from https://console.groq.com.
 
+**If you already have an Ebb database, back it up first.** The API upgrades the `ebb` database
+to the newest migration the first time it connects, so before the first `docker compose up` run
+this, with nothing else connected to `ebb` (`up -d db` starts only the database):
+
+```bash
+docker compose up -d db
+docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre003 template ebb"
+```
+
+Then:
+
 ```bash
 cp .env.example .env              # then put your key in GROQ_API_KEY
 docker compose up                 # starts Postgres, the API (port 8000) and the website
 ```
 
-Then open http://localhost:3000. The first start builds the images, which takes a few minutes.
-
-**First start on an existing database:** the API upgrades the `ebb` database to the newest
-migration the first time it connects. Back it up first, with nothing else connected to `ebb`
-(`docker compose up -d db` starts only the database):
-
-```bash
-docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre003 template ebb"
-```
+Open http://localhost:3000. The first start builds the images, which takes a few minutes.
 
 The terminal app still works, next to the website and on the same data:
 
@@ -131,7 +134,7 @@ sessions back too, so the progress dashboard and the streak agree:
 ```bash
 # Pretend a week has passed: reviews due within the next 7 days become due now
 docker compose exec db psql -U ebb -d ebb -c \
-  "update concepts set last_reviewed_at = last_reviewed_at - interval '7 days', next_review_at = next_review_at - interval '7 days' where stage > 0"
+  "update concepts set last_reviewed_at = last_reviewed_at - interval '7 days', next_review_at = next_review_at - interval '7 days' where stage > 0; update attempts set graded_at = graded_at - interval '7 days'; update study_sessions set started_at = started_at - interval '7 days', last_active_at = last_active_at - interval '7 days', ended_at = ended_at - interval '7 days'"
 ```
 
 To see a web question, answer every question of a concept, then study that concept again in
