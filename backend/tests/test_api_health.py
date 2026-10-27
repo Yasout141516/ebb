@@ -24,7 +24,7 @@ def test_health_ok():
 
 
 def test_health_reports_missing_groq_key():
-    text = "GROQ_API_KEY is not set (get one free at console.groq.com)"
+    text = "GROQ_API_KEY is not set — EBB_TEACH_MODEL uses Groq (get one free at console.groq.com)"
     response = client(make_services(tutor=None, config_error=text)).get("/health")
     assert response.json() == {"database": "ok", "tutor": text, "timezone": "ok"}
 

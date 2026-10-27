@@ -37,7 +37,11 @@ def test_groq_and_mistral_build_their_own_clients():
     [
         ("openrouter", "OPENROUTER_API_KEY is not set — EBB_EVAL_WRITER_MODEL uses OpenRouter"),
         ("mistral", "MISTRAL_API_KEY is not set — EBB_EVAL_WRITER_MODEL uses Mistral"),
-        ("groq", "GROQ_API_KEY is not set — EBB_EVAL_WRITER_MODEL uses Groq"),
+        (
+            "groq",
+            "GROQ_API_KEY is not set — EBB_EVAL_WRITER_MODEL uses Groq "
+            "(get one free at console.groq.com)",
+        ),
     ],
 )
 def test_missing_key_names_the_setting(provider, message):

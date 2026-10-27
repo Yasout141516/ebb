@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import groq
 import httpx
+import openai
 import pytest
 from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
@@ -341,7 +342,9 @@ def test_correct_text_uses_the_right_option_for_mcq():
 def test_missing_api_key_is_a_config_error():
     with pytest.raises(ConfigError) as caught:
         LangChainTutor.from_settings(Settings(_env_file=None, groq_api_key=None))
-    assert str(caught.value) == "GROQ_API_KEY is not set (get one free at console.groq.com)"
+    assert str(caught.value) == (
+        "GROQ_API_KEY is not set — EBB_TEACH_MODEL uses Groq (get one free at console.groq.com)"
+    )
 
 
 def test_groq_is_primary_and_a_mistral_key_adds_the_fallback():
@@ -561,7 +564,8 @@ def test_from_settings_sets_a_request_timeout_on_both_clients():
 
 GROQ_KEY = "Groq rejected GROQ_API_KEY — check the key in .env"
 MISTRAL_KEY = "Mistral rejected MISTRAL_API_KEY — check the key in .env"
-NOT_FOUND = "Model 'primary' was not found — set EBB_PRIMARY_MODEL (or EBB_FALLBACK_MODEL) in .env"
+NOT_FOUND = "Model 'primary' was not found on Groq — check EBB_TEACH_MODEL in .env"
+OPENROUTER_KEY = "OpenRouter rejected OPENROUTER_API_KEY — check the key in .env"
 
 
 @pytest.mark.parametrize(
@@ -575,7 +579,7 @@ NOT_FOUND = "Model 'primary' was not found — set EBB_PRIMARY_MODEL (or EBB_FAL
 def test_groq_config_errors_surface_without_retry(cls, status, message):
     bad = Raising(error=_status_error(cls, status))
     provider = Provider("primary", bad, bad, service="Groq", key_name="GROQ_API_KEY")
-    tutor = LangChainTutor([provider], attempts=3)
+    tutor = LangChainTutor({"teach": [provider]}, attempts=3)
     with pytest.raises(ConfigError) as caught:
         tutor.teach(QUESTION, "TTL", GRADE)
     assert str(caught.value) == message
@@ -591,7 +595,8 @@ def _http_error(status: int) -> httpx.HTTPStatusError:
 
 
 @pytest.mark.parametrize(
-    ("status", "message"), [(401, MISTRAL_KEY), (403, MISTRAL_KEY), (404, NOT_FOUND)]
+    ("status", "message"),
+    [(401, MISTRAL_KEY), (403, MISTRAL_KEY), (404, NOT_FOUND.replace("Groq", "Mistral"))],
 )
 def test_mistral_config_errors_surface_without_retry_or_fallback(status, message):
     bad, backup = Raising(error=_http_error(status)), Raising(error=OutputParserException("x"))
@@ -625,6 +630,127 @@ def test_mistral_overload_and_transport_errors_are_retried_then_exhaust(error):
     with pytest.raises(AllProvidersExhausted):
         tutor.teach(QUESTION, "TTL", GRADE)
     assert bad.calls == 2
+
+
+def _openai_error(cls: type) -> Exception:
+    """What ChatOpenAI (OpenRouter) raises."""
+    request = httpx.Request("POST", "https://openrouter.ai")
+    if cls in (openai.APIConnectionError, openai.APITimeoutError):
+        return cls(request=request)
+    status = {
+        openai.RateLimitError: 429,
+        openai.InternalServerError: 500,
+        openai.BadRequestError: 400,
+        openai.AuthenticationError: 401,
+        openai.PermissionDeniedError: 403,
+        openai.NotFoundError: 404,
+    }[cls]
+    return _status_error(cls, status)
+
+
+OPENAI_RETRYABLE = [
+    openai.RateLimitError,
+    openai.InternalServerError,
+    openai.BadRequestError,
+    openai.APIConnectionError,
+    openai.APITimeoutError,
+]
+
+
+@pytest.mark.parametrize("cls", OPENAI_RETRYABLE)
+def test_openrouter_errors_are_retried_then_fall_back(cls):
+    bad, backup = Raising(error=_openai_error(cls)), fake("Backup lesson.")
+    tutor = LangChainTutor(
+        [
+            Provider("primary", bad, bad, service="OpenRouter", provider="openrouter"),
+            Provider("backup", backup, backup),
+        ],
+        attempts=2,
+    )
+    out = tutor.teach(QUESTION, "TTL", GRADE)
+    assert (out.model, out.fell_back, bad.calls) == ("backup", True, 2)
+
+
+@pytest.mark.parametrize("cls", OPENAI_RETRYABLE)
+def test_openrouter_errors_exhaust_without_a_backup(cls):
+    bad = Raising(error=_openai_error(cls))
+    tutor = LangChainTutor([Provider("primary", bad, bad)], attempts=2)
+    with pytest.raises(AllProvidersExhausted):
+        tutor.teach(QUESTION, "TTL", GRADE)
+    assert bad.calls == 2
+
+
+@pytest.mark.parametrize(
+    ("cls", "message"),
+    [
+        (openai.AuthenticationError, OPENROUTER_KEY),
+        (openai.PermissionDeniedError, OPENROUTER_KEY),
+        (
+            openai.NotFoundError,
+            "Model 'primary' was not found on OpenRouter — check EBB_TEACH_MODEL in .env",
+        ),
+    ],
+)
+def test_openrouter_config_errors_surface_without_retry_or_fallback(cls, message):
+    bad, backup = Raising(error=_openai_error(cls)), Raising(error=OutputParserException("x"))
+    tutor = LangChainTutor(
+        {
+            "teach": [
+                Provider(
+                    "primary",
+                    bad,
+                    bad,
+                    service="OpenRouter",
+                    key_name="OPENROUTER_API_KEY",
+                    provider="openrouter",
+                ),
+                Provider("backup", backup, backup),
+            ]
+        },
+        attempts=3,
+    )
+    with pytest.raises(ConfigError) as caught:
+        tutor.teach(QUESTION, "TTL", GRADE)
+    assert str(caught.value) == message
+    assert (bad.calls, backup.calls) == (1, 0)
+
+
+def test_each_method_uses_its_roles_provider(monkeypatch):
+    def provider(name: str) -> Provider:
+        model = Structured("out")
+        return Provider(name, model, model)
+
+    tutor = LangChainTutor(
+        {"teach": [provider("A")], "quiz": [provider("B")], "eval_writer": [provider("C")]}
+    )
+    run = tutor._run
+    monkeypatch.setattr(
+        tutor,
+        "_run",
+        lambda role, schema, prompt, creative, parse: run(
+            role, schema, prompt, creative, lambda out: out
+        ),
+    )
+    used = {
+        "teach": tutor.teach(QUESTION, "a", GRADE, sources=[NOTE]).model,
+        "generate_questions": tutor.generate_questions(CONCEPT, []).model,
+        "grade": tutor.grade(QUESTION, "a").model,
+        "regrade": tutor.regrade(QUESTION, "a", GRADE, DisputeReason.CORRECT, "e").model,
+        "extract_concepts": tutor.extract_concepts("DNS").model,
+        "extend_concepts": tutor.extend_concepts("DNS", []).model,
+        "concepts_from_notes": tutor.concepts_from_notes("DNS", [], "d").model,
+        "write_eval_case": tutor.write_eval_case("DNS", GradeValue.PARTIAL, None).model,
+    }
+    assert used == {
+        "teach": "A",
+        "generate_questions": "B",
+        "grade": "B",
+        "regrade": "B",
+        "extract_concepts": "B",
+        "extend_concepts": "B",
+        "concepts_from_notes": "B",
+        "write_eval_case": "C",
+    }
 
 
 def test_groq_bad_request_stays_retryable():

@@ -18,8 +18,7 @@ KEY_NAMES = {
     "openrouter": "OPENROUTER_API_KEY",
     "mistral": "MISTRAL_API_KEY",
 }
-# Settings whose Groq key was always required, with the longer hint users already know.
-_GROQ_HINT_SETTINGS = ("EBB_TEACH_MODEL", "EBB_QUIZ_MODEL")
+GROQ_HINT = " (get one free at console.groq.com)"
 
 
 @dataclass(frozen=True)
@@ -36,10 +35,9 @@ def _api_key(spec: ModelSpec, settings: Settings, setting: str) -> str:
     key = getattr(settings, KEY_NAMES[spec.provider].lower())
     if key:
         return key
-    if spec.provider == "groq" and setting in _GROQ_HINT_SETTINGS:
-        raise ConfigError("GROQ_API_KEY is not set (get one free at console.groq.com)")
+    hint = GROQ_HINT if spec.provider == "groq" else ""
     raise ConfigError(
-        f"{KEY_NAMES[spec.provider]} is not set — {setting} uses {SERVICES[spec.provider]}"
+        f"{KEY_NAMES[spec.provider]} is not set — {setting} uses {SERVICES[spec.provider]}{hint}"
     )
 
 

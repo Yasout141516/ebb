@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import groq
 import httpx
+import openai
 from langchain_core.exceptions import (
     ModelAuthenticationError,
     ModelNotFoundError,
@@ -59,13 +60,20 @@ _AUTH_ERRORS: tuple[type[BaseException], ...] = (
     ModelPermissionDeniedError,
     groq.AuthenticationError,
     groq.PermissionDeniedError,
+    openai.AuthenticationError,
+    openai.PermissionDeniedError,
 )
-_NOT_FOUND_ERRORS: tuple[type[BaseException], ...] = (ModelNotFoundError, groq.NotFoundError)
+_NOT_FOUND_ERRORS: tuple[type[BaseException], ...] = (
+    ModelNotFoundError,
+    groq.NotFoundError,
+    openai.NotFoundError,
+)
 
 # ChatMistralAI raises httpx.HTTPStatusError for any error response; transport errors
 # (timeouts, connection failures) subclass httpx.TransportError.
 PROVIDER_ERRORS: tuple[type[BaseException], ...] = (
     groq.APIError,
+    openai.APIError,
     httpx.HTTPStatusError,
     httpx.TransportError,
     OutputParserException,
@@ -433,9 +441,10 @@ class LangChainTutor:
                             "check the key in .env"
                         ) from error
                     case "no_model":
+                        setting = f"EBB_{role.upper()}_{'MODEL' if index == 0 else 'BACKUP'}"
                         raise ConfigError(
-                            f"Model {provider.name!r} was not found — set EBB_PRIMARY_MODEL "
-                            "(or EBB_FALLBACK_MODEL) in .env"
+                            f"Model {provider.name!r} was not found on {provider.service} — "
+                            f"check {setting} in .env"
                         ) from error
                 last_error = error
                 continue
