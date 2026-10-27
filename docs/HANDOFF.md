@@ -9,9 +9,8 @@ you, grades answers against your own notes with cited quotes, teaches what you g
 brings concepts back before you forget them (Leitner stages + a "tide" forgetting-curve gauge).
 Code makes every decision; the LLM only generates questions, grades short answers and teaches.
 
-- Repo: https://github.com/Yasout141516/ebb (public), local `E:\ebb`, branch `main`. Milestone 4
-  lives on branch `m4-web-app` (worktree `E:\ebb\.claude\worktrees\m4-web-app`) until the owner
-  OKs the merge.
+- Repo: https://github.com/Yasout141516/ebb (public), local `E:\ebb`, branch `main` (milestone 4
+  merged at `7cd4589` and pushed on 2026-10-27; its branch and worktree are removed).
 - Owner's plan: `Ebb — Requirements & System Design.pdf` (6 milestones), plan reviews in
   `docs/plan-reviews.md`, clickable UI prototype `ebb-prototype.html`.
 
@@ -22,21 +21,22 @@ Code makes every decision; the LLM only generates questions, grades short answer
 | 1. Core quiz loop in the terminal (FR-1–FR-5) | Done, merged |
 | 2. Spaced review + resumable sessions (FR-6, FR-7) | Done, merged at `05c0f1f` |
 | 3. Uploads with cited answers, web questions, grade disputes, grading eval (FR-8, FR-9, NFR-2) | Done, merged to `main` and pushed on 2026-10-22 |
-| 4. FastAPI backend + Next.js frontend from the prototype | Built on `m4-web-app` (26 tasks); final review, `/code-review`, `/simplify` and the owner's hands-on test still to do |
-| 5. Flashcards, exam mode, PDF export, resource search (FR-10–FR-13) | Later |
+| 4. FastAPI backend + Next.js frontend from the prototype | Done, merged to `main` and pushed on 2026-10-27 (`7cd4589`); the owner's hands-on test is still to do |
+| 5. Flashcards, exam mode, PDF export, resource search (FR-10–FR-13) | **Next** — not started |
 | 6. Auth (Supabase) and deployment (FR-14, NFR-13, NFR-14) | Later |
 
 ## Where things stand
 
-- **Milestone 4 is built on `m4-web-app`, not merged.** `docker compose up` starts the database,
-  the API (port 8000) and the website (http://localhost:3000): onboarding (a typed topic or
-  uploaded notes), the study workspace (questions, grades, lessons, citations, disputes, the
-  memory panel, End session) and the progress dashboard, built like `ebb-prototype.html`. Chat
-  is dropped; Flashcards/Exam are hidden until milestone 5. Checks: 808 backend tests, 191
-  frontend tests, ruff, typecheck, lint, and one browser test (`npm run e2e`) that passed on
-  2026-10-27. 39 controller rulings (R1-R39) are in the SDD ledger
-  (`.superpowers/sdd/2026-10-23-web-app/progress.md`); minor leftovers are in
-  `docs/superpowers/m4-followups.md`.
+- **Milestone 4 is merged and pushed (2026-10-27).** `docker compose up` starts the database,
+  the API (port 8000) and the website (http://localhost:3000), all bound to this PC only:
+  onboarding (a typed topic or uploaded notes), the study workspace (questions, grades,
+  lessons, citations, disputes, the memory panel, End session) and the progress dashboard,
+  built like `ebb-prototype.html`. Chat is dropped; Flashcards/Exam are hidden until
+  milestone 5. Done: 26 tasks, each reviewed; a whole-branch review and its fix wave;
+  `/code-review` (7 fixes, 3 deferred) and `/simplify` (11 refactors). Checks: 837 backend
+  tests, 206 frontend tests, ruff, typecheck, lint and one browser test (`npm run e2e`).
+  The 46 decisions taken on the owner's behalf: `docs/superpowers/m4-rulings.md`; minor
+  leftovers: `docs/superpowers/m4-followups.md`.
 - Milestone 3 is merged to `main` (2026-10-22). Every decision taken on the owner's behalf:
   `docs/superpowers/m3-rulings.md`.
 - **The owner tests milestone 4 hands-on** (the spec's *Done when* list is the acceptance check).
@@ -58,6 +58,7 @@ Code makes every decision; the LLM only generates questions, grades short answer
   fallback today and `ebb eval build` can't run. Details in `docs/superpowers/m3-followups.md`.
 
 Key documents, newest first:
+- Milestone 4 rulings: `docs/superpowers/m4-rulings.md`
 - Milestone 4 design: `docs/superpowers/specs/2026-10-23-web-app-design.md`
 - Milestone 4 plan: `docs/superpowers/plans/2026-10-23-web-app.md`
 - Milestone 4 deferred items: `docs/superpowers/m4-followups.md`
@@ -149,8 +150,18 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run e2e   # e2e: npx
   the end) in an isolated git worktree, then `finishing-a-development-branch` (local merge to
   `main`, then push).
 - In brainstorming, give **options to choose from** (via questions), not "my defaults".
-- Also runs `/code-review` and `/simplify` before finishing a milestone; both were done for M1,
-  M2 and M3 (run `/simplify` after review fixes, not in parallel with a reviewer).
+- Also runs `/code-review` and `/simplify` before finishing a milestone; both were done for M1–M4
+  (run `/simplify` after review fixes, not in parallel with a reviewer; have a reviewer check
+  `/simplify`'s refactors — in M4 one of them dropped a lease renewal).
+- **The UI must look like `ebb-prototype.html`** (owner, 2026-10-23): layout, spacing, colours,
+  fonts, icons and copy, minus agreed removals. Check every screen with side-by-side screenshots
+  (app vs prototype) at 1440×900 and 375 px.
+- Docker is the only way to run Ebb (owner declined a native dev mode), so the local build
+  matches what goes live.
+- Subagents on smaller models follow their own attribution reminder: tell every implementer the
+  exact commit trailer (`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`).
+- Account limits (session/weekly) can stop subagents mid-task; their work is saved — resume the
+  same agent after the reset rather than starting a new one.
 - Free tiers only; two LLM providers at most (decided 2026-10-21). Gemini was removed for
   frequent 503 overloads and answer quality.
 - When the owner steps away: pause cleanly (commit or WIP-commit, update the ledger), and shut
@@ -164,17 +175,45 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run e2e   # e2e: npx
 
 ## Next steps
 
-1. **The owner tests milestone 4 hands-on** against the spec's *Done when* list (back up `ebb`
-   first, see above), and says what to change.
-2. Merge: whole-branch review, `/code-review` and `/simplify` (after the review fixes, not in
-   parallel), a message-only rewrite of the commits that carry "Claude Sonnet 5.5" instead of
-   the required "Claude Opus 5.5" trailer (ruling R17), then `finishing-a-development-branch`
-   with the owner's OK. Push only with the owner's OK.
-3. Milestone 5: flashcards, exam mode, PDF export, resource search (FR-10-FR-13). Start with
-   `superpowers:brainstorming`; the Flashcards/Exam buttons are hidden in the UI until then.
-4. When Mistral's account is active: re-test it, then rebuild the eval set with Mistral as the
+1. **The owner tests milestone 4 hands-on** against the spec's *Done when* list:
+   - back up `ebb` first (above; restore command in the README), set `EBB_TIMEZONE`;
+   - `docker compose up` (first build takes a few minutes), open http://localhost:3000;
+   - create a subject from a topic and one from a lecture PDF in `notes/`, study a full session
+     (incl. a dispute, a refresh mid-session, closing the tab and resuming), check the
+     dashboard, and run `ebb study` in a terminal at the same time;
+   - review the "Worth a look with the owner" items at the top of `m4-followups.md` (invented
+     add-notes copy, the subject gauge metric, "due yesterday", R30 tide note, amber fall,
+     straight apostrophes, "p. 12").
+   Fix what the owner reports before starting milestone 5.
+2. **Milestone 5: flashcards, exam mode, PDF export, resource search (FR-10–FR-13).** Start with
+   `superpowers:brainstorming` (options to choose from). Inputs the brainstorm should cover:
+   - the prototype's screens `04 Flashcards`, `05 Exam`, `05b Exam results` (build them like
+     the prototype, as in M4) and where their entry points go back in (the workspace's hidden
+     Flashcards/Exam chips, "Review weak cards", "Take a 5-question exam", the due list's
+     Review buttons — all removed in M4);
+   - plan-review decisions that bind M5: D1 (exam timer warnings at 5:00/1:00, auto-submit,
+     unanswered = incorrect), D5 (flashcards with no weak concepts show "Tide's high…"; exam
+     grading progress with per-question error cards), E2 (flashcard self-ratings follow
+     "promote only when due"), E7 (exam answers saved as picked; the server is the clock;
+     short answers graded 2 at a time);
+   - FR-12 resource search: Tavily is already wired (`web.py`); YouTube was planned; the spec
+     says only returned URLs can be cited. FR-13 PDF export: the plan names WeasyPrint +
+     Supabase Storage, but Supabase is milestone 6 — decide where the PDF goes locally;
+     the CEO review noted FR-12/FR-13 as candidates to cut if time runs short;
+   - schema: the plan's `flashcards`, `exams`, `exam_questions` tables, attempts gaining
+     `flashcard_id`/`exam_id` (check constraint: exactly one of question/flashcard), every new
+     table with `user_id` (E9);
+   - the free-tier budget: Groq's free tier for `openai/gpt-oss-120b` is about 1,000 requests
+     and 200,000 tokens a day; the daily cap is 300 calls; Mistral is still inactive.
+   Then the usual flow: written design → `writing-plans` → subagent-driven development in a new
+   worktree → final review → `/code-review` → `/simplify` → merge with the owner's OK.
+3. When Mistral's account is active: re-test it, then rebuild the eval set with Mistral as the
    writer (`cd backend; uv run ebb eval build --force`, then `eval run`) and commit the results.
-5. Open decisions carried from the plan: the backend host for milestone 6 (Cloud Run vs Render,
-   see `docs/plan-reviews.md`).
-6. `docs/superpowers/m3-followups.md` still lists eval improvements (stricter grading prompt,
-   stricter writer) and terminal polish; `m4-followups.md` lists the milestone 4 leftovers.
+4. Milestone 6 (auth + deploy): JWT verification moved here from M4 (E9 amendment); the backend
+   host is still open (Cloud Run vs Render, see `docs/plan-reviews.md`).
+5. Leftovers: `docs/superpowers/m4-followups.md` (incl. what `/simplify` deferred: one failure
+   mapping, a per-instance locking strategy, server-side same-driver wait, turn ids in the
+   payload…), `m3-followups.md` (eval improvements, terminal polish).
+6. Housekeeping the owner can approve: drop `ebb_m3` and the two old Docker volume backups
+   (`ebb_ebb-pgdata-m1-backup`, `m1-core-loop_ebb-pgdata`) once happy; an empty folder
+   `.claude/worktrees/m4-web-app` may be left behind (safe to delete).
