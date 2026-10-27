@@ -24,6 +24,7 @@ from ebb.domain import (
     Question,
     Source,
 )
+from ebb.llm.providers import REQUEST_TIMEOUT_SECONDS, Provider
 from ebb.llm.schemas import (
     ConceptDraft,
     ConceptExtension,
@@ -39,10 +40,8 @@ from ebb.llm.schemas import (
     WebQuestionBatch,
 )
 from ebb.llm.tutor import (
-    REQUEST_TIMEOUT_SECONDS,
     AllProvidersExhausted,
     LangChainTutor,
-    Provider,
     TutorRefused,
     TutorUnavailable,
     _prompt,
@@ -348,11 +347,11 @@ def test_missing_api_key_is_a_config_error():
 def test_groq_is_primary_and_a_mistral_key_adds_the_fallback():
     settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key="m-test")
     tutor = LangChainTutor.from_settings(settings)
-    assert [p.name for p in tutor.providers] == [
+    assert [p.name for p in tutor.chains["quiz"]] == [
         "openai/gpt-oss-120b",
         "mistral-medium-latest",
     ]
-    assert [(p.service, p.key_name) for p in tutor.providers] == [
+    assert [(p.service, p.key_name) for p in tutor.chains["quiz"]] == [
         ("Groq", "GROQ_API_KEY"),
         ("Mistral", "MISTRAL_API_KEY"),
     ]
@@ -361,7 +360,7 @@ def test_groq_is_primary_and_a_mistral_key_adds_the_fallback():
 def test_providers_use_low_temperature_for_grading_and_high_for_creative_work():
     settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key="m-test")
     tutor = LangChainTutor.from_settings(settings)
-    for provider in tutor.providers:
+    for provider in tutor.chains["quiz"]:
         assert provider.precise.temperature == 0.2
         assert provider.creative.temperature == 0.7
 
@@ -369,7 +368,7 @@ def test_providers_use_low_temperature_for_grading_and_high_for_creative_work():
 def test_without_a_mistral_key_there_is_one_provider():
     settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key=None)
     tutor = LangChainTutor.from_settings(settings)
-    assert [p.name for p in tutor.providers] == [settings.ebb_primary_model]
+    assert [p.name for p in tutor.chains["quiz"]] == ["openai/gpt-oss-120b"]
 
 
 def test_extract_concepts_unwraps_the_list_and_uses_the_creative_model():
@@ -553,7 +552,7 @@ def test_from_settings_sets_a_request_timeout_on_both_clients():
     tutor = LangChainTutor.from_settings(
         Settings(_env_file=None, groq_api_key="q", mistral_api_key="m")
     )
-    groq_provider, mistral = tutor.providers
+    groq_provider, mistral = tutor.chains["quiz"]
     assert groq_provider.creative.request_timeout == REQUEST_TIMEOUT_SECONDS
     assert groq_provider.precise.request_timeout == REQUEST_TIMEOUT_SECONDS
     assert mistral.creative.timeout == REQUEST_TIMEOUT_SECONDS
@@ -970,17 +969,17 @@ def test_regrade_returns_grade_and_ambiguity():
 def test_primary_only_tutor_has_one_provider():
     settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key="m-test")
     tutor = LangChainTutor.from_settings(settings, fallback=False)
-    assert [p.name for p in tutor.providers] == [settings.ebb_primary_model]
+    assert [p.name for p in tutor.chains["quiz"]] == ["openai/gpt-oss-120b"]
 
 
 def test_writer_is_mistral_only_and_needs_its_key():
     with pytest.raises(ConfigError) as caught:
         LangChainTutor.writer(Settings(_env_file=None, groq_api_key="q", mistral_api_key=None))
-    assert str(caught.value) == "eval build needs MISTRAL_API_KEY (the writer model)."
+    assert str(caught.value) == "MISTRAL_API_KEY is not set — EBB_EVAL_WRITER_MODEL uses Mistral"
     settings = Settings(_env_file=None, groq_api_key="q-test", mistral_api_key="m-test")
     writer = LangChainTutor.writer(settings)
-    [provider] = writer.providers
-    assert (provider.name, provider.service) == (settings.ebb_fallback_model, "Mistral")
+    [provider] = writer.chains["eval_writer"]
+    assert (provider.name, provider.service) == ("mistral-medium-latest", "Mistral")
 
 
 def test_write_eval_case_fences_notes_and_uses_the_creative_model():

@@ -529,7 +529,7 @@ def eval_run(
         _fail(f"{dataset} not found. Build it first with: ebb eval build")
     cases = load_cases(dataset)
     settings = _configured(Settings)
-    model = settings.ebb_primary_model
+    model = _configured(settings.role_models)["quiz"][0].model
     grader = _eval_grader(settings)
 
     def progress(number: int, total: int) -> None:

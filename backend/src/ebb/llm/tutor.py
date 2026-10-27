@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from importlib.resources import files
 from string import Template
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, get_args
 from uuid import uuid4
 
 import groq
@@ -36,6 +36,7 @@ from ebb.domain import (
     Source,
 )
 from ebb.grading import cap_for_misconception
+from ebb.llm.providers import Provider, Role, chat_models
 from ebb.llm.schemas import (
     CitationDraft,
     ConceptDraft,
@@ -72,8 +73,6 @@ PROVIDER_ERRORS: tuple[type[BaseException], ...] = (
     *_AUTH_ERRORS,
     *_NOT_FOUND_ERRORS,
 )
-
-REQUEST_TIMEOUT_SECONDS = 60
 
 Failure = Literal["retry", "bad_key", "no_model"]
 
@@ -218,15 +217,6 @@ class Tutor(Protocol):
     def write_eval_case(
         self, topic: str, target: GradeValue, notes: str | None
     ) -> Generated[EvalCaseDraft]: ...
-
-
-@dataclass(frozen=True)
-class Provider:
-    name: str
-    precise: BaseChatModel  # low temperature: grading
-    creative: BaseChatModel  # higher temperature: generating and teaching
-    service: str = "Groq"
-    key_name: str = "GROQ_API_KEY"
 
 
 def _prompt(template: str, /, **values: str) -> str:
@@ -380,77 +370,47 @@ def correct_text(question: Question) -> str:
     return question.reference_answer
 
 
-def _groq_provider(settings: Settings, api_key: str) -> Provider:
-    from langchain_groq import ChatGroq
-
-    def groq_model(temperature: float) -> BaseChatModel:
-        return ChatGroq(
-            model_name=settings.ebb_primary_model,
-            groq_api_key=api_key,
-            temperature=temperature,
-            max_retries=1,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-
-    return Provider(
-        settings.ebb_primary_model,
-        groq_model(0.2),
-        groq_model(0.7),
-        service="Groq",
-        key_name="GROQ_API_KEY",
-    )
-
-
-def _mistral_provider(settings: Settings, api_key: str) -> Provider:
-    from langchain_mistralai import ChatMistralAI
-
-    def mistral_model(temperature: float) -> BaseChatModel:
-        return ChatMistralAI(
-            model=settings.ebb_fallback_model,
-            api_key=api_key,
-            temperature=temperature,
-            max_retries=1,
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-
-    return Provider(
-        settings.ebb_fallback_model,
-        mistral_model(0.2),
-        mistral_model(0.7),
-        service="Mistral",
-        key_name="MISTRAL_API_KEY",
-    )
-
-
 class LangChainTutor:
     def __init__(
-        self, providers: list[Provider], attempts: int = 3, rng: random.Random | None = None
+        self,
+        chains: dict[Role, list[Provider]] | list[Provider],
+        attempts: int = 3,
+        rng: random.Random | None = None,
     ) -> None:
-        if not providers:
+        """Each role's providers, main first; a plain list serves every role."""
+        if isinstance(chains, list):
+            chains = {role: chains for role in get_args(Role)}
+        if not chains or not all(chains.values()):
             raise ValueError("at least one provider is required")
-        self.providers = providers
+        self.chains = chains
         self.attempts = attempts
         self.rng = rng or random.Random()
 
     @classmethod
     def from_settings(cls, settings: Settings, fallback: bool = True) -> LangChainTutor:
-        """Groq first, plus the Mistral backup when its key is set and `fallback` allows."""
-        if not settings.groq_api_key:
-            raise ConfigError("GROQ_API_KEY is not set (get one free at console.groq.com)")
-        providers = [_groq_provider(settings, settings.groq_api_key)]
-        if fallback and settings.mistral_api_key:
-            providers.append(_mistral_provider(settings, settings.mistral_api_key))
-        return cls(providers)
+        """The teach and quiz models, each with its backup when `fallback` allows."""
+        models = settings.role_models()
+        chains: dict[Role, list[Provider]] = {}
+        for role, setting in (("teach", "EBB_TEACH"), ("quiz", "EBB_QUIZ")):
+            main, backup = models[role]
+            chain = [chat_models(main, settings, f"{setting}_MODEL")]
+            if fallback and backup:
+                chain.append(chat_models(backup, settings, f"{setting}_BACKUP"))
+            chains[role] = chain
+        return cls(chains)
 
     @classmethod
     def writer(cls, settings: Settings) -> LangChainTutor:
-        """Mistral only: the model that writes eval cases, apart from the Groq one graded."""
-        if not settings.mistral_api_key:
-            raise ConfigError("eval build needs MISTRAL_API_KEY (the writer model).")
-        return cls([_mistral_provider(settings, settings.mistral_api_key)])
+        """Only the model that writes eval cases, which must not be the one that grades."""
+        models = settings.role_models()
+        writer = models["eval_writer"][0]
+        if writer == models["quiz"][0]:
+            raise ConfigError("EBB_EVAL_WRITER_MODEL must differ from EBB_QUIZ_MODEL (the grader)")
+        return cls({"eval_writer": [chat_models(writer, settings, "EBB_EVAL_WRITER_MODEL")]})
 
     def _run[T](
         self,
+        role: Role,
         schema: type[BaseModel] | None,
         prompt: str,
         creative: bool,
@@ -458,7 +418,7 @@ class LangChainTutor:
     ) -> Generated[T]:
         """Each provider in turn, retried; a refusal (TutorRefused) ends the call at once."""
         last_error: BaseException | None = None
-        for index, provider in enumerate(self.providers):
+        for index, provider in enumerate(self.chains[role]):
             model = provider.creative if creative else provider.precise
             chain = _chain(model, schema).with_retry(
                 retry_if_exception_type=_retryable, stop_after_attempt=self.attempts
@@ -484,6 +444,7 @@ class LangChainTutor:
 
     def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]:
         return self._run(
+            "quiz",
             ConceptList,
             _prompt("extract_concepts", topic=_line(topic)),
             creative=True,
@@ -494,6 +455,7 @@ class LangChainTutor:
         self, subject: str, existing: Sequence[Concept]
     ) -> Generated[list[ConceptDraft]]:
         return self._run(
+            "quiz",
             ConceptExtension,
             _prompt(
                 "extend_concepts",
@@ -549,7 +511,7 @@ class LangChainTutor:
         prompt = _with_sources(
             _prompt(template, **values, avoid=avoid_text), sources, failures, _CITE_QUESTIONS
         )
-        return self._run(schema, prompt, creative=True, parse=to_questions)
+        return self._run("quiz", schema, prompt, creative=True, parse=to_questions)
 
     def grade(
         self,
@@ -571,7 +533,7 @@ class LangChainTutor:
             _CITE_GRADE,
             _previous_grade(previous),
         )
-        return self._run(GradeResult, prompt, creative=False, parse=_grade_from)
+        return self._run("quiz", GradeResult, prompt, creative=False, parse=_grade_from)
 
     def teach(
         self,
@@ -597,9 +559,10 @@ class LangChainTutor:
         )
         if not sources:
             return self._run(
-                None, prompt, creative=True, parse=lambda out: Lesson(out.text.strip())
+                "teach", None, prompt, creative=True, parse=lambda out: Lesson(out.text.strip())
             )
         return self._run(
+            "teach",
             LessonResult,
             prompt,
             creative=True,
@@ -610,6 +573,7 @@ class LangChainTutor:
         self, subject: str, existing: Sequence[Concept], digest: str
     ) -> Generated[list[NoteConcept]]:
         return self._run(
+            "quiz",
             NoteConceptList,
             _prompt(
                 "concepts_from_notes",
@@ -649,6 +613,7 @@ class LangChainTutor:
             _previous_grade(previous),
         )
         return self._run(
+            "quiz",
             RegradeResult,
             prompt,
             creative=False,
@@ -666,6 +631,7 @@ class LangChainTutor:
                 f"<<<NOTES\n{_neutralise(notes)}\nNOTES>>>\n\n"
             )
         return self._run(
+            "eval_writer",
             EvalCaseDraft,
             _prompt("write_eval_case", topic=topic, target=target.value, notes_section=section),
             creative=True,

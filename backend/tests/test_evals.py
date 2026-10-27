@@ -318,7 +318,7 @@ def test_eval_build_without_mistral_exits_2(tmp_path, monkeypatch):
     )
 
     assert result.exit_code == 2
-    assert "eval build needs MISTRAL_API_KEY" in result.output
+    assert "MISTRAL_API_KEY is not set" in result.output
 
 
 def test_eval_run_writes_a_dated_report(eval_cli, tmp_path):
