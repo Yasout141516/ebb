@@ -57,8 +57,8 @@ are in the SDD ledger (rulings R1–R42).
   ifs; `tide_line` grid edges and `start >= now` are untested.
 - `MemoryStore` tests poke at internals; the `_insert_subject` other-`UniqueViolation` branch and
   a rename tie on equal `created_at` are untested.
-- The pool test reads a private (`pool._reset`), the unlock-failure test may race
-  `pg_terminate_backend`, and a block raising while `held=False` also closes a healthy connection.
+- The pool test reads a private (`pool._reset`), and the unlock-failure test may race
+  `pg_terminate_backend`.
 - The first full-suite run once stalled at
   `test_cli::test_a_resumed_session_holds_its_lock_while_it_runs` (probably two runs sharing
   `ebb_test`); watch for a real hang.

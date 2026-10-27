@@ -18,6 +18,7 @@ def advisory_lock(pool: ConnectionPool, key: int | str, *, wait: bool) -> Iterat
     expression = "%s" if isinstance(key, int) else "hashtextextended(%s, 0)"
     unlock = f"select pg_advisory_unlock({expression})"
     with pool.connection() as conn:
+        asked, held = False, False
         try:
             if wait:
                 conn.execute(f"select pg_advisory_lock({expression})", (key,))
@@ -26,12 +27,14 @@ def advisory_lock(pool: ConnectionPool, key: int | str, *, wait: bool) -> Iterat
                 held = conn.execute(
                     f"select pg_try_advisory_lock({expression}) as held", (key,)
                 ).fetchone()["held"]
+            asked = True
             yield held
         except BaseException:
-            # Left before the unlock ran: the lock may still be held by this session.
-            # Closing it makes Postgres drop it, and the pool discards a closed
-            # connection instead of reusing it.
-            conn.close()
+            if held or not asked:
+                # Left before the unlock ran: the lock may still be held by this session.
+                # Closing it makes Postgres drop it, and the pool discards a closed
+                # connection instead of reusing it. A lock never taken leaves it healthy.
+                conn.close()
             raise
         if held:
             try:

@@ -43,6 +43,20 @@ def test_lock_is_released_after_keyboard_interrupt_in_the_block(pg_session_pool)
 
 
 @pytest.mark.db
+def test_a_lock_not_held_returns_its_connection_after_an_exception_in_the_block(
+    pg_session_pool,
+):
+    with advisory_lock(pg_session_pool, 424242, wait=True):
+        bad_before = pg_session_pool.get_stats().get("returns_bad", 0)
+        with pytest.raises(RuntimeError):
+            with advisory_lock(pg_session_pool, 424242, wait=False) as held:
+                assert held is False
+                raise RuntimeError("busy")  # as _drive raises SessionBusy
+
+        assert pg_session_pool.get_stats().get("returns_bad", 0) == bad_before
+
+
+@pytest.mark.db
 def test_lock_is_released_when_the_unlock_itself_fails(pg_session_pool):
     with advisory_lock(pg_session_pool, 424242, wait=True) as held:
         assert held
