@@ -703,6 +703,14 @@ class PgStore:
             ).fetchone()
         return None if row is None else row["driver"]
 
+    def release_session(self, user_id: UUID, thread_id: str, driver: str) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "update study_sessions set driver = null, driver_seen_at = null"
+                " where user_id = %s and thread_id = %s and ended_at is null and driver = %s",
+                (user_id, thread_id, driver),
+            )
+
     def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
         with self.pool.connection() as conn:
             conn.execute(

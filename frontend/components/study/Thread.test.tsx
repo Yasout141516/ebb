@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, getJson, postJson } from "@/lib/api";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { API_URL, ApiError, getJson, postJson } from "@/lib/api";
 import { saveThread, rememberThread, type Card } from "@/lib/session";
 import { CUT_OFF, streamPost, type SseEvent } from "@/lib/sse";
 import type { Finished, TurnPayload } from "@/lib/types";
@@ -186,7 +186,7 @@ describe("Thread", () => {
     expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "End session" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Start fresh" }));
-    expect(postJson).toHaveBeenCalledWith("/sessions/t1/discard", undefined, expect.anything());
+    expect(postJson).toHaveBeenCalledWith("/sessions/t1/discard", { driver: "drv-1" }, expect.anything());
     expect((await lastStream()).path).toBe("/subjects/s1/session");
   });
 
@@ -353,7 +353,7 @@ describe("Thread", () => {
     });
     render(<Harness />);
     await userEvent.click(await screen.findByRole("button", { name: "Start fresh" }));
-    expect(postJson).toHaveBeenCalledWith("/sessions/t5/discard", undefined, expect.anything());
+    expect(postJson).toHaveBeenCalledWith("/sessions/t5/discard", { driver: "drv-1" }, expect.anything());
     expect((await lastStream()).path).toBe("/subjects/s1/session");
   });
 
@@ -400,5 +400,90 @@ describe("Thread", () => {
     expect(screen.getByText("Switched to a backup model while the main one is busy.")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Dispute grade" }));
     expect(onDispute).toHaveBeenCalled();
+  });
+});
+
+describe("this tab's own session", () => {
+  const BUSY = "That session is open in another tab or terminal.";
+  const FINISHING = /Finishing your last answer…/;
+  const sessionLookups = () => vi.mocked(getJson).mock.calls.filter(([path]) => path.startsWith("/subjects/s1/session"));
+
+  /** The tab was refreshed (or came back from Progress) while its answer was being graded. */
+  function refreshedMidTurn() {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const answered: Card[] = [
+      { kind: "tutor", id: "c1", text: "Hello." },
+      {
+        kind: "question",
+        id: "c2",
+        concept: "Subnetting",
+        number: 1,
+        question: mcq().question,
+        answer: { attempt_id: "a1", text: "62", choice: 1 },
+        result: null,
+      },
+    ];
+    saveThread("t9", answered);
+    rememberThread("s1", "t9");
+    render(<Harness />);
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it("waits for its own last turn to finish instead of showing it as busy", async () => {
+    refreshedMidTurn();
+    await (await lastStream()).fail(new ApiError(409, BUSY));
+    expect(screen.getByText(FINISHING)).toBeInTheDocument();
+    expect(screen.queryByText(BUSY)).not.toBeInTheDocument();
+    expect(streams).toHaveLength(1);
+    await act(async () => vi.advanceTimersByTime(1_000));
+    const again = await lastStream();
+    expect(streams).toHaveLength(2);
+    expect(again.body).toEqual({ driver: "drv-1" });
+    expect(again.path).toBe("/sessions/t9/resume");
+    expect(screen.getByText(FINISHING)).toBeInTheDocument();
+    again.emit("turn", { payload: mcq({ number: 2, feedback: { value: "correct", explanation: "Yes.", misconception: null, claims: [], citations: [], general_knowledge: false } }) });
+    await again.end();
+    expect(screen.queryByText(FINISHING)).not.toBeInTheDocument();
+    expect(screen.getByText("Multiple choice · Subnetting · Q2")).toBeInTheDocument();
+    expect(sessionLookups()).toHaveLength(0);
+  });
+
+  it("offers the session once it has waited about 30 seconds", async () => {
+    refreshedMidTurn();
+    let waited = 0;
+    while (sessionLookups().length === 0 && waited < 60_000) {
+      const last = streams[streams.length - 1];
+      if (last) await last.fail(new ApiError(409, BUSY));
+      await act(async () => vi.advanceTimersByTime(500));
+      waited += 500;
+    }
+    expect(waited).toBeGreaterThanOrEqual(25_000);
+    expect(waited).toBeLessThanOrEqual(40_000);
+    expect(streams.length).toBeGreaterThan(3); // tried again and again, not every 500 ms
+    expect(streams.length).toBeLessThan(20);
+    expect(streams.slice(0, -1).every((s) => s.path === "/sessions/t9/resume")).toBe(true);
+    expect(streams[streams.length - 1].path).toBe("/subjects/s1/session"); // nothing to offer: a new one
+    expect(screen.queryByText(FINISHING)).not.toBeInTheDocument();
+  });
+
+  it("lets go of the session when the page is closed", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    await startedAt(mcq());
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    expect(fetch).toHaveBeenCalledWith(`${API_URL}/sessions/t1/release?driver=drv-1`, {
+      method: "POST",
+      keepalive: true,
+    });
+    fetch.mockRestore();
+  });
+
+  it("has nothing to let go of before a session has started", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+    render(<Harness />);
+    await lastStream();
+    act(() => void window.dispatchEvent(new Event("pagehide")));
+    expect(fetch).not.toHaveBeenCalled();
+    fetch.mockRestore();
   });
 });

@@ -373,7 +373,7 @@ def _resumed(
     if answer is None:
         raise typer.Exit(0)  # leaves the session as it was, still resumable
     if not answer:
-        sessions.discard(user_id, offer.thread_id)
+        sessions.discard(user_id, offer.thread_id, driver)
         return None
     if not held.enter_context(sessions.hold(user_id, offer.thread_id)):
         console.print(escape(BUSY))  # taken while the learner was deciding

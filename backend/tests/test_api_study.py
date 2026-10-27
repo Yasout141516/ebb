@@ -485,14 +485,46 @@ def test_discard_ends_a_session_nobody_drives():
     web = client(services)
     thread_id, _ = _start(web, subject_id, driver="tab-a")
 
-    kept = web.post(f"/sessions/{thread_id}/discard")  # tab-a still holds it
+    kept = web.post(f"/sessions/{thread_id}/discard", json={"driver": "tab-b"})  # tab-a's
     offered = web.get(f"/subjects/{subject_id}/session?driver=tab-b").json()["offer"]
     clock.advance(seconds=91)
-    ended = web.post(f"/sessions/{thread_id}/discard")
+    ended = web.post(f"/sessions/{thread_id}/discard", json={"driver": "tab-b"})
 
     assert kept.status_code == ended.status_code == 204
     assert offered["thread_id"] == thread_id and offered["busy"] is True
     assert web.get(f"/subjects/{subject_id}/session?driver=tab-b").json() == {"offer": None}
+
+
+def test_discard_by_the_tab_driving_it_ends_the_session():
+    services = make_services()
+    subject_id = make_subject(services.store, USER, concepts=2)
+    web = client(services)
+    thread_id, _ = _start(web, subject_id, driver="tab-a")
+
+    ended = web.post(f"/sessions/{thread_id}/discard", json={"driver": "tab-a"})
+
+    assert ended.status_code == 204
+    assert web.get(f"/subjects/{subject_id}/session?driver=tab-a").json() == {"offer": None}
+
+
+def test_release_frees_the_tabs_lease_and_is_404_when_not_open():
+    services = make_services()
+    subject_id = make_subject(services.store, USER, concepts=2)
+    web = client(services)
+    thread_id, _ = _start(web, subject_id, driver="tab-a")
+    services.store.ensure_profile(OTHER)
+    other = client(replace(services, user_id=OTHER))
+
+    # As a closing tab sends it: a plain POST, so the browser needs no preflight.
+    released = web.post(f"/sessions/{thread_id}/release?driver=tab-a")
+    offer = web.get(f"/subjects/{subject_id}/session?driver=tab-b").json()["offer"]
+    foreign = other.post(f"/sessions/{thread_id}/release?driver=tab-a")
+    unknown = web.post(f"/sessions/{uuid4()}/release?driver=tab-a")
+
+    assert released.status_code == 204
+    assert offer["thread_id"] == thread_id and offer["busy"] is False
+    for response in (foreign, unknown):
+        assert (response.status_code, response.json()) == (404, {"error": "Not found."})
 
 
 def test_unknown_sessions_are_404_and_malformed_ids_422():

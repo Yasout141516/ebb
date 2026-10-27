@@ -59,6 +59,17 @@ export function postJson<T>(path: string, body?: unknown, signal?: AbortSignal):
   });
 }
 
+/**
+ * POST with no body as the page goes away: `keepalive` lets the request outlive the page,
+ * and without a body (or its JSON content type) the browser needs no preflight first.
+ * Nothing waits for the answer.
+ */
+export function postOnLeave(path: string): void {
+  fetch(`${API_URL}${path}`, { method: "POST", keepalive: true }).catch(() => {
+    // the page is gone: there is no one to tell
+  });
+}
+
 export function del(path: string, signal?: AbortSignal): Promise<void> {
   return request<void>(path, { method: "DELETE", signal });
 }

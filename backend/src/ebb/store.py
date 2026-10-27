@@ -297,6 +297,10 @@ class Store(Protocol):
         """The driver of the open session whose lease is live at `now`, or None."""
         ...
 
+    def release_session(self, user_id: UUID, thread_id: str, driver: str) -> None:
+        """Free the open session's lease if `driver` holds it (a tab closing)."""
+        ...
+
     def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
         """Mark the open session active at `now`."""
         ...

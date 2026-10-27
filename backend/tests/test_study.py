@@ -296,7 +296,7 @@ def test_discard_ends_the_session(s):
     thread_id, _ = started(s, "tab-a")
     s.clock.advance(seconds=91)  # the tab was closed
 
-    s.sessions.discard(USER, thread_id)
+    s.sessions.discard(USER, thread_id, "tab-b")
 
     assert session(s, thread_id)["ended_at"] == s.clock()
     assert s.sessions.offer(USER, s.subject_id, "tab-b") is None
@@ -305,9 +305,51 @@ def test_discard_ends_the_session(s):
 def test_discard_keeps_a_session_another_tab_is_driving(s):
     thread_id, _ = started(s, "tab-a")
 
-    s.sessions.discard(USER, thread_id)
+    s.sessions.discard(USER, thread_id, "tab-b")
 
     assert session(s, thread_id)["ended_at"] is None
+
+
+def test_discard_by_the_tab_driving_it_ends_the_session(s):
+    # The tab's own lease, e.g. after a refresh while its turn ran: Start fresh must end
+    # that session, not leave it open beside the new one.
+    thread_id, _ = started(s, "tab-a")
+
+    s.sessions.discard(USER, thread_id, "tab-a")
+
+    assert session(s, thread_id)["ended_at"] == s.clock()
+
+
+def test_discard_keeps_a_session_whose_turn_is_running(s):
+    thread_id, _ = started(s, "tab-a")
+    s.store.locks.add(thread_id)
+
+    s.sessions.discard(USER, thread_id, "tab-a")
+
+    assert session(s, thread_id)["ended_at"] is None
+
+
+def test_release_lets_another_tab_take_the_session_at_once(s):
+    thread_id, first = started(s, "tab-a")
+
+    s.sessions.release(USER, thread_id, "tab-b")  # someone else's lease: kept
+    assert s.sessions.offer(USER, s.subject_id, "tab-b").busy is True
+    s.sessions.release(USER, thread_id, "tab-a")  # the tab closed
+
+    assert s.sessions.offer(USER, s.subject_id, "tab-b").busy is False
+    assert list(s.sessions.resume(USER, thread_id, "tab-b")) == [first]
+    assert session(s, thread_id)["driver"] == "tab-b"
+
+
+def test_release_of_a_session_that_isnt_open_is_refused(s):
+    thread_id, _ = started(s, "tab-a")
+    with pytest.raises(SessionNotFound):
+        s.sessions.release(uuid4(), thread_id, "tab-a")  # another user's
+    ending(s.sessions.reply(USER, thread_id, "tab-a", {"quit": True}))
+
+    for thread in (thread_id, str(uuid4())):  # ended, unknown
+        with pytest.raises(SessionNotFound):
+            s.sessions.release(USER, thread, "tab-a")
 
 
 def test_a_held_thread_runs_without_a_lease_and_is_busy_elsewhere(s):

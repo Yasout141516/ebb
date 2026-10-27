@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { ApiError, getJson, postJson } from "@/lib/api";
+import { ApiError, getJson, postJson, postOnLeave } from "@/lib/api";
 import { clockTime } from "@/lib/format";
 import {
   activeThread,
@@ -28,6 +28,10 @@ const SOMETHING_WRONG = "Something went wrong — try again.";
 const UNREACHABLE = "Can't reach the API.";
 /** How often an open session renews this tab's lease on it. */
 const HEARTBEAT_MS = 30_000;
+/** Shown while this tab waits for its own last turn, still running on the server. */
+const FINISHING = "Finishing your last answer…";
+/** How long a reconnect waits for that turn before offering the session instead. */
+const FINISHING_MS = 30_000;
 
 /** A failure shown as the error card; `retry` sends the failed request again. */
 export type StudyError = { message: string; retry: (() => void) | null };
@@ -86,14 +90,14 @@ export default function useStudy(subjectId: string): Study {
     if (thread.current) saveThread(thread.current, cards);
   }, [cards]);
 
-  /** A new request: the one before it (if any) is abandoned. */
-  function begin(): AbortSignal {
+  /** A new request, showing `step` until the API names one; the one before it (if any) is abandoned. */
+  function begin(step: string | null = null): AbortSignal {
     inFlight.current?.abort();
     const controller = new AbortController();
     inFlight.current = controller;
     setRunning(true);
     setError(null);
-    setStep(null);
+    setStep(step);
     return controller.signal;
   }
 
@@ -149,8 +153,9 @@ export default function useStudy(subjectId: string): Study {
     body: unknown,
     retry: () => void,
     refused?: (error: ApiError) => boolean,
+    step: string | null = null,
   ): Promise<void> {
-    const signal = begin();
+    const signal = begin(step);
     try {
       await streamPost(path, body, (e) => onEvent(e, retry), signal);
     } catch (e) {
@@ -174,18 +179,42 @@ export default function useStudy(subjectId: string): Study {
     void stream(`/subjects/${subjectId}/session`, { driver: driverId() }, retry);
   }
 
-  /** Carry on with a session; `silent`: this tab's own, which may have ended meanwhile. */
-  function reconnect(threadId: string, silent: boolean) {
+  /**
+   * Carry on with a session; `silent`: this tab's own, which may have ended meanwhile. Its
+   * last turn may also still be running on the server (the tab was refreshed or left while
+   * an answer was graded), refused as busy until it is done: so a silent reconnect tries
+   * again, `delay` ms later and less often each time, until `until`, then offers the session.
+   */
+  function reconnect(threadId: string, silent: boolean, until = Date.now() + FINISHING_MS, delay = 1_000) {
     const retry = () => reconnect(threadId, silent);
     const gone = (e: ApiError) => {
       if (e.status !== 404 && e.status !== 409) return false;
+      if (e.status === 409 && Date.now() + delay <= until) {
+        void finishing(() => reconnect(threadId, true, until, Math.min(delay * 2, 5_000)), delay);
+        return true;
+      }
       forgetThread(subjectId);
       thread.current = null;
       setCards([]);
       void lookForOffer();
       return true;
     };
-    void stream(`/sessions/${threadId}/resume`, { driver: driverId() }, retry, silent ? gone : undefined);
+    const again = silent && delay > 1_000; // already waiting: the step line stays
+    const path = `/sessions/${threadId}/resume`;
+    void stream(path, { driver: driverId() }, retry, silent ? gone : undefined, again ? FINISHING : null);
+  }
+
+  /** Show that this tab's last turn is finishing, then carry on (`then`) `delay` ms later. */
+  async function finishing(then: () => void, delay: number) {
+    const signal = begin(FINISHING);
+    await new Promise<void>((done) => {
+      const timer = setTimeout(done, delay);
+      signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        done();
+      });
+    });
+    if (!signal.aborted) then();
   }
 
   async function lookForOffer() {
@@ -240,7 +269,7 @@ export default function useStudy(subjectId: string): Study {
   async function discardAndStart(old: Offer) {
     const signal = begin();
     try {
-      await postJson(`/sessions/${old.thread_id}/discard`, undefined, signal);
+      await postJson(`/sessions/${old.thread_id}/discard`, { driver: driverId() }, signal);
     } catch (e) {
       if (signal.aborted) return;
       settle(signal);
@@ -327,6 +356,17 @@ export default function useStudy(subjectId: string): Study {
       beat.current = null;
     };
   }, [sessionOpen]);
+
+  // A closed tab lets go of its session, so another tab may take it up at once.
+  const leaving = useEffectEvent(() => {
+    const threadId = thread.current;
+    if (threadId) postOnLeave(`/sessions/${threadId}/release?driver=${encodeURIComponent(driverId())}`);
+  });
+  useEffect(() => {
+    const onPageHide = () => leaving();
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
 
   function answer(text: string, choice: number | null) {
     if (!waiting) return;

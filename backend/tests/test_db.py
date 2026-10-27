@@ -1113,6 +1113,20 @@ def test_claim_session_refuses_ended_and_other_users_sessions(session_store):
     assert session_store.session_driver(ALICE, "t-1", NOW, LEASE) is None
 
 
+def test_release_session_frees_only_its_own_drivers_lease(session_store):
+    open_session(session_store)
+    session_store.claim_session(ALICE, "t-1", "tab-a", NOW, LEASE)
+
+    session_store.release_session(ALICE, "t-1", "tab-b")  # not tab-b's to free
+    session_store.release_session(BOB, "t-1", "tab-a")  # nor another user's
+    assert session_store.session_driver(ALICE, "t-1", later(1), LEASE) == "tab-a"
+    session_store.release_session(ALICE, "t-1", "tab-a")
+
+    assert session_store.session_driver(ALICE, "t-1", later(1), LEASE) is None
+    assert session_store.claim_session(ALICE, "t-1", "tab-b", later(1), LEASE) is True
+    assert session_store.get_session(ALICE, "t-1") is not None  # still open
+
+
 def test_touch_session_moves_the_last_activity(session_store):
     session_id = open_session(session_store)
 

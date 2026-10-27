@@ -78,10 +78,20 @@ def reply(thread_id: UUID, body: ReplyBody, request: Request) -> EventSourceResp
 
 
 @router.post("/sessions/{thread_id}/discard", status_code=204)
-def discard_session(thread_id: UUID, request: Request) -> None:
+def discard_session(thread_id: UUID, body: Driver, request: Request) -> None:
     """Start fresh: the session ends, unless another tab or terminal is driving it."""
     services = services_of(request)
-    services.sessions.discard(services.user_id, str(thread_id))
+    services.sessions.discard(services.user_id, str(thread_id), body.driver)
+
+
+@router.post("/sessions/{thread_id}/release", status_code=204)
+def release_session(
+    thread_id: UUID, driver: Annotated[DriverId, Query()], request: Request
+) -> None:
+    """A closing tab lets go of the session. The driver comes in the query: a body would
+    make the browser send a preflight first, which a page being closed can't wait for."""
+    services = services_of(request)
+    services.sessions.release(services.user_id, str(thread_id), driver)
 
 
 @router.post("/sessions/{thread_id}/heartbeat", status_code=204)

@@ -177,15 +177,23 @@ class StudySessions:
         payload: dict[str, Any] = saved.interrupts[0].value
         return payload
 
-    def discard(self, user_id: UUID, thread_id: str) -> None:
-        """Start fresh: end the session, unless another tab or terminal is driving it."""
+    def discard(self, user_id: UUID, thread_id: str, driver: str) -> None:
+        """Start fresh: end the session, unless another tab or terminal is driving it or a
+        turn of it is running. `driver`'s own lease doesn't keep it open."""
         found = self.store.get_session(user_id, thread_id)
         if found is None:
             return
         now = self.now()
         with self.store.session_lock(user_id, thread_id) as free:
-            if free and self.store.session_driver(user_id, thread_id, now, LEASE) is None:
+            if free and self.store.session_driver(user_id, thread_id, now, LEASE) in (None, driver):
                 self.store.end_session(user_id, found.session_id, now)
+
+    def release(self, user_id: UUID, thread_id: str, driver: str) -> None:
+        """`driver` is gone (its tab closed): free its lease, so another tab may carry on at
+        once. Raises SessionNotFound if the session isn't open."""
+        if self.store.get_session(user_id, thread_id) is None:
+            raise SessionNotFound(thread_id)
+        self.store.release_session(user_id, thread_id, driver)
 
     def heartbeat(self, user_id: UUID, thread_id: str, driver: str) -> bool:
         """Renew `driver`'s lease; False if someone else drives the session. Raises

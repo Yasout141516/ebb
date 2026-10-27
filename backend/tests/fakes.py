@@ -438,6 +438,11 @@ class MemoryStore:
         seen = None if found is None else found[1]["driver_seen_at"]
         return found[1]["driver"] if seen is not None and seen > now - lease else None
 
+    def release_session(self, user_id: UUID, thread_id: str, driver: str) -> None:
+        found = self._open_session(user_id, thread_id)
+        if found is not None and found[1]["driver"] == driver:
+            found[1].update(driver=None, driver_seen_at=None)
+
     def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
         found = self._open_session(user_id, thread_id)
         if found is not None:
