@@ -1,5 +1,6 @@
 """The only place that talks to an LLM. Graph nodes see the `Tutor` protocol."""
 
+import random
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from importlib.resources import files
@@ -422,11 +423,14 @@ def _mistral_provider(settings: Settings, api_key: str) -> Provider:
 
 
 class LangChainTutor:
-    def __init__(self, providers: list[Provider], attempts: int = 3) -> None:
+    def __init__(
+        self, providers: list[Provider], attempts: int = 3, rng: random.Random | None = None
+    ) -> None:
         if not providers:
             raise ValueError("at least one provider is required")
         self.providers = providers
         self.attempts = attempts
+        self.rng = rng or random.Random()
 
     @classmethod
     def from_settings(cls, settings: Settings, fallback: bool = True) -> LangChainTutor:
@@ -514,19 +518,23 @@ class LangChainTutor:
 
         def to_questions(batch: QuestionBatch | WebQuestionBatch) -> list[Question]:
             drafts = batch.questions if count is None else batch.questions[:count]
-            return [
-                Question(
-                    id=uuid4(),
-                    concept_id=concept.id,
-                    type=draft.type,
-                    difficulty=draft.difficulty,
-                    prompt=draft.prompt,
-                    reference_answer=draft.reference_answer,
-                    options=tuple(Option(**o.model_dump()) for o in draft.options),
-                    claims=_claims(draft.citations),
+            questions = []
+            for draft in drafts:
+                options = [Option(**o.model_dump()) for o in draft.options]
+                self.rng.shuffle(options)  # models put the correct option first, far too often
+                questions.append(
+                    Question(
+                        id=uuid4(),
+                        concept_id=concept.id,
+                        type=draft.type,
+                        difficulty=draft.difficulty,
+                        prompt=draft.prompt,
+                        reference_answer=draft.reference_answer,
+                        options=tuple(options),
+                        claims=_claims(draft.citations),
+                    )
                 )
-                for draft in drafts
-            ]
+            return questions
 
         schema: type[BaseModel]
         values = {"name": _line(concept.name), "description": _line(concept.description)}

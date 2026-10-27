@@ -14,15 +14,15 @@ test("a learner studies a typed topic, ends the session and sees their progress"
   const waiting = check.or(composer.and(page.locator(":enabled")));
 
   // The fake tutor opens a concept with a short question ("right" is graded correct) and follows
-  // it with a harder multiple-choice one (option 1 is the correct option).
+  // it with a harder multiple-choice one (its options are shuffled; "right option" is correct).
   await expect(waiting).toBeVisible({ timeout: 30_000 });
   await composer.fill("right");
   await composer.press("Enter");
   await expect(page.getByRole("article", { name: "Grade: Correct" })).toHaveCount(1, { timeout: 30_000 });
 
-  // Multiple choice: key 1 chooses an option, Enter submits.
+  // Multiple choice: choose the option the fake marks correct, wherever it landed; Enter submits.
   await expect(check).toBeVisible({ timeout: 30_000 });
-  await page.keyboard.press("1");
+  await page.getByRole("radio", { name: "right option", exact: true }).check();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("article", { name: "Grade: Correct" })).toHaveCount(2, { timeout: 30_000 });
 

@@ -1,5 +1,6 @@
 """Test doubles: an in-memory Store and a scripted Tutor. No network, no database."""
 
+import random
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
@@ -480,7 +481,7 @@ class MemoryStore:
 
 class FakeTutor:
     """Short answers: "right" is correct, "meh" partial, anything else incorrect.
-    Multiple choice: option 1 is always the correct one."""
+    Multiple choice: option 1 is the correct one, unless an `rng` shuffles the options."""
 
     def __init__(
         self,
@@ -504,7 +505,9 @@ class FakeTutor:
         fail_concepts: bool = False,
         fail_eval_on_calls: Sequence[int] = (),
         refuse: set[str] | None = None,
+        rng: random.Random | None = None,
     ) -> None:
+        self.rng = rng  # when given, shuffles each question's options, as the real tutor does
         self.refuse = refuse or set()  # names of the methods that raise TutorRefused
         self.batch_size = batch_size
         self.fail_grade_times = fail_grade_times
@@ -620,6 +623,10 @@ class FakeTutor:
                     Option("wrong option B", False, "That is a different layer."),
                     Option("wrong option C", False, "That is the opposite."),
                 )
+                if self.rng is not None:
+                    shuffled = list(options)
+                    self.rng.shuffle(shuffled)
+                    options = tuple(shuffled)
             if scripted is not None and index < len(scripted):
                 prompt = scripted[index]
             else:

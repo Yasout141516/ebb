@@ -3,6 +3,7 @@
 Run from backend/: `uv run python -m tests.e2e_server` (port 8001; Playwright starts it).
 """
 
+import random
 from dataclasses import replace
 from typing import Any
 
@@ -33,7 +34,7 @@ class E2ETutor(FakeTutor):
 
 def main() -> None:
     base = make_services()
-    tutor, saver = E2ETutor(), InMemorySaver()
+    tutor, saver = E2ETutor(rng=random.Random(7)), InMemorySaver()
     graph = build_graph(tutor, base.store, saver, now=lambda: NOW)
     sessions = StudySessions(base.store, graph, saver, lambda: NOW)
     services = replace(base, tutor=tutor, sessions=sessions)

@@ -1,3 +1,4 @@
+import random
 from typing import Any
 from uuid import uuid4
 
@@ -435,9 +436,48 @@ def test_generate_questions_maps_drafts_to_domain_questions():
         assert question.difficulty == draft.difficulty
         assert question.prompt == draft.prompt
         assert question.reference_answer == draft.reference_answer
-        assert question.options == tuple(Option(o.text, o.is_correct, o.why) for o in draft.options)
+        drafted = [Option(o.text, o.is_correct, o.why) for o in draft.options]
+        assert sorted(question.options, key=lambda o: o.text) == sorted(
+            drafted, key=lambda o: o.text
+        )  # shuffled, but the same options
     assert isinstance(questions[0].options, tuple)
     assert questions[2].options == ()
+
+
+def _generated(rng: random.Random | None) -> list[Question]:
+    batch = QuestionBatch.model_validate({"questions": FIVE})
+    tutor = LangChainTutor(
+        [Provider("primary", Structured(None), Structured(batch))], attempts=1, rng=rng
+    )
+    return tutor.generate_questions(CONCEPT, []).value
+
+
+def test_mcq_options_are_shuffled_with_the_given_rng():
+    drafted = [Option(o["text"], o["is_correct"], o["why"]) for o in mcq_draft("a", 1)["options"]]
+    expected = list(drafted)
+    random.Random(3).shuffle(expected)
+    assert expected != drafted  # the seed moves something, or the test proves nothing
+
+    first = _generated(random.Random(3))[0]
+
+    assert first.options == tuple(expected)
+    assert first.reference_answer == "UDP"
+
+
+def test_correct_option_lands_in_every_position():
+    rng = random.Random()
+    positions = set()
+    for _ in range(200):
+        options = _generated(rng)[0].options
+        positions.add(next(i for i, o in enumerate(options) if o.is_correct))
+    assert positions == {0, 1, 2, 3}
+
+
+def test_short_answers_untouched():
+    short = _generated(random.Random(3))[2]
+    assert short.type == "short"
+    assert short.options == ()
+    assert short.reference_answer == "A model answer."
 
 
 def test_grade_converts_the_result_and_uses_the_precise_model():
