@@ -100,3 +100,28 @@ are in the SDD ledger (rulings R1–R46).
   closed.
 - The e2e test's `waiting` locator could hit Playwright's strict mode if the UI changes; CI
   doesn't cache the Playwright browsers.
+
+## Deferred from /simplify
+
+Judged too large or too risky for a no-behaviour-change pass:
+
+- Per-instance locking strategy instead of `_held`.
+- One detached-worker primitive for study runs and drafts (and one worker per draft).
+- One `describe(error)` failure mapping for HTTP, SSE and drafts.
+- Same-driver server-side wait instead of the client's 409 polling.
+- Turn/attempt ids in the payload for card reconciliation.
+- Reply idempotency at the graph node.
+- Housekeeping on startup or a timer instead of per request.
+- `UploadPanel`: a batch object instead of the generation counter.
+- `takenOver` refetching the real offer.
+- `NoTutor` as the single not-configured mechanism.
+- The dashboard and the memory panel are mounted twice (wide and compact): one tree.
+- A double checkpoint read per reply.
+- `updates` is bumped on non-graded turns.
+- `saveThread` on every cards change.
+- Parallel progress reads.
+- Unlock-before-close in `advisory_lock`; pool size against the threadpool.
+- The two shared CSS modules (`onboarding/shared`, `progress/shared`).
+- `CitationChips`' popover using `useFocusReturn`: the popover stays mounted when another chip is
+  opened, so the hook would return focus to the first chip, and a remount hands the hook the
+  wrong opener. It keeps its own focus-return for now.
