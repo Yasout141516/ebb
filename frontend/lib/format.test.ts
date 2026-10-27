@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { clockTime, day, dayMonth, formatAgo, stageDots, tidePercent, weekday } from "./format";
+import {
+  calendarDays,
+  clockTime,
+  day,
+  dayMonth,
+  formatAgo,
+  percent,
+  stageDots,
+  tidePercent,
+  weekday,
+} from "./format";
 
 describe("format", () => {
   it("tidePercent", () => {
@@ -7,6 +17,18 @@ describe("format", () => {
     expect(tidePercent(0.644)).toBe("64%");
     expect(tidePercent(1)).toBe("100%");
     expect(tidePercent(0)).toBe("0%");
+    expect(tidePercent(null, "—")).toBe("—");
+    expect(percent(0.644)).toBe(64);
+    expect(percent(null)).toBe(0);
+  });
+
+  it("calendarDays counts local calendar days, not 24-hour spans", () => {
+    const late = new Date(2026, 9, 23, 23, 30);
+    const early = new Date(2026, 9, 24, 0, 10);
+    expect(calendarDays(late, early)).toBe(1);
+    expect(calendarDays(early, late)).toBe(-1);
+    expect(calendarDays(new Date(2026, 9, 24, 1), new Date(2026, 9, 24, 23))).toBe(0);
+    expect(calendarDays(new Date(2026, 9, 20, 12), new Date(2026, 9, 27, 12))).toBe(7);
   });
 
   it("stageDots", () => {

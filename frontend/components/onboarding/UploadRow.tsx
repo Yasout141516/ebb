@@ -135,7 +135,7 @@ export default function UploadRow({ filename, size, state, onRemove, onRetry }: 
           <span className={styles.meta}>{meta(size, state)}</span>
         </div>
         {state.status !== "stored" && (
-          <span aria-live="polite" className={styles.srOnly}>
+          <span aria-live="polite" className="sr-only">
             {announcement(filename, state)}
           </span>
         )}
@@ -174,7 +174,7 @@ export default function UploadRow({ filename, size, state, onRemove, onRetry }: 
             return (
               <span key={name} className={`${styles.chip} ${fresh ? "" : styles.known}`}>
                 {name}
-                {marked && <span className={styles.srOnly}> (new)</span>}
+                {marked && <span className="sr-only"> (new)</span>}
               </span>
             );
           })}

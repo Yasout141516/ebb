@@ -1,22 +1,16 @@
 import { useId } from "react";
 import { Gauge } from "@/components/study/MemoryPanel";
+import { calendarDays, INTERVAL_DAYS } from "@/lib/format";
 import type { Stage } from "@/lib/types";
 import shared from "./shared.module.css";
 import styles from "./StageColumns.module.css";
 
-// The review gap for each stage, in days (backend mastery.INTERVAL_DAYS).
-const GAP = [0, 1, 3, 7, 16, 35];
 const plural = (n: number) => (n === 1 ? "1 day" : `${n} days`);
 
 /** When a concept comes back, in calendar days of the browser's zone; `due` from today on. */
 export function nextText(nextReviewAt: string | null, now: Date): { text: string; due: boolean } {
   if (nextReviewAt === null) return { text: "Due today", due: true };
-  const at = new Date(nextReviewAt);
-  const days = Math.round(
-    (new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime() -
-      new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) /
-      86_400_000,
-  );
+  const days = calendarDays(now, new Date(nextReviewAt));
   if (days < 0) return { text: `Overdue ${plural(-days)}`, due: true };
   if (days === 0) return { text: "Due today", due: true };
   return { text: days === 1 ? "Tomorrow" : `Next in ${days} days`, due: false };
@@ -48,7 +42,7 @@ export default function StageColumns({ stages, notStarted, tides, compact = fals
     ...stages.map((st) => ({
       key: String(st.stage),
       title: `Stage ${st.stage}`,
-      sub: `back after ${plural(GAP[st.stage])}`,
+      sub: `back after ${plural(INTERVAL_DAYS[st.stage])}`,
       items: st.concepts.map((c) => ({ name: c.name, next: nextText(c.next_review_at, now) })),
     })),
     {

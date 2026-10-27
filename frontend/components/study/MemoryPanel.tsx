@@ -4,12 +4,10 @@ import Link from "next/link";
 import { type CSSProperties, type ReactNode, useEffect, useId, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
 import { getJson } from "@/lib/api";
-import { stageDots, weekday } from "@/lib/format";
+import { calendarDays, INTERVAL_DAYS, percent, stageDots, weekday } from "@/lib/format";
 import type { ConceptState, Concepts } from "@/lib/types";
 import styles from "./MemoryPanel.module.css";
 
-// The review gap for each stage, in days (backend mastery.INTERVAL_DAYS).
-const INTERVAL_DAYS = [0, 1, 3, 7, 16, 35];
 const TIDE_TIP = "Tide: the chance you'd recall it right now. It ebbs every day and rises when you review.";
 const STAGE_TIP = "Stage: how far along its reviews are. Each right answer moves it up and widens the gap.";
 const LOAD_FAILED = "Couldn't load your memory levels.";
@@ -22,33 +20,26 @@ export function nextGap(stage: number): number {
 /** How long a due concept has been due, in calendar days of the browser's zone. */
 export function dueText(nextReviewAt: string | null, now: Date): string {
   if (nextReviewAt === null) return "due today";
-  const due = new Date(nextReviewAt);
-  const days = Math.round(
-    (new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() -
-      new Date(due.getFullYear(), due.getMonth(), due.getDate()).getTime()) /
-      86_400_000,
-  );
+  const days = calendarDays(new Date(nextReviewAt), now);
   if (days <= 0) return "due today";
   return days === 1 ? "due yesterday" : `due ${days} days ago`;
 }
 
-const percent = (tide: number | null) => Math.round((tide ?? 0) * 100);
-
 /** What the gauge's dashed marker shows, as text (screen readers can't see the gauge). */
 function AheadText({ c }: { c: ConceptState }) {
   if (c.tide === null || c.projected_tide === null) return null;
-  return <span className={styles.srOnly}>, about {percent(c.projected_tide)}% in 3 days without review</span>;
+  return <span className="sr-only">, about {percent(c.projected_tide)}% in 3 days without review</span>;
 }
 
 /** A tide value: "71%", or "—" with its words for a concept never studied. */
 function TideValue({ tide, className }: { tide: number | null; className: string }) {
   return (
     <span className={className}>
-      <span className={styles.srOnly}>Tide</span>{" "}
+      <span className="sr-only">Tide</span>{" "}
       {tide === null ? (
         <>
           <span aria-hidden="true">—</span>
-          <span className={styles.srOnly}>not measured yet,</span>
+          <span className="sr-only">not measured yet,</span>
         </>
       ) : (
         `${percent(tide)}%`
@@ -152,9 +143,9 @@ export function useConcepts(subjectId: string, updates: number) {
   return { concepts, failed, retry: () => setAttempt((n) => n + 1) };
 }
 
-/** Nothing due: when the next review is (D5), without D5's "Quiz ahead anyway". */
-function NothingDue({ at }: { at: string }) {
-  return <p className={styles.calm}>Tide&apos;s high. Next review {weekday(at, undefined, true)}.</p>;
+/** Nothing due: when the next review is (D5), without D5's "Quiz ahead anyway"; `className` styles its box. */
+export function NothingDue({ at, className = styles.calm }: { at: string; className?: string }) {
+  return <p className={className}>Tide&apos;s high. Next review {weekday(at, undefined, true)}.</p>;
 }
 
 type Props = {
@@ -296,7 +287,7 @@ export function MemorySheetBody({
                 <Gauge tide={c.tide} className={styles.sheetDueGauge} />
                 <span className={styles.sheetName}>{c.name}</span>
                 <TideValue tide={c.tide} className={styles.sheetValue} />
-                <span className={styles.srOnly}>, {dueText(c.next_review_at, now)}</span>
+                <span className="sr-only">, {dueText(c.next_review_at, now)}</span>
               </li>
             ))}
           </ul>

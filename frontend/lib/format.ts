@@ -1,6 +1,20 @@
-/** A memory level as a percentage; a concept not yet studied is "new". */
-export function tidePercent(t: number | null): string {
-  return t === null ? "new" : `${Math.round(t * 100)}%`;
+/** A memory level (0–1) as a whole percentage number; null counts as 0. */
+export function percent(t: number | null): number {
+  return Math.round((t ?? 0) * 100);
+}
+
+/** A memory level as a percentage; a concept not yet studied is `empty` ("new"). */
+export function tidePercent(t: number | null, empty = "new"): string {
+  return t === null ? empty : `${percent(t)}%`;
+}
+
+/** The review gap in days before a concept comes back, by its stage (backend mastery.INTERVAL_DAYS). */
+export const INTERVAL_DAYS = [0, 1, 3, 7, 16, 35];
+
+/** Whole calendar days from `from` to `to` (negative when `to` is earlier), in the browser's zone. */
+export function calendarDays(from: Date, to: Date): number {
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return Math.round((midnight(to) - midnight(from)) / 86_400_000);
 }
 
 /** A stage out of five, as filled and empty dots. */

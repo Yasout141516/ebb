@@ -195,19 +195,6 @@
 }
 
 /* Dots, then the stage text; the text moves under the dots, whole, where it doesn't fit. */
-/* Text for screen readers only: what the gauges and the "—" show. */
-.srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
 /* Tooltips (D7): the trigger is a bare button around the stage line or the tide value. */
 .tipBox {
   position: relative;

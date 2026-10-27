@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useId, useState } from "react";
-import { dayMonth } from "@/lib/format";
+import { dayMonth, percent } from "@/lib/format";
 import type { Chart, ChartConcept } from "@/lib/types";
 import styles from "./TideChart.module.css";
 
@@ -14,7 +14,6 @@ type Point = { t: number; v: number };
 type Line = { points: Point[]; reviews: Point[]; ahead: Point[]; start: number; now: number };
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
-const percent = (v: number) => Math.round(v * 100);
 const times = (n: number) => (n === 1 ? "1 time" : `${n} times`);
 
 /** A concept's measured points, its reviews (each rise; the first tide after none) and the 3 days ahead. */

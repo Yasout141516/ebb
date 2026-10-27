@@ -1,12 +1,12 @@
 import type { CSSProperties } from "react";
-import { dayMonth } from "@/lib/format";
+import { dayMonth, percent, tidePercent } from "@/lib/format";
 import type { Average } from "@/lib/types";
 import styles from "./AverageTide.module.css";
 import shared from "./shared.module.css";
 
 /** "+9 points since 23 Sep", "−3 points since …" (a true minus sign); `short`: "+9 since 23 Sep". */
 export function changeText(change: number, since: string, short = false): string {
-  const points = Math.round(change * 100);
+  const points = percent(change);
   const sign = points > 0 ? "+" : points < 0 ? "−" : "";
   const unit = short ? "" : Math.abs(points) === 1 ? " point" : " points";
   return `${sign}${Math.abs(points)}${unit} since ${dayMonth(since)}`;
@@ -30,7 +30,7 @@ export function footnote(counted: number, notCounted: string[]): string {
 }
 
 const trend = (change: number) => {
-  const points = Math.round(change * 100);
+  const points = percent(change);
   return points > 0 ? styles.up : points < 0 ? styles.down : styles.flat;
 };
 
@@ -38,7 +38,7 @@ type Props = { average: Average; compact?: boolean };
 
 /** The mean tide of the studied concepts, and how far it moved in 30 days. */
 export default function AverageTide({ average, compact = false }: Props) {
-  const level = average.now === null ? "—" : `${Math.round(average.now * 100)}%`;
+  const level = tidePercent(average.now, "—");
   if (compact) {
     return (
       <div className={shared.tile}>
