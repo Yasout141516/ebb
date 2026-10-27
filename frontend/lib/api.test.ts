@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { API_URL, ApiError, uploadFile } from "./api";
+import { API_URL, ApiError, messageOf, uploadFile } from "./api";
 import type { SseEvent } from "./sse";
 import { CUT_OFF } from "./sse";
 
@@ -111,5 +111,13 @@ describe("uploadFile", () => {
     const { done, xhr } = start();
     xhr.onerror?.();
     await expect(done).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("messageOf", () => {
+  it("uses the API message, names a network failure, and falls back to a plain line", () => {
+    expect(messageOf(new ApiError(409, "That name is taken."))).toBe("That name is taken.");
+    expect(messageOf(new TypeError("Failed to fetch"))).toBe("Can't reach the API.");
+    expect(messageOf(new Error("boom"))).toBe("Something went wrong — try again.");
   });
 });

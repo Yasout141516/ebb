@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useId, useRef, useState } from "react";
-import { modalKeys, useFocusReturn } from "./DisputeDialog";
+import { modalKeys, useFocusReturn } from "@/lib/modal";
 import styles from "./BottomSheet.module.css";
 
 type Props = {

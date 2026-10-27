@@ -3,9 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
-import { ApiError, del, postJson, uploadFile } from "@/lib/api";
+import { ApiError, del, messageOf, postJson, uploadFile } from "@/lib/api";
 import { MAX_FILES, uploadRefusal } from "@/lib/notes";
-import { SOMETHING_WRONG } from "@/lib/notices";
 import { CUT_OFF } from "@/lib/sse";
 import type {
   CommittedDraft,
@@ -31,10 +30,6 @@ type Row = { key: number; file: File; state: RowState };
 
 const existsCopy = (name: string) =>
   `${name} already exists — add notes to it from its Sources list.`;
-
-function messageOf(error: unknown): string {
-  return error instanceof ApiError ? error.message : SOMETHING_WRONG;
-}
 
 export default function UploadPanel(props: Props) {
   const router = useRouter();

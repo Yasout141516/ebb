@@ -1,4 +1,5 @@
 // sse.ts imports from this module too; each side uses the other only inside functions.
+import { SOMETHING_WRONG } from "./notices";
 import { CUT_OFF, parseSse, type SseEvent } from "./sse";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -38,6 +39,13 @@ export async function errorOf(response: Response): Promise<ApiError> {
     // unreadable body: keep the fallback
   }
   return errorFrom(response.status, text);
+}
+
+/** What to tell the learner about a failed request: the API's own message, "Can't reach the API.", or a plain fallback. */
+export function messageOf(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof TypeError) return "Can't reach the API."; // fetch's "Failed to fetch"
+  return SOMETHING_WRONG;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

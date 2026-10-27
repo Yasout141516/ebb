@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import { ApiError, getJson, postJson, postOnLeave } from "@/lib/api";
+import { ApiError, getJson, messageOf, postJson, postOnLeave } from "@/lib/api";
 import { clockTime } from "@/lib/format";
-import { FALLBACK_NOTICE, SOMETHING_WRONG } from "@/lib/notices";
+import { FALLBACK_NOTICE } from "@/lib/notices";
 import {
   activeThread,
   answered,
@@ -24,7 +24,6 @@ import {
 import { streamPost, type SseEvent } from "@/lib/sse";
 import type { DisputeReason, Finished, Offer, SessionOffer, Started, StreamError, TurnPayload } from "@/lib/types";
 
-const UNREACHABLE = "Can't reach the API.";
 /** How often an open session renews this tab's lease on it. */
 const HEARTBEAT_MS = 30_000;
 /** Shown while this tab waits for its own last turn, still running on the server. */
@@ -62,12 +61,6 @@ export type Study = {
   resume: () => void;
   startFresh: () => void;
 };
-
-function messageOf(error: unknown): string {
-  if (error instanceof ApiError) return error.message;
-  if (error instanceof TypeError) return UNREACHABLE; // fetch's "Failed to fetch"
-  return SOMETHING_WRONG;
-}
 
 const dayCard = (): Card => ({ kind: "day", id: uuid(), text: `Today · ${clockTime(new Date())}` });
 
