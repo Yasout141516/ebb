@@ -148,7 +148,7 @@ class StudySessions:
         thread_id = str(uuid4())
         first = {"user_id": str(user_id), "subject_id": str(subject_id), "thread_id": thread_id}
         # The session row is made by the run, so its lease is first claimed at the question.
-        run = self._stream(user_id, thread_id, driver, first)
+        run = self._stream(user_id, thread_id, driver, first, claimed=False)
         return thread_id, text, self._drive(user_id, thread_id, driver, run, claim=False)
 
     def resume(self, user_id: UUID, thread_id: str, driver: str) -> Iterator[Event]:
@@ -253,12 +253,13 @@ class StudySessions:
     def _next(
         self, user_id: UUID, thread_id: str, driver: str, reply: Mapping[str, Any] | None
     ) -> _Run:
-        """The one decision on what the graph gets next."""
+        """The one decision on what the graph gets next. Its run is driven by `_drive`, which
+        has claimed the lease (or the instance holds the thread)."""
         saved = self.graph.get_state(_config(thread_id))
         if saved.interrupts:
             payload = saved.interrupts[0].value
             if reply is None or self._applied(user_id, saved.values, reply):
-                return self._pending(user_id, thread_id, driver, payload)
+                return self._pending(user_id, thread_id, driver, payload, claimed=True)
             graph_input: Any = Command(resume=dict(reply))
         elif _cut_off(saved):
             graph_input = None  # finish the turn that was cut off
@@ -266,7 +267,7 @@ class StudySessions:
             return self._finished(user_id, saved.values)
         else:
             raise SessionNotFound(thread_id)
-        return (yield from self._stream(user_id, thread_id, driver, graph_input))
+        return (yield from self._stream(user_id, thread_id, driver, graph_input, claimed=True))
 
     def _applied(self, user_id: UUID, values: Mapping[str, Any], reply: Mapping[str, Any]) -> bool:
         """Whether `reply` was already applied: resuming with it again would answer the next
@@ -281,7 +282,11 @@ class StudySessions:
             )
         return False
 
-    def _stream(self, user_id: UUID, thread_id: str, driver: str, graph_input: Any) -> _Run:
+    def _stream(
+        self, user_id: UUID, thread_id: str, driver: str, graph_input: Any, claimed: bool
+    ) -> _Run:
+        """The graph's run on `graph_input`, as steps, ending in the turn it stopped at.
+        `claimed`: the caller already claimed `driver`'s lease for this call."""
         stream = self.graph.stream(
             graph_input, _config(thread_id), stream_mode=["custom", "values"]
         )
@@ -302,24 +307,19 @@ class StudySessions:
             if "__interrupt__" in values:
                 self.store.touch_session(user_id, thread_id, self.now())
             raise
-        return self._stopped(user_id, thread_id, driver, values)
-
-    def _stopped(
-        self, user_id: UUID, thread_id: str, driver: str, values: dict[str, Any]
-    ) -> Pending | Finished:
-        """Where a run stopped, from its last values."""
         if "__interrupt__" in values:
-            return self._pending(user_id, thread_id, driver, values["__interrupt__"][0].value)
+            payload = values["__interrupt__"][0].value
+            return self._pending(user_id, thread_id, driver, payload, claimed)
         return self._finished(user_id, values)
 
     def _pending(
-        self, user_id: UUID, thread_id: str, driver: str, payload: dict[str, Any]
+        self, user_id: UUID, thread_id: str, driver: str, payload: dict[str, Any], claimed: bool
     ) -> Pending:
         now = self.now()
         # A question left open for hours keeps its session from being closed as idle.
         self.store.touch_session(user_id, thread_id, now)
-        if thread_id not in self._held:
-            # Names the driver of a new session; renews the lease of a running one.
+        if not claimed and thread_id not in self._held:
+            # Names the driver of a new session (its row exists only now).
             self.store.claim_session(user_id, thread_id, driver, now, LEASE)
         return Pending(fill_payload(payload))
 

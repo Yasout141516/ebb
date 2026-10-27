@@ -544,3 +544,20 @@ def test_housekeeping_skips_a_session_whose_lock_is_held(pg_pool):
 
     sessions.housekeeping(USER)
     assert store.get_session(USER, "t-1") is None
+
+
+def test_a_turn_claims_the_lease_once(s, monkeypatch):
+    thread_id, first = started(s)
+    claims = []
+    claim = s.store.claim_session
+
+    def counted(*args, **kwargs):
+        claims.append(args)
+        return claim(*args, **kwargs)
+
+    monkeypatch.setattr(s.store, "claim_session", counted)
+
+    list(s.sessions.reply(USER, thread_id, "tab-a", right(first)))  # a run, then the next question
+    assert len(claims) == 1
+    list(s.sessions.resume(USER, thread_id, "tab-a"))  # the question shown again
+    assert len(claims) == 2

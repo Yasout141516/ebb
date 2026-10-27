@@ -3,7 +3,13 @@ from uuid import uuid4
 import pytest
 
 from ebb.store import MAX_DOCUMENTS, DocumentRefused, SubjectExists
-from ebb.subjects import add_notes, ensure_name_free, find_note_concepts, find_subject, subject_from_topic
+from ebb.subjects import (
+    add_notes,
+    ensure_name_free,
+    find_note_concepts,
+    find_subject,
+    subject_from_topic,
+)
 from tests.fakes import FakeTutor, MemoryStore, make_subject, new_document
 
 
