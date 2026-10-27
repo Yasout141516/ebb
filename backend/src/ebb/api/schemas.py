@@ -138,7 +138,7 @@ class ReplyBody(BaseModel):
 class Streak(BaseModel):
     current: int
     best: int
-    last14: list[bool]
+    days: list[bool]  # the last 35 days, oldest first, ending today
 
 
 class DueConcept(BaseModel):

@@ -18,32 +18,61 @@ const tides = new Map<string, number | null>([
   ["Routing", 0.44],
   ["UDP", 0.63],
   ["OSI layers", 0.92],
+  ["NAT", null],
 ]);
 
 describe("StageColumns", () => {
   it("shows a column per stage with its gap, and says when one is empty", () => {
-    render(<StageColumns stages={stages} tides={tides} now={NOW} />);
+    render(<StageColumns stages={stages} notStarted={["NAT"]} tides={tides} now={NOW} />);
     expect(screen.getByRole("heading", { name: "Review stages" })).toBeInTheDocument();
-    const four = screen.getByRole("heading", { name: "Stage 4" }).closest("div")!.parentElement!;
+    const four = screen.getByRole("group", { name: "Stage 4" });
     expect(within(four).getByText("back after 16 days")).toBeInTheDocument();
     expect(within(four).getByText("Nothing here yet.")).toBeInTheDocument();
     expect(screen.getAllByText("Nothing here yet.")).toHaveLength(1);
-    expect(screen.getByText("back after 1 day")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Stage 1" })).getByText("back after 1 day")).toBeInTheDocument();
+  });
+
+  it("ends with the concepts not started yet, as the prototype's sixth column", () => {
+    render(<StageColumns stages={stages} notStarted={["NAT", "ARP"]} tides={tides} now={NOW} />);
+    const groups = screen.getAllByRole("group");
+    expect(groups.map((g) => g.querySelector("h3")!.textContent)).toEqual([
+      "Stage 1",
+      "Stage 2",
+      "Stage 3",
+      "Stage 4",
+      "Stage 5",
+      "Not started",
+    ]);
+    const waiting = screen.getByRole("group", { name: "Not started" });
+    expect(within(waiting).getByText("no reviews yet")).toBeInTheDocument();
+    expect(within(waiting).getByText("NAT")).toBeInTheDocument();
+    expect(within(waiting).getByText("ARP")).toBeInTheDocument();
+    // Each item's own line says it hasn't started, beside the column's heading.
+    expect(within(waiting).getAllByText("Not started")).toHaveLength(3);
+  });
+
+  it("an empty Not started column says so too", () => {
+    render(<StageColumns stages={stages} notStarted={[]} tides={tides} now={NOW} />);
+    const waiting = screen.getByRole("group", { name: "Not started" });
+    expect(within(waiting).getByText("Nothing here yet.")).toBeInTheDocument();
   });
 
   it("says when each concept comes back", () => {
-    render(<StageColumns stages={stages} tides={tides} now={NOW} />);
+    render(<StageColumns stages={stages} notStarted={[]} tides={tides} now={NOW} />);
     expect(screen.getByText("Overdue 1 day")).toBeInTheDocument();
     expect(screen.getByText("Due today")).toBeInTheDocument();
     expect(screen.getByText("Tomorrow")).toBeInTheDocument();
     expect(screen.getByText("Next in 26 days")).toBeInTheDocument();
   });
 
-  it("at 375 px lists the names as chips, empty stages still saying so", () => {
-    render(<StageColumns stages={stages} tides={tides} now={NOW} compact />);
-    expect(screen.getByText("Subnetting")).toBeInTheDocument();
+  it("at 375 px lists the names as chips, with a Not started row", () => {
+    render(<StageColumns stages={stages} notStarted={["NAT"]} tides={tides} now={NOW} compact />);
+    expect(within(screen.getByRole("group", { name: "Stage 1" })).getByText("Subnetting")).toBeInTheDocument();
     expect(screen.queryByText("Tomorrow")).not.toBeInTheDocument();
-    expect(screen.getByText("Nothing here yet.")).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Stage 4" })).getByText("Nothing here yet.")).toBeInTheDocument();
+    const waiting = screen.getByRole("group", { name: "Not started" });
+    expect(within(waiting).getByText("no reviews yet")).toBeInTheDocument();
+    expect(within(waiting).getByText("NAT")).toBeInTheDocument();
   });
 
   it("nextText counts calendar days in the browser's zone", () => {

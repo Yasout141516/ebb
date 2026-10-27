@@ -33,6 +33,12 @@ describe("AverageTide", () => {
     expect(screen.queryByText(/since/)).not.toBeInTheDocument();
   });
 
+  it("leaves the footnote out when there is nothing to say", () => {
+    const { container } = render(<AverageTide average={average({ now: null, change: null, counted: 0, not_counted: [] })} />);
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect([...container.querySelectorAll("p")].map((p) => p.textContent)).toEqual(["—"]);
+  });
+
   it("at 375 px is a small tile with the short change", () => {
     render(<AverageTide average={average()} compact />);
     expect(screen.getByText("62%")).toBeInTheDocument();

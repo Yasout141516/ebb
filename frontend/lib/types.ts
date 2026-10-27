@@ -178,7 +178,7 @@ export type ReplyBody = { driver: string; reply: Reply };
 
 // Progress
 
-export type Streak = { current: number; best: number; last14: boolean[] };
+export type Streak = { current: number; best: number; days: boolean[] }; // days: the last 35, oldest first
 export type DueConcept = { name: string; tide: number | null };
 export type Average = {
   now: number | null;

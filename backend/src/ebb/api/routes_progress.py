@@ -41,7 +41,8 @@ def build_progress(
     today = now.astimezone(tz).date()
     days = progress.answer_days(all_times, tz)
     current, best = progress.streak(days, today)
-    last14 = [today - timedelta(days=13 - i) in days for i in range(14)]
+    # The prototype's streak grid: the last 35 days, oldest first, ending today.
+    recent = [today - timedelta(days=34 - i) in days for i in range(35)]
 
     histories = {
         c.id: progress.replay(c, [a for a in answers if a.concept_id == c.id]) for c in concepts
@@ -71,7 +72,7 @@ def build_progress(
         )
     subject_days = progress.answer_days([a.graded_at for a in answers], tz)
     return Progress(
-        streak=Streak(current=current, best=best, last14=last14),
+        streak=Streak(current=current, best=best, days=recent),
         due=[
             DueConcept(name=c.name, tide=mastery.tide(c, now))
             for c in mastery.reviews_due(concepts, now)

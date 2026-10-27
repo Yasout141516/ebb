@@ -22,8 +22,17 @@ export function nextText(nextReviewAt: string | null, now: Date): { text: string
   return { text: days === 1 ? "Tomorrow" : `Next in ${days} days`, due: false };
 }
 
+type Column = {
+  key: string;
+  title: string;
+  sub: string;
+  items: { name: string; next: { text: string; due: boolean } }[];
+};
+
 type Props = {
   stages: Stage[];
+  /** Concepts with no review yet: the prototype's sixth column, "Not started". */
+  notStarted: string[];
   /** Each concept's tide now, by name, for its gauge. */
   tides: Map<string, number | null>;
   compact?: boolean;
@@ -32,9 +41,23 @@ type Props = {
 
 const EMPTY = "Nothing here yet.";
 
-/** Review stages 1–5: what sits in each, and when it comes back. */
-export default function StageColumns({ stages, tides, compact = false, now = new Date() }: Props) {
+/** Review stages 1–5 and the concepts not started yet: what sits in each, and when it comes back. */
+export default function StageColumns({ stages, notStarted, tides, compact = false, now = new Date() }: Props) {
   const id = useId();
+  const columns: Column[] = [
+    ...stages.map((st) => ({
+      key: String(st.stage),
+      title: `Stage ${st.stage}`,
+      sub: `back after ${plural(GAP[st.stage])}`,
+      items: st.concepts.map((c) => ({ name: c.name, next: nextText(c.next_review_at, now) })),
+    })),
+    {
+      key: "0",
+      title: "Not started",
+      sub: "no reviews yet",
+      items: notStarted.map((name) => ({ name, next: { text: "Not started", due: false } })),
+    },
+  ];
   return (
     <section aria-labelledby={id} className={styles.section}>
       {compact ? (
@@ -53,46 +76,46 @@ export default function StageColumns({ stages, tides, compact = false, now = new
         </div>
       )}
       <div className={compact ? styles.rows : styles.columns}>
-        {stages.map((st) => {
-          const title = `Stage ${st.stage}`;
-          const sub = `back after ${plural(GAP[st.stage])}`;
+        {columns.map((col) => {
+          const titleId = `${id}-${col.key}`;
           if (compact) {
             return (
-              <div key={st.stage} className={styles.row}>
+              <div key={col.key} role="group" aria-labelledby={titleId} className={styles.row}>
                 <span className={styles.rowHead}>
-                  <span className={styles.rowTitle}>{title}</span>
-                  <span className={styles.rowSub}>{sub}</span>
+                  <span id={titleId} className={styles.rowTitle}>
+                    {col.title}
+                  </span>
+                  <span className={styles.rowSub}>{col.sub}</span>
                 </span>
                 <span className={styles.chips}>
-                  {st.concepts.map((c) => (
+                  {col.items.map((c) => (
                     <span key={c.name} className={styles.chip}>
                       {c.name}
                     </span>
                   ))}
-                  {st.concepts.length === 0 && <span className={styles.empty}>{EMPTY}</span>}
+                  {col.items.length === 0 && <span className={styles.empty}>{EMPTY}</span>}
                 </span>
               </div>
             );
           }
           return (
-            <div key={st.stage} className={styles.column}>
+            <div key={col.key} role="group" aria-labelledby={titleId} className={styles.column}>
               <div className={styles.columnHead}>
-                <h3 className={styles.columnTitle}>{title}</h3>
-                <span className={styles.columnSub}>{sub}</span>
+                <h3 id={titleId} className={styles.columnTitle}>
+                  {col.title}
+                </h3>
+                <span className={styles.columnSub}>{col.sub}</span>
               </div>
-              {st.concepts.map((c) => {
-                const next = nextText(c.next_review_at, now);
-                return (
-                  <div key={c.name} className={styles.item}>
-                    <Gauge tide={tides.get(c.name) ?? null} className={shared.smallGauge} />
-                    <span className={styles.itemText}>
-                      <span className={styles.itemName}>{c.name}</span>
-                      <span className={next.due ? styles.due : styles.next}>{next.text}</span>
-                    </span>
-                  </div>
-                );
-              })}
-              {st.concepts.length === 0 && <p className={styles.empty}>{EMPTY}</p>}
+              {col.items.map((c) => (
+                <div key={c.name} className={styles.item}>
+                  <Gauge tide={tides.get(c.name) ?? null} className={shared.smallGauge} />
+                  <span className={styles.itemText}>
+                    <span className={styles.itemName}>{c.name}</span>
+                    <span className={c.next.due ? styles.due : styles.next}>{c.next.text}</span>
+                  </span>
+                </div>
+              ))}
+              {col.items.length === 0 && <p className={styles.empty}>{EMPTY}</p>}
             </div>
           );
         })}

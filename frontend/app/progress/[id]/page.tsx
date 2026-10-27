@@ -116,10 +116,10 @@ function Dashboard({ subjectId }: { subjectId: string }) {
         </div>
 
         <div className={styles.wide}>
-          <StageColumns stages={progress.stages} tides={tides} />
+          <StageColumns stages={progress.stages} notStarted={progress.average.not_counted} tides={tides} />
         </div>
         <div className={styles.narrow}>
-          <StageColumns stages={progress.stages} tides={tides} compact />
+          <StageColumns stages={progress.stages} notStarted={progress.average.not_counted} tides={tides} compact />
         </div>
       </div>
     </main>

@@ -30,8 +30,9 @@ function lineOf(c: ChartConcept): Line {
     }
     before = v;
   }
-  const start = Date.parse(c.past[0][0]);
-  const now = Date.parse(c.past[c.past.length - 1][0]);
+  // The API always sends at least "now"; an empty line still gets a 30-day frame.
+  const now = c.past.length ? Date.parse(c.past[c.past.length - 1][0]) : Date.now();
+  const start = c.past.length ? Date.parse(c.past[0][0]) : now - 30 * DAY;
   const last = points[points.length - 1];
   const ahead = last ? [last, ...c.ahead.map(([at, v]) => ({ t: Date.parse(at), v }))] : [];
   return { points, reviews, ahead, start, now };
@@ -101,7 +102,8 @@ function BigChart({ c, line }: { c: ChartConcept; line: Line }) {
 /** A small chart of the 30 days past: 240×64 on a concept button, 320×44 at 375 px. */
 function Spark({ line, compact }: { line: Line; compact: boolean }) {
   const [w, h] = compact ? [320, 44] : [240, 64];
-  const x = (t: number) => 4 + ((t - line.start) / (line.now - line.start)) * (w - 8);
+  const span = Math.max(line.now - line.start, 1); // a single point sits at the start
+  const x = (t: number) => 4 + ((t - line.start) / span) * (w - 8);
   const y = (v: number) => h - 4 - v * (h - 8);
   return (
     <svg viewBox={`0 0 ${w} ${h}`} width="100%" aria-hidden="true" className={styles.spark}>

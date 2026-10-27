@@ -52,6 +52,7 @@ export default function AverageTide({ average, compact = false }: Props) {
       </div>
     );
   }
+  const note = footnote(average.counted, average.not_counted);
   return (
     <div className={shared.card}>
       <h2 className={shared.title}>Average tide</h2>
@@ -66,7 +67,7 @@ export default function AverageTide({ average, compact = false }: Props) {
           )}
         </div>
       </div>
-      <p className={styles.footnote}>{footnote(average.counted, average.not_counted)}</p>
+      {note && <p className={styles.footnote}>{note}</p>}
     </div>
   );
 }

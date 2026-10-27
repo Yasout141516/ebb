@@ -66,7 +66,7 @@ def test_progress_streak_counts_other_subjects():
     body = _get(services, biology)
     assert body["streak"]["current"] == 2
     assert body["streak"]["best"] == 2
-    assert body["streak"]["last14"] == [False] * 12 + [True, True]
+    assert body["streak"]["days"] == [False] * 33 + [True, True]
     assert body["chart"]["enough_days"] is False  # none of the answers are in Biology
 
 
@@ -156,7 +156,7 @@ def test_build_progress_follows_local_days_in_dhaka():
     answers = [progress.AnswerPoint(concept.id, m, GradeValue.INCORRECT) for m in moments]
     result = build_progress([concept], answers, moments, now, dhaka)
     # Dhaka days 21, 22, 23 (UTC would see only 21 and 22); today is the 24th.
-    assert result.streak.last14 == [False] * 10 + [True, True, True, False]
+    assert result.streak.days == [False] * 31 + [True, True, True, False]
     assert (result.streak.current, result.streak.best) == (3, 3)
     assert result.chart.enough_days is True
     assert result.average.since == "2026-09-24"  # 30 days before 01:00 on 24 Oct, local

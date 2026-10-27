@@ -121,6 +121,18 @@ describe("TideChart", () => {
     ).toBe(0);
   });
 
+  it("draws a line of one point, or none, without NaN", () => {
+    const one: ChartConcept = { ...studied("one", "One", 0.9), past: [[iso(NOW), 0.9]], ahead: [] };
+    const none: ChartConcept = { ...studied("none", "None", 0.5), past: [], ahead: [] };
+    const { container } = render(
+      <TideChart chart={{ enough_days: true, concepts: [one, none] }} subjectId="s1" />,
+    );
+    render(<TideChart chart={{ enough_days: true, concepts: [one, none] }} subjectId="s1" compact />);
+    expect(container.innerHTML).not.toMatch(/NaN|Infinity/);
+    expect(document.body.innerHTML).not.toMatch(/NaN|Infinity/);
+    expect(reviewCount(none)).toBe(0);
+  });
+
   it("at 375 px shows each concept as a small chart instead of picker buttons", () => {
     render(<TideChart chart={chart(true)} subjectId="s1" compact />);
     expect(screen.getByRole("heading", { name: "Tide levels" })).toBeInTheDocument();
