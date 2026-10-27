@@ -23,6 +23,10 @@ class NotesReport:
     fresh: list[tuple[str, str]]  # new (name, description)
 
 
+# A refusal while finding the concepts in uploaded notes.
+NOTES_REFUSED_NOTICE = "The tutor won't help with these notes."
+
+
 def too_many_copy(name: str) -> str:
     return f"{name} can have at most {MAX_DOCUMENTS} files."
 

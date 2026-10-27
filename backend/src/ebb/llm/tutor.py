@@ -98,8 +98,6 @@ def _retryable(error: BaseException) -> bool:
 
 EXHAUSTED_NOTICE = "The tutor couldn't respond — your progress is saved. Try again in a minute."
 REFUSED_NOTICE = "The tutor won't help with that topic."
-# A refusal while finding the concepts in uploaded notes.
-NOTES_REFUSED_NOTICE = "The tutor won't help with these notes."
 
 
 class TutorUnavailable(Exception):

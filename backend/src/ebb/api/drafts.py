@@ -21,16 +21,15 @@ from ebb.api.notices import SOMETHING_WRONG
 from ebb.config import ConfigError
 from ebb.db.pool import DATABASE_DOWN
 from ebb.domain import NewDocument
-from ebb.llm.tutor import (
-    NOTES_REFUSED_NOTICE,
-    AllProvidersExhausted,
-    Tutor,
-    TutorRefused,
-    TutorUnavailable,
-)
+from ebb.llm.tutor import AllProvidersExhausted, Tutor, TutorRefused, TutorUnavailable
 from ebb.notes import NotesError, prepare_bytes
 from ebb.store import MAX_DOCUMENTS, Store
-from ebb.subjects import duplicate_copy, find_note_concepts, too_many_copy
+from ebb.subjects import (
+    NOTES_REFUSED_NOTICE,
+    duplicate_copy,
+    find_note_concepts,
+    too_many_copy,
+)
 
 DRAFT_TTL = timedelta(hours=1)
 EXPIRED = "This upload expired — add the files again."

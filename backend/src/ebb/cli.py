@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
 from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
@@ -30,6 +31,7 @@ from ebb.store import (
     SubjectExists,
 )
 from ebb.subjects import (
+    NOTES_REFUSED_NOTICE,
     NotesReport,
     add_notes,
     duplicate_copy,
@@ -223,16 +225,9 @@ def _ai[T](doing: str, call: Callable[[], T], refused: str | None = None) -> T:
             _fail(str(error), code=2)
 
 
-def _find_concepts(
-    tutor: Tutor, subject: str, known: list[tuple[str, str]], document: NewDocument
-) -> NotesReport:
-    from ebb.llm.tutor import NOTES_REFUSED_NOTICE
-
-    return _ai(
-        "Finding the concepts in your notes…",
-        lambda: find_note_concepts(tutor, subject, known, document),
-        NOTES_REFUSED_NOTICE,
-    )
+def _finding_concepts[T](call: Callable[[], T]) -> T:
+    """`call()` while Ebb finds the concepts in a notes file; a refusal says so."""
+    return _ai("Finding the concepts in your notes…", call, NOTES_REFUSED_NOTICE)
 
 
 def _print_report(document: NewDocument, report: NotesReport) -> None:
@@ -290,7 +285,7 @@ def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[
     known: list[tuple[str, str]] = []
     reports: list[tuple[NewDocument, NotesReport]] = []
     for document in documents:
-        report = _find_concepts(tutor, topic, known, document)
+        report = _finding_concepts(partial(find_note_concepts, tutor, topic, known, document))
         known += report.fresh
         reports.append((document, report))
     try:
@@ -323,14 +318,8 @@ def add(
         _fail(room_copy(error, chosen.name, document.filename))
     tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
-    from ebb.llm.tutor import NOTES_REFUSED_NOTICE
-
     try:
-        report = _ai(
-            "Finding the concepts in your notes…",
-            lambda: add_notes(tutor, store, user_id, chosen, document),
-            NOTES_REFUSED_NOTICE,
-        )
+        report = _finding_concepts(lambda: add_notes(tutor, store, user_id, chosen, document))
     except DocumentRefused as error:  # another terminal got there first
         _fail(room_copy(error, chosen.name, document.filename))
     _print_report(document, report)
