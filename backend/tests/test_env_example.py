@@ -12,3 +12,7 @@ def test_no_inline_comments_on_assignment_lines():
         if re.match(r"^\s*[A-Z_]+=.*\s#", line)
     ]
     assert bad == []
+
+
+def test_the_daily_ai_call_cap_is_documented():
+    assert "EBB_DAILY_AI_CALLS" in ENV_EXAMPLE.read_text(encoding="utf-8")

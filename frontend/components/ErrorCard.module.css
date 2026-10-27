@@ -1,0 +1,53 @@
+/* The prototype's <ErrorCard> (System states, "Error · grading failed"). */
+.card {
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--incorrect-soft);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.icon {
+  flex: none;
+  fill: none;
+  stroke: var(--incorrect);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.action {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--primary-bg);
+  color: var(--primary-ink);
+  font: 500 13px var(--sans);
+  cursor: pointer;
+}

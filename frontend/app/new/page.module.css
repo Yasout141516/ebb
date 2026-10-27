@@ -1,0 +1,37 @@
+/* tpl-Onboarding's tabs. */
+.tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  gap: 4px;
+}
+
+.tab {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 9px;
+  border: 0;
+  cursor: pointer;
+  font: 500 14px var(--sans);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+/* A tab's content sits in the page column, spaced like the column's own children. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.panel[hidden] {
+  display: none;
+}

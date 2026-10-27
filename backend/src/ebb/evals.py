@@ -16,7 +16,7 @@ from ebb.chunking import chunk_notes
 from ebb.citations import note_sources, source_from_dict, source_to_dict, verify
 from ebb.domain import Chunk, Grade, GradeValue, Question, Source
 from ebb.grading import GRADE_RANK
-from ebb.llm.tutor import AllProvidersExhausted, Tutor
+from ebb.llm.tutor import Tutor, TutorRefused, TutorUnavailable
 from ebb.notes import read_notes
 
 PACE_SECONDS = 2.0
@@ -148,7 +148,7 @@ def build_cases(
         target = _TARGETS[(number - 1) % len(_TARGETS)]
         try:
             made = writer.write_eval_case(topic, target, chunk.content if chunk else None)
-        except AllProvidersExhausted:
+        except TutorUnavailable:
             sleep(PACE_SECONDS)
             continue
         draft = made.value
@@ -224,11 +224,14 @@ def _question(case: EvalCase) -> Question:
 
 def _grade_case(grader: Tutor, case: EvalCase, sleep: Callable[[float], None]) -> Grade | None:
     """Grade one case, waiting and retrying when every provider failed; None if it never
-    succeeds. A ConfigError (bad key, unknown model) is not retried: it ends the run."""
+    succeeds or is refused. A ConfigError (bad key, unknown model) is not retried: it ends
+    the run."""
     for wait in (*RETRY_WAITS, None):
         try:
             return grader.grade(_question(case), case.answer, case.sources).value
-        except AllProvidersExhausted:
+        except TutorRefused:
+            return None  # asking again gets the same refusal
+        except TutorUnavailable:
             if wait is None:
                 return None
             sleep(wait)

@@ -1,10 +1,11 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 
 from ebb.domain import Concept, GradeValue
-from ebb.mastery import INTERVAL_DAYS, apply_grade, is_due, tide
+from ebb.mastery import INTERVAL_DAYS, apply_grade, is_due, reviews_due, tide
 
 NOW = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
 OK, PART, BAD = GradeValue.CORRECT, GradeValue.PARTIAL, GradeValue.INCORRECT
@@ -82,3 +83,13 @@ def test_tide_strictly_decreases():
 def test_tide_never_exceeds_one_with_clock_skew():
     reviewed = apply_grade(concept(2, True), OK, NOW)
     assert tide(reviewed, NOW - timedelta(hours=1)) == pytest.approx(1.0)
+
+
+def test_reviews_due_includes_exactly_now():
+    c = replace(concept(2, due=True), next_review_at=NOW)
+    assert reviews_due([c], NOW) == [c]
+
+
+def test_reviews_due_excludes_new_concepts():
+    new, waiting, due = concept(0, due=False), concept(2, due=False), concept(3, due=True)
+    assert reviews_due([new, waiting, due], NOW) == [due]

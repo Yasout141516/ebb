@@ -2,15 +2,16 @@
 
 import threading
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from ebb import citations
+from ebb import citations, mastery
 from ebb.db.migrate import migrate
 from ebb.db.repo import PgStore
 from ebb.domain import (
@@ -28,8 +29,10 @@ from ebb.domain import (
     Question,
 )
 from ebb.graph.build import build_graph
-from ebb.store import DocumentRefused
-from tests.fakes import FakeTutor, new_document
+from ebb.progress import replay
+from ebb.store import DocumentRefused, SubjectExists
+from ebb.subjects import ensure_name_free
+from tests.fakes import FakeTutor, MemoryStore, new_document
 
 pytestmark = pytest.mark.db
 
@@ -63,6 +66,7 @@ def test_migrations_apply_once(pg_pool):
         "001_init.sql",
         "002_spaced_review.sql",
         "003_notes_citations_disputes.sql",
+        "004_web_app.sql",
     ]
 
 
@@ -83,6 +87,42 @@ def test_newest_subject_first(store):
     store.create_subject(ALICE, "Older", [])
     store.create_subject(ALICE, "Newer", [])
     assert [s.name for s in store.list_subjects(ALICE)][0] == "Newer"
+
+
+def test_create_subject_refuses_a_name_differing_only_in_case(store):
+    store.create_subject(ALICE, "Networks", [])
+    with pytest.raises(SubjectExists) as raised:
+        store.create_subject(ALICE, "networks", [("DNS", "d")])
+    assert raised.value.name == "networks"
+    with pytest.raises(SubjectExists):
+        store.create_subject_with_notes(ALICE, "NETWORKS", [], [])
+    store.create_subject(BOB, "networks", [])  # another user's name is no clash
+    assert [s.name for s in store.list_subjects(ALICE)] == ["Networks"]
+
+
+def test_names_compare_as_postgres_lower_does(store):
+    # lower() keeps ß, so "Straße" and "STRASSE" are two names (casefold would make them one).
+    for subjects in (store, MemoryStore()):
+        subjects.ensure_profile(ALICE)
+        subjects.create_subject(ALICE, "Straße", [])
+
+        name = ensure_name_free(subjects, ALICE, "STRASSE")
+        subjects.create_subject(ALICE, name, [])
+
+        with pytest.raises(SubjectExists):
+            ensure_name_free(subjects, ALICE, "STRAßE")
+        with pytest.raises(SubjectExists):
+            subjects.create_subject(ALICE, "STRAßE", [])
+
+
+def test_memory_store_refuses_a_name_differing_only_in_case():
+    memory = MemoryStore()
+    memory.create_subject(ALICE, "Networks", [])
+    with pytest.raises(SubjectExists):
+        memory.create_subject(ALICE, "networks", [])
+    with pytest.raises(SubjectExists):
+        memory.create_subject_with_notes(ALICE, "NETWORKS", [], [])
+    memory.create_subject(BOB, "networks", [])
 
 
 def test_mcq_options_round_trip_as_json(store, pg_pool):
@@ -206,7 +246,7 @@ def test_add_concepts_drops_duplicates_and_appends(store):
         store.add_concepts(BOB, subject_id, [("Sneaky", "x")])
 
 
-def test_counts_and_next_review(store, pg_pool):
+def test_next_review(store, pg_pool):
     subject_id = store.create_subject(
         ALICE, "Networks", [("DNS", "d"), ("TCP", "d"), ("UDP", "d"), ("QUIC", "d")]
     )
@@ -215,10 +255,7 @@ def test_counts_and_next_review(store, pg_pool):
     seed_stage(pg_pool, tcp.id, 1, NOW + timedelta(days=2))
     seed_stage(pg_pool, udp.id, 4, NOW + timedelta(days=5))
 
-    assert store.count_due(ALICE, subject_id, NOW) == 1
-    assert store.count_new(ALICE, subject_id) == 1
     assert store.next_review_at(ALICE, subject_id) == NOW - timedelta(days=1)
-    assert store.count_due(BOB, subject_id, NOW) == 0
     assert store.next_review_at(BOB, subject_id) is None
 
 
@@ -477,6 +514,19 @@ def test_create_subject_with_notes_stores_everything_in_order(store):
 
     assert [c.name for c in store.list_concepts(ALICE, subject_id)] == ["DNS", "ARP"]
     assert [d.filename for d in store.list_documents(ALICE, subject_id)] == ["a.txt"]
+
+
+@pytest.mark.parametrize("kind", ["memory", "postgres"])
+def test_files_saved_together_keep_their_order(kind, request):
+    store = MemoryStore() if kind == "memory" else PgStore(request.getfixturevalue("pg_pool"))
+    store.ensure_profile(ALICE)
+    names = ["e.txt", "a.txt", "d.txt", "b.txt", "c.txt"]
+
+    subject_id = store.create_subject_with_notes(
+        ALICE, "Networks", [new_document(n, "text") for n in names], []
+    )
+
+    assert [d.filename for d in store.list_documents(ALICE, subject_id)] == names
 
 
 def test_create_subject_with_notes_is_one_transaction(store):
@@ -889,3 +939,270 @@ def test_dispute_counts(store):
 
     assert store.dispute_counts(ALICE) == {"raised": 3, "changed": 1, "voided": 1, "upheld": 1}
     assert store.dispute_counts(BOB) == {"raised": 0, "changed": 0, "voided": 0, "upheld": 0}
+
+
+# --- the session summary, read from either store -----------------------------------------
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def summary_store(request):
+    if request.param == "memory":
+        store = MemoryStore()
+    else:
+        store = PgStore(request.getfixturevalue("pg_pool"))
+    store.ensure_profile(ALICE)
+    store.ensure_profile(BOB)
+    return store
+
+
+class Summarised:
+    """A subject of two concepts, A answered in an earlier session and then in this one."""
+
+    def __init__(self, store) -> None:
+        self.store = store
+        subject_id = store.create_subject(ALICE, "Networks", [("A", "a"), ("B", "b")])
+        self.a, self.b = store.list_concepts(ALICE, subject_id)
+        self.earlier = store.create_session(ALICE, subject_id, "earlier")
+        self.session = store.create_session(ALICE, subject_id, "now")
+        self.long_ago = NOW - timedelta(days=2)
+        self.answer(self.earlier, self.a, GradeValue.CORRECT, self.long_ago)  # A: stage 1
+
+    def answer(self, session_id, concept, grade, at) -> Answer:
+        question = Question(uuid4(), concept.id, "short", 1, f"{uuid4()}?", "-")
+        self.store.save_questions(ALICE, session_id, [question])
+        answer = answer_for(question, grade, at)
+        self.store.record_answer(ALICE, answer)
+        return answer
+
+    def summary(self, user_id=ALICE, session_id=None):
+        return self.store.session_summary(user_id, session_id or self.session, NOW)
+
+
+def test_summary_counts_this_sessions_answers_by_grade(summary_store):
+    s = Summarised(summary_store)
+    s.answer(s.session, s.b, GradeValue.PARTIAL, NOW + timedelta(minutes=3))
+    s.answer(s.session, s.a, GradeValue.CORRECT, NOW)  # due: stage 2
+    s.answer(s.session, s.a, GradeValue.PARTIAL, NOW + timedelta(minutes=1))
+    s.answer(s.session, s.a, GradeValue.INCORRECT, NOW + timedelta(minutes=2))  # back to 1
+
+    first, second = s.summary()
+
+    a, b = summary_store.list_concepts(ALICE, s.a.subject_id)
+    assert (first.concept_id, first.concept) == (a.id, "A")
+    assert (first.correct, first.partial, first.incorrect) == (1, 1, 1)
+    assert (first.stage_before, first.stage_after) == (1, 1)
+    assert first.tide_before == pytest.approx(0.7**2)  # stage 1, reviewed two days before NOW
+    assert first.tide_after == pytest.approx(mastery.tide(a, NOW))
+    assert first.next_review_at == a.next_review_at
+    assert (second.concept_id, second.concept) == (b.id, "B")  # A's first answer came first
+    assert (second.correct, second.partial, second.incorrect) == (0, 1, 0)
+    assert (second.stage_before, second.stage_after) == (0, 1)
+    assert second.tide_before is None
+
+
+def test_summary_skips_voided_answers_and_drops_a_concept_left_with_none(summary_store):
+    s = Summarised(summary_store)
+    s.answer(s.session, s.a, GradeValue.CORRECT, NOW)  # stage 2
+    voided = s.answer(s.session, s.a, GradeValue.INCORRECT, NOW + timedelta(minutes=1))
+    only = s.answer(s.session, s.b, GradeValue.PARTIAL, NOW + timedelta(minutes=2))
+    for answer in (only, voided):
+        summary_store.resolve_dispute(ALICE, dispute_for(answer, DisputeOutcome.VOIDED), NOW)
+
+    [row] = s.summary()
+
+    assert row.concept == "A"
+    assert (row.correct, row.partial, row.incorrect) == (1, 0, 0)
+    assert row.stage_after == 2  # restored by the void
+
+
+def test_summary_reflects_a_changed_dispute(summary_store):
+    s = Summarised(summary_store)
+    s.answer(s.session, s.a, GradeValue.CORRECT, NOW)
+    wrong = s.answer(s.session, s.a, GradeValue.INCORRECT, NOW + timedelta(minutes=1))
+    changed = dispute_for(wrong, DisputeOutcome.CHANGED, GradeValue.CORRECT)
+    _, after = summary_store.resolve_dispute(ALICE, changed, NOW)
+
+    [row] = s.summary()
+
+    assert (row.correct, row.partial, row.incorrect) == (2, 0, 0)
+    assert row.stage_after == after.stage
+
+
+def test_summary_ignores_answers_from_other_sessions(summary_store):
+    s = Summarised(summary_store)
+    s.answer(s.session, s.b, GradeValue.CORRECT, NOW)
+
+    [row] = s.summary()  # A's answer belongs to the earlier session
+
+    assert row.concept == "B"
+    assert [r.concept for r in s.summary(session_id=s.earlier)] == ["A"]
+    assert s.summary(user_id=BOB) == []
+    assert s.summary(session_id=uuid4()) == []
+
+
+# --- the daily AI-call cap -------------------------------------------------------------
+
+
+@pytest.fixture(params=["postgres", "memory"])
+def usage_store(request, store):
+    return store if request.param == "postgres" else MemoryStore()
+
+
+def test_take_ai_call_stops_at_the_limit(usage_store):
+    day = date(2026, 10, 15)
+
+    assert [usage_store.take_ai_call(ALICE, day, 2) for _ in range(3)] == [True, True, False]
+    assert usage_store.take_ai_call(BOB, day, 2) is True  # counted per user
+
+
+def test_take_ai_call_with_limit_zero_refuses_without_writing(usage_store):
+    assert usage_store.take_ai_call(ALICE, date(2026, 10, 15), 0) is False
+    assert usage_store.take_ai_call(ALICE, date(2026, 10, 15), 1) is True  # nothing was counted
+
+
+def test_take_ai_call_leaves_no_row_when_the_limit_is_zero(store, pg_pool):
+    store.take_ai_call(ALICE, date(2026, 10, 15), 0)
+
+    with pg_pool.connection() as conn:
+        assert conn.execute("select count(*) as n from llm_usage").fetchone()["n"] == 0
+
+
+def test_take_ai_call_counts_per_day_in_the_users_zone(usage_store):
+    zone = ZoneInfo("Asia/Dhaka")
+    before_midnight = datetime(2026, 10, 15, 23, 30, tzinfo=zone).astimezone(zone).date()
+    after_midnight = datetime(2026, 10, 16, 0, 30, tzinfo=zone).astimezone(zone).date()
+
+    assert before_midnight != after_midnight
+    assert usage_store.take_ai_call(ALICE, before_midnight, 1) is True
+    assert usage_store.take_ai_call(ALICE, before_midnight, 1) is False
+    assert usage_store.take_ai_call(ALICE, after_midnight, 1) is True
+
+
+# --- who drives a session, in either store ------------------------------------------------
+
+LEASE = timedelta(seconds=90)
+
+
+@pytest.fixture(params=["postgres", "memory"])
+def session_store(request, store):
+    if request.param == "postgres":
+        return store
+    memory = MemoryStore()
+    memory.ensure_profile(ALICE)
+    memory.ensure_profile(BOB)
+    return memory
+
+
+def open_session(store, thread_id: str = "t-1") -> UUID:
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "d")])
+    return store.create_session(ALICE, subject_id, thread_id)
+
+
+def later(seconds: int) -> datetime:
+    return NOW + timedelta(seconds=seconds)
+
+
+def test_claim_session_takes_a_free_lease_and_renews_its_own(session_store):
+    open_session(session_store)
+
+    assert session_store.session_driver(ALICE, "t-1", NOW, LEASE) is None
+    assert session_store.claim_session(ALICE, "t-1", "tab-a", NOW, LEASE) is True
+    assert session_store.session_driver(ALICE, "t-1", later(89), LEASE) == "tab-a"
+    assert session_store.claim_session(ALICE, "t-1", "tab-b", later(89), LEASE) is False
+    assert session_store.claim_session(ALICE, "t-1", "tab-a", later(60), LEASE) is True
+    assert session_store.claim_session(ALICE, "t-1", "tab-b", later(149), LEASE) is False
+    assert session_store.session_driver(ALICE, "t-1", later(150), LEASE) is None  # expired
+    assert session_store.claim_session(ALICE, "t-1", "tab-b", later(150), LEASE) is True
+    assert session_store.session_driver(ALICE, "t-1", later(150), LEASE) == "tab-b"
+    assert session_store.get_session(ALICE, "t-1").last_active_at == later(150)
+
+
+def test_claim_session_refuses_ended_and_other_users_sessions(session_store):
+    session_id = open_session(session_store)
+
+    assert session_store.claim_session(BOB, "t-1", "tab-a", NOW, LEASE) is False
+    assert session_store.get_session(BOB, "t-1") is None
+    assert session_store.get_session(ALICE, "t-1").session_id == session_id
+    session_store.end_session(ALICE, session_id, NOW)
+    assert session_store.claim_session(ALICE, "t-1", "tab-a", NOW, LEASE) is False
+    assert session_store.get_session(ALICE, "t-1") is None
+    assert session_store.session_driver(ALICE, "t-1", NOW, LEASE) is None
+
+
+def test_release_session_frees_only_its_own_drivers_lease(session_store):
+    open_session(session_store)
+    session_store.claim_session(ALICE, "t-1", "tab-a", NOW, LEASE)
+
+    session_store.release_session(ALICE, "t-1", "tab-b")  # not tab-b's to free
+    session_store.release_session(BOB, "t-1", "tab-a")  # nor another user's
+    assert session_store.session_driver(ALICE, "t-1", later(1), LEASE) == "tab-a"
+    session_store.release_session(ALICE, "t-1", "tab-a")
+
+    assert session_store.session_driver(ALICE, "t-1", later(1), LEASE) is None
+    assert session_store.claim_session(ALICE, "t-1", "tab-b", later(1), LEASE) is True
+    assert session_store.get_session(ALICE, "t-1") is not None  # still open
+
+
+def test_touch_session_moves_the_last_activity(session_store):
+    session_id = open_session(session_store)
+
+    session_store.touch_session(ALICE, "t-1", NOW)
+    session_store.touch_session(BOB, "t-1", later(60))
+
+    found = session_store.get_session(ALICE, "t-1")
+    assert (found.session_id, found.thread_id, found.last_active_at) == (session_id, "t-1", NOW)
+
+
+def test_close_stale_sessions_skips_a_session_whose_lock_is_held(session_store):
+    open_session(session_store)
+    session_store.touch_session(ALICE, "t-1", NOW - timedelta(hours=25))
+
+    with session_store.session_lock(ALICE, "t-1") as held:
+        assert held is True
+        assert session_store.close_stale_sessions(ALICE, NOW) == 0
+
+    assert session_store.close_stale_sessions(ALICE, NOW) == 1
+    assert session_store.get_session(ALICE, "t-1") is None
+
+
+def test_replay_skips_voided_and_uses_changed_grades(store):
+    subject_id = store.create_subject(ALICE, "Networks", [("DNS", "Names."), ("TCP", "Streams.")])
+    dns, tcp = store.list_concepts(ALICE, subject_id)
+    session_id = store.create_session(ALICE, subject_id, "thread-1")
+    questions = [Question(uuid4(), c.id, "short", 1, "Why?", "Because.") for c in (dns, tcp)]
+    store.save_questions(ALICE, session_id, questions)
+    dns_first = answer_for(questions[0], GradeValue.INCORRECT, NOW)
+    dns_second = answer_for(questions[0], GradeValue.CORRECT, NOW + timedelta(days=2))
+    tcp_only = answer_for(questions[1], GradeValue.CORRECT, NOW + timedelta(days=1))
+    for answer in (dns_first, tcp_only, dns_second):
+        store.record_answer(ALICE, answer)
+    store.resolve_dispute(
+        ALICE, dispute_for(dns_second, DisputeOutcome.CHANGED, GradeValue.PARTIAL), NOW
+    )
+    store.resolve_dispute(ALICE, dispute_for(tcp_only, DisputeOutcome.VOIDED), NOW)
+
+    answers = store.subject_answers(ALICE, subject_id)
+
+    assert [(a.concept_id, a.grade) for a in answers] == [
+        (dns.id, GradeValue.INCORRECT),
+        (dns.id, GradeValue.PARTIAL),
+    ]
+    stored = store.list_concepts(ALICE, subject_id)[0]
+    assert replay(stored, answers)[-1][1] == stored
+    assert store.answer_times(ALICE) == [dns_first.graded_at, dns_second.graded_at]
+
+
+def test_answer_history_is_scoped_to_the_user_and_subject(store):
+    subject_id, _, question = subject_with_question(store)
+    store.record_answer(ALICE, answer_for(question, GradeValue.CORRECT))
+    other = store.create_subject(ALICE, "Maths", [("Sets", "Collections.")])
+
+    assert len(store.subject_answers(ALICE, subject_id)) == 1
+    assert store.subject_answers(ALICE, other) == []
+    assert store.subject_answers(BOB, subject_id) == []
+    assert store.answer_times(BOB) == []
+    assert len(store.answer_times(ALICE)) == 1
+
+
+def test_ping_reaches_the_database(store):
+    store.ping()

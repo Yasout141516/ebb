@@ -1,0 +1,131 @@
+/* tpl-Onboarding's page: the subjects aside and the centred column. */
+.body {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+}
+
+.page {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.aside {
+  flex: 1 1 260px;
+  max-width: 100%;
+  padding: 32px clamp(16px, 3vw, 32px);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.none {
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.noneTitle {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 18px;
+}
+
+.noneText {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.subjects {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.subject {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.subjectName {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.subjectMeta {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.main {
+  flex: 999 1 560px;
+  min-width: 0;
+  padding: clamp(24px, 5vw, 64px) clamp(16px, 4vw, 48px);
+  display: flex;
+  justify-content: center;
+}
+
+.column {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.intro {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent-ink);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: clamp(32px, 3.4vw, 44px);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+}
+
+.lede {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 560px;
+}

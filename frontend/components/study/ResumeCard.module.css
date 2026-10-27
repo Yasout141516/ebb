@@ -1,0 +1,48 @@
+/* tpl-Workspace's "next" message (isNext): a tutor line with two actions. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+}
+
+.name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+
+.text {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.primary,
+.secondary {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  font: 500 14px var(--sans);
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--primary-bg);
+  color: var(--primary-ink);
+}
+
+.secondary {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+}

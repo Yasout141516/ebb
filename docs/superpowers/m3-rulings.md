@@ -58,7 +58,7 @@ then what it costs if it turns out wrong. Owner's own decisions are in
 ## Compatibility and process
 
 35. New graph state keys are read with defaults, so sessions saved by milestone 2 still resume. *If wrong:* an old session crashes on resume.
-36. A session saved before `citation_failing` existed rewrites the whole batch on a citation retry. *If wrong:* harmless.
+36. A session saved before `citation_failing` existed rewrites the whole batch on a citation retry. *If wrong:* harmless. *Superseded in milestone 4 by ruling R8: such a checkpoint now resumes by writing a fresh batch.*
 37. Tests written after the code were accepted after review checked they could fail. *If wrong:* a weak test slips through.
 38. FakeTutor's prompt lists apply by position to every batch. *If wrong:* extend the fake later.
 39. Terminal polish items went to m3-followups (the milestone 4 web UI replaces these flows). *If wrong:* small terminal annoyances remain.

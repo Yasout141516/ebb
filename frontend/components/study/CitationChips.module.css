@@ -1,0 +1,90 @@
+/* tpl-Workspace's grade card "Sources" row and its source-snippet popover. */
+.row {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.label {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.chip {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font: 500 12px var(--mono);
+  cursor: pointer;
+}
+
+.popover {
+  position: absolute;
+  top: 42px;
+  left: 0;
+  z-index: 5;
+  width: min(440px, 100%);
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.popHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.popLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.close {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.close svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+
+.quote {
+  margin: 0;
+  padding: 0;
+  font-family: var(--serif);
+  font-size: 17px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.mark {
+  background: var(--accent-soft);
+  color: var(--ink);
+  padding: 0 2px;
+  border-radius: 3px;
+}

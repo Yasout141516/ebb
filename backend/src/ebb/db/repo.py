@@ -3,11 +3,12 @@
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
 from psycopg import Connection
+from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
@@ -18,6 +19,7 @@ from ebb.domain import (
     Chunk,
     Citation,
     Concept,
+    ConceptResult,
     Dispute,
     DisputeOutcome,
     DisputeReason,
@@ -28,12 +30,15 @@ from ebb.domain import (
     ResumableSession,
     Subject,
 )
+from ebb.progress import AnswerPoint
 from ebb.store import (
     MAX_DOCUMENTS,
     PRUNE_AFTER,
     RESUME_WINDOW,
     DocumentRefused,
+    SubjectExists,
     concept_after_dispute,
+    concept_result,
     new_concepts,
     restore,
     search_words,
@@ -119,8 +124,10 @@ def _insert_document(
     conn: Connection, user_id: UUID, subject_id: UUID, document: NewDocument
 ) -> None:
     row = conn.execute(
+        # clock_timestamp(), not now(): files saved in one transaction keep their order.
         "insert into documents (user_id, subject_id, filename, kind, size_bytes, page_count,"
-        " sha256) values (%s, %s, %s, %s, %s, %s, %s) returning id",
+        " sha256, created_at) values (%s, %s, %s, %s, %s, %s, %s, clock_timestamp())"
+        " returning id",
         (
             user_id,
             subject_id,
@@ -153,9 +160,24 @@ def _insert_document(
         )
 
 
+def _insert_subject(conn: Connection, user_id: UUID, name: str) -> UUID:
+    try:
+        return conn.execute(
+            "insert into subjects (user_id, name) values (%s, %s) returning id", (user_id, name)
+        ).fetchone()["id"]
+    except UniqueViolation as error:
+        if error.diag.constraint_name != "subjects_user_name_key":
+            raise
+        raise SubjectExists(name) from error
+
+
 class PgStore:
     def __init__(self, pool: ConnectionPool) -> None:
         self.pool = pool
+
+    def ping(self) -> None:
+        with self.pool.connection(timeout=2) as conn:
+            conn.execute("select 1")
 
     def ensure_profile(self, user_id: UUID) -> None:
         with self.pool.connection() as conn:
@@ -165,11 +187,7 @@ class PgStore:
 
     def create_subject(self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]) -> UUID:
         with self.pool.connection() as conn, conn.transaction():
-            row = conn.execute(
-                "insert into subjects (user_id, name) values (%s, %s) returning id",
-                (user_id, name),
-            ).fetchone()
-            subject_id = row["id"]
+            subject_id = _insert_subject(conn, user_id, name)
             with conn.cursor() as cur:
                 cur.executemany(
                     "insert into concepts (user_id, subject_id, name, description, position)"
@@ -397,6 +415,41 @@ class PgStore:
             )
         return dispute, after
 
+    def session_summary(
+        self, user_id: UUID, session_id: UUID, now: datetime
+    ) -> list[ConceptResult]:
+        first = "order by a.graded_at, a.id"
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select c.id, c.subject_id, c.name, c.description, c.stage, c.next_review_at,"
+                " c.last_reviewed_at, c.review_count,"
+                " count(*) filter (where a.grade = 'correct') as correct,"
+                " count(*) filter (where a.grade = 'partial') as partial,"
+                " count(*) filter (where a.grade = 'incorrect') as incorrect,"
+                f" (array_agg(a.stage_before {first}))[1] as first_stage,"
+                f" (array_agg(a.concept_before {first}))[1] as first_before,"
+                " min(a.graded_at) as first_at"
+                " from attempts a"
+                " join questions q on q.id = a.question_id and q.user_id = a.user_id"
+                " join concepts c on c.id = a.concept_id and c.user_id = a.user_id"
+                " where a.user_id = %s and q.session_id = %s and a.voided_at is null"
+                " group by c.id order by first_at, c.position",
+                (user_id, session_id),
+            ).fetchall()
+        return [
+            concept_result(
+                Concept(**{k: row[k] for k in Concept.__dataclass_fields__}),
+                {
+                    GradeValue.CORRECT: row["correct"],
+                    GradeValue.PARTIAL: row["partial"],
+                    GradeValue.INCORRECT: row["incorrect"],
+                },
+                (row["first_stage"], row["first_before"], row["first_at"]),
+                now,
+            )
+            for row in rows
+        ]
+
     def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:
         with self.pool.connection() as conn:
             row = conn.execute(
@@ -446,10 +499,7 @@ class PgStore:
         concepts: Sequence[tuple[str, str]],
     ) -> UUID:
         with self.pool.connection() as conn, conn.transaction():
-            subject_id = conn.execute(
-                "insert into subjects (user_id, name) values (%s, %s) returning id",
-                (user_id, name),
-            ).fetchone()["id"]
+            subject_id = _insert_subject(conn, user_id, name)
             for document in documents:
                 _insert_document(conn, user_id, subject_id, document)
             _insert_concepts(conn, user_id, subject_id, concepts)
@@ -532,24 +582,6 @@ class PgStore:
             ).fetchall()
         return [Chunk(**{**row, "page_offsets": tuple(row["page_offsets"])}) for row in rows]
 
-    def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
-        with self.pool.connection() as conn:
-            row = conn.execute(
-                "select count(*) as n from concepts where user_id = %s and subject_id = %s"
-                " and stage >= 1 and next_review_at <= %s",
-                (user_id, subject_id, now),
-            ).fetchone()
-        return row["n"]
-
-    def count_new(self, user_id: UUID, subject_id: UUID) -> int:
-        with self.pool.connection() as conn:
-            row = conn.execute(
-                "select count(*) as n from concepts where user_id = %s and subject_id = %s"
-                " and stage = 0",
-                (user_id, subject_id),
-            ).fetchone()
-        return row["n"]
-
     def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None:
         with self.pool.connection() as conn:
             row = conn.execute(
@@ -559,9 +591,41 @@ class PgStore:
             ).fetchone()
         return row["soonest"]
 
+    def subject_answers(self, user_id: UUID, subject_id: UUID) -> list[AnswerPoint]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select a.concept_id, a.graded_at, a.grade from attempts a"
+                " join concepts c on c.id = a.concept_id"
+                " where a.user_id = %s and c.user_id = %s and c.subject_id = %s"
+                " and a.voided_at is null order by a.graded_at, a.id",
+                (user_id, user_id, subject_id),
+            ).fetchall()
+        return [AnswerPoint(r["concept_id"], r["graded_at"], GradeValue(r["grade"])) for r in rows]
+
+    def answer_times(self, user_id: UUID) -> list[datetime]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select graded_at from attempts where user_id = %s and voided_at is null"
+                " order by graded_at, id",
+                (user_id,),
+            ).fetchall()
+        return [row["graded_at"] for row in rows]
+
     def set_timezone(self, user_id: UUID, name: str) -> None:
         with self.pool.connection() as conn:
             conn.execute("update profiles set timezone = %s where id = %s", (name, user_id))
+
+    def take_ai_call(self, user_id: UUID, day: date, limit: int) -> bool:
+        if limit < 1:
+            return False
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "insert into llm_usage (user_id, day, calls) values (%s, %s, 1)"
+                " on conflict (user_id, day) do update set calls = llm_usage.calls + 1"
+                " where llm_usage.calls < %s returning calls",
+                (user_id, day, limit),
+            ).fetchone()
+        return row is not None
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime
@@ -578,12 +642,82 @@ class PgStore:
         return ResumableSession(row["id"], row["thread_id"], row["last_active_at"])
 
     def close_stale_sessions(self, user_id: UUID, now: datetime) -> int:
+        idle_since = now - RESUME_WINDOW
         with self.pool.connection() as conn:
-            return conn.execute(
-                "update study_sessions set ended_at = last_active_at"
+            stale = conn.execute(
+                "select id, thread_id from study_sessions"
                 " where user_id = %s and ended_at is null and last_active_at <= %s",
-                (user_id, now - RESUME_WINDOW),
-            ).rowcount
+                (user_id, idle_since),
+            ).fetchall()
+        closed = 0
+        for row in stale:
+            # Ended under its lock, so a terminal can't take it up in between.
+            with self.session_lock(user_id, row["thread_id"]) as free:
+                if not free:
+                    continue  # someone is still on it
+                with self.pool.connection() as conn:
+                    closed += conn.execute(
+                        "update study_sessions set ended_at = last_active_at"
+                        " where id = %s and user_id = %s and ended_at is null"
+                        " and last_active_at <= %s",
+                        (row["id"], user_id, idle_since),
+                    ).rowcount
+        return closed
+
+    def get_session(self, user_id: UUID, thread_id: str) -> ResumableSession | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select id, thread_id, last_active_at from study_sessions"
+                " where user_id = %s and thread_id = %s and ended_at is null",
+                (user_id, thread_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return ResumableSession(row["id"], row["thread_id"], row["last_active_at"])
+
+    def claim_session(
+        self, user_id: UUID, thread_id: str, driver: str, now: datetime, lease: timedelta
+    ) -> bool:
+        # One statement: of two drivers claiming at once, the row lock lets one win.
+        with self.pool.connection() as conn:
+            return (
+                conn.execute(
+                    "update study_sessions"
+                    " set driver = %s, driver_seen_at = %s, last_active_at = %s"
+                    " where user_id = %s and thread_id = %s and ended_at is null"
+                    " and (driver is null or driver = %s or driver_seen_at <= %s)",
+                    (driver, now, now, user_id, thread_id, driver, now - lease),
+                ).rowcount
+                == 1
+            )
+
+    def session_driver(
+        self, user_id: UUID, thread_id: str, now: datetime, lease: timedelta
+    ) -> str | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select driver from study_sessions"
+                " where user_id = %s and thread_id = %s and ended_at is null"
+                " and driver_seen_at > %s",
+                (user_id, thread_id, now - lease),
+            ).fetchone()
+        return None if row is None else row["driver"]
+
+    def release_session(self, user_id: UUID, thread_id: str, driver: str) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "update study_sessions set driver = null, driver_seen_at = null"
+                " where user_id = %s and thread_id = %s and ended_at is null and driver = %s",
+                (user_id, thread_id, driver),
+            )
+
+    def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "update study_sessions set last_active_at = %s"
+                " where user_id = %s and thread_id = %s and ended_at is null",
+                (now, user_id, thread_id),
+            )
 
     def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:
         with self.pool.connection() as conn:

@@ -1,0 +1,64 @@
+/* tpl-Onboarding's drop zone. */
+.zone {
+  background: var(--surface);
+  border: 1.5px dashed var(--line);
+  border-radius: 16px;
+  padding: 40px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+.over {
+  border-color: var(--accent);
+}
+
+.disabled {
+  opacity: 0.55;
+}
+
+.icon {
+  fill: none;
+  stroke: var(--accent-ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 20px;
+}
+
+.limits {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.choose {
+  margin-top: 6px;
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 1px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font: 500 15px var(--sans);
+  cursor: pointer;
+}
+
+.choose:disabled {
+  cursor: not-allowed;
+}
+
+.choose:disabled:hover {
+  background: transparent;
+}
+
+.input {
+  display: none;
+}

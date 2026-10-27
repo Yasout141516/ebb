@@ -1,0 +1,49 @@
+/* Design tokens, from ebb-prototype.html (`.ebb` and `.ebb.dark`); values unchanged. */
+:root {
+  --bg: #f5efe4;
+  --surface: #fbf8f2;
+  --surface-2: #efe7d8;
+  --line: #dcd1bd;
+  --ink: #0f1b2d;
+  --ink-2: #434d5c;
+  --ink-3: #5c6470;
+  --accent: #3e8e8b;
+  --accent-ink: #22605c;
+  --accent-soft: #dceae5;
+  --primary-bg: #0f1b2d;
+  --primary-ink: #f5efe4;
+  --focus: #22605c;
+  --correct: #2b6e45;
+  --correct-soft: #e1eee4;
+  --partial: #8a5a0f;
+  --partial-soft: #f6ead3;
+  --incorrect: #a8382f;
+  --incorrect-soft: #f5e1dc;
+  --shadow: 0 1px 2px rgba(15, 27, 45, 0.06), 0 10px 30px rgba(15, 27, 45, 0.07);
+  --serif: var(--font-serif), Georgia, serif;
+  --sans: var(--font-sans), system-ui, sans-serif;
+  --mono: var(--font-mono), ui-monospace, monospace;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0b1422;
+  --surface: #121d2e;
+  --surface-2: #1a2739;
+  --line: #2a384d;
+  --ink: #ede6d8;
+  --ink-2: #c2bbad;
+  --ink-3: #9d9789;
+  --accent: #5fb3ae;
+  --accent-ink: #7cc7c1;
+  --accent-soft: #16312f;
+  --primary-bg: #ede6d8;
+  --primary-ink: #0b1422;
+  --focus: #7cc7c1;
+  --correct: #74c493;
+  --correct-soft: #16301f;
+  --partial: #e2b261;
+  --partial-soft: #33280f;
+  --incorrect: #f08c80;
+  --incorrect-soft: #3a1d1b;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 30px rgba(0, 0, 0, 0.25);
+}

@@ -4,7 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
@@ -13,6 +13,7 @@ from ebb.domain import (
     Answer,
     Chunk,
     Concept,
+    ConceptResult,
     Dispute,
     DisputeOutcome,
     Document,
@@ -22,6 +23,7 @@ from ebb.domain import (
     ResumableSession,
     Subject,
 )
+from ebb.progress import AnswerPoint
 
 RESUME_WINDOW = timedelta(hours=24)
 PRUNE_AFTER = timedelta(days=7)
@@ -35,6 +37,14 @@ class DocumentRefused(Exception):
     def __init__(self, reason: Literal["full", "duplicate"]) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class SubjectExists(Exception):
+    """The user already has a subject of this name, compared ignoring case."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.name = name
 
 
 def new_concepts(
@@ -106,6 +116,34 @@ def restore(concept: Concept, before: Mapping[str, Any]) -> Concept:
     )
 
 
+def concept_result(
+    current: Concept,
+    counts: Mapping[GradeValue, int],
+    first: tuple[int, Mapping[str, Any] | None, datetime],
+    now: datetime,
+) -> ConceptResult:
+    """A session summary row for `current`. `first` is the session's first counted answer on
+    it: its stage_before column, its concept_before snapshot (if any) and its graded_at."""
+    stage, before, graded_at = first
+    if before is None:
+        stage_before, tide_before = stage, None
+    else:
+        earlier = restore(current, before)
+        stage_before, tide_before = earlier.stage, mastery.tide(earlier, graded_at)
+    return ConceptResult(
+        concept_id=current.id,
+        concept=current.name,
+        correct=counts.get(GradeValue.CORRECT, 0),
+        partial=counts.get(GradeValue.PARTIAL, 0),
+        incorrect=counts.get(GradeValue.INCORRECT, 0),
+        stage_before=stage_before,
+        stage_after=current.stage,
+        tide_before=tide_before,
+        tide_after=mastery.tide(current, now),
+        next_review_at=current.next_review_at,
+    )
+
+
 def concept_after_dispute(
     current: Concept, before: Concept, dispute: Dispute, graded: GradeValue, graded_at: datetime
 ) -> Concept:
@@ -124,11 +162,15 @@ def concept_after_dispute(
 
 
 class Store(Protocol):
+    def ping(self) -> None:
+        """Raises psycopg.Error when the database can't be reached."""
+        ...
+
     def ensure_profile(self, user_id: UUID) -> None: ...
 
-    def create_subject(
-        self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]
-    ) -> UUID: ...
+    def create_subject(self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]) -> UUID:
+        """Raises SubjectExists if the user has a subject of that name, ignoring case."""
+        ...
 
     def list_subjects(self, user_id: UUID) -> list[Subject]: ...
 
@@ -178,6 +220,16 @@ class Store(Protocol):
         """
         ...
 
+    def session_summary(
+        self, user_id: UUID, session_id: UUID, now: datetime
+    ) -> list[ConceptResult]:
+        """One row per concept with an answer in this session that wasn't voided, ordered by
+        its first such answer: those answers counted by grade; stage and tide before from
+        the first one's concept_before snapshot (tide measured at its graded_at; an answer
+        without a snapshot gives its stage_before and no tide); stage, tide at `now` and
+        next review from the concept as it is."""
+        ...
+
     def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:
         """The recorded dispute with this id, or None if it isn't the user's or doesn't exist."""
         ...
@@ -197,13 +249,22 @@ class Store(Protocol):
         """
         ...
 
-    def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int: ...
-
-    def count_new(self, user_id: UUID, subject_id: UUID) -> int: ...
-
     def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None: ...
 
     def set_timezone(self, user_id: UUID, name: str) -> None: ...
+
+    def subject_answers(self, user_id: UUID, subject_id: UUID) -> list[AnswerPoint]:
+        """Answers not voided, by graded_at then id; a grade a dispute changed shows as changed."""
+        ...
+
+    def answer_times(self, user_id: UUID) -> list[datetime]:
+        """When each answer not voided was graded, in every subject."""
+        ...
+
+    def take_ai_call(self, user_id: UUID, day: date, limit: int) -> bool:
+        """Count one AI call for `day` and return True while fewer than `limit` have been made;
+        otherwise return False and change nothing."""
+        ...
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime
@@ -212,7 +273,36 @@ class Store(Protocol):
         ...
 
     def close_stale_sessions(self, user_id: UUID, now: datetime) -> int:
-        """End open sessions idle for RESUME_WINDOW, at their last activity; returns the count."""
+        """End open sessions idle for RESUME_WINDOW, at their last activity; returns the count.
+
+        A session whose lock is held is skipped: someone is still on it. One whose lease is
+        live never qualifies, since claiming a lease also marks the session active."""
+        ...
+
+    def get_session(self, user_id: UUID, thread_id: str) -> ResumableSession | None:
+        """The user's open session on this thread, or None."""
+        ...
+
+    def claim_session(
+        self, user_id: UUID, thread_id: str, driver: str, now: datetime, lease: timedelta
+    ) -> bool:
+        """Make `driver` the session's driver as of `now`, and mark the session active, if it
+        is open and its lease is free, expired (seen `lease` or longer ago) or already this
+        driver's; returns whether it did."""
+        ...
+
+    def session_driver(
+        self, user_id: UUID, thread_id: str, now: datetime, lease: timedelta
+    ) -> str | None:
+        """The driver of the open session whose lease is live at `now`, or None."""
+        ...
+
+    def release_session(self, user_id: UUID, thread_id: str, driver: str) -> None:
+        """Free the open session's lease if `driver` holds it (a tab closing)."""
+        ...
+
+    def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
+        """Mark the open session active at `now`."""
         ...
 
     def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:
@@ -233,7 +323,7 @@ class Store(Protocol):
         concepts: Sequence[tuple[str, str]],
     ) -> UUID:
         """Create the subject, its documents with their chunks, and its concepts in one
-        transaction. Name clashes are the caller's to check."""
+        transaction. Raises SubjectExists if the user has a subject of that name."""
         ...
 
     def add_document(

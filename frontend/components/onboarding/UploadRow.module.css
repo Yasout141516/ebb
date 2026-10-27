@@ -1,0 +1,206 @@
+/* tpl-Onboarding's source row, and System states' "Error · upload too large" row. */
+.row {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.badge {
+  flex: none;
+  width: 36px;
+  height: 44px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 10px var(--mono);
+  color: var(--ink-2);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.filename {
+  font-weight: 500;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.done {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--correct);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.check {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.remove {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.cross {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.12s linear;
+}
+
+.working {
+  animation: ebb-pulse 1s ease-in-out infinite;
+}
+
+.concepts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.found {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.chip {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 500;
+}
+
+/* A concept an earlier file already found: listed, but not new. */
+.known {
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+/* The refused row. */
+.refused {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.alert {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1.5px solid var(--incorrect);
+  background: var(--surface);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.smallBadge {
+  flex: none;
+  width: 32px;
+  height: 40px;
+  border-radius: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 9px var(--mono);
+  color: var(--ink-2);
+}
+
+.alertText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.alertName {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.alertMessage {
+  font-size: 13px;
+  color: var(--incorrect);
+  font-weight: 500;
+}
+
+.retry {
+  flex: none;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 0;
+  background: var(--primary-bg);
+  color: var(--primary-ink);
+  font: 500 13px var(--sans);
+  cursor: pointer;
+}
+
+.advice {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}

@@ -1,0 +1,77 @@
+/* What tpl-Dashboard's summary cards and tpl-DashboardMobile's tiles share. */
+.card {
+  padding: 20px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.note {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.value {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 40px;
+  line-height: 1;
+}
+
+/* 375 px: the two small tiles side by side. */
+.tile {
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tileLabel {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.tileValue {
+  font-family: var(--serif);
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+.tileNote {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* A tide gauge's frame in a row (Due today, the stage columns). */
+.rowGauge {
+  width: 14px;
+  height: 30px;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 4px;
+}
+
+.smallGauge {
+  width: 12px;
+  height: 26px;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 4px;
+}

@@ -1,5 +1,6 @@
 """Leitner stages and the tide gauge. Pure functions; `now` is always passed in."""
 
+from collections.abc import Iterable
 from dataclasses import replace
 from datetime import datetime, timedelta
 
@@ -12,6 +13,16 @@ MAX_STAGE = 5
 
 def is_due(concept: Concept, now: datetime) -> bool:
     return concept.next_review_at is None or concept.next_review_at <= now
+
+
+def is_review_due(concept: Concept, now: datetime) -> bool:
+    """A learned concept (stage 1 or more) that is due; a new one is not a review."""
+    return concept.stage >= 1 and is_due(concept, now)
+
+
+def reviews_due(concepts: Iterable[Concept], now: datetime) -> list[Concept]:
+    """Learned concepts (stage 1 or more) that are due; new ones are not reviews."""
+    return [c for c in concepts if is_review_due(c, now)]
 
 
 def apply_grade(concept: Concept, grade: GradeValue, now: datetime) -> Concept:

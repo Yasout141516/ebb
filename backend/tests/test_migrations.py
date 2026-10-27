@@ -195,7 +195,9 @@ def test_003_keeps_milestone_2_data(pg_empty_pool):
     with pg_empty_pool.connection() as conn:
         migrate(conn, until="002_spaced_review.sql")
         seed_milestone_1(conn)
-        assert migrate(conn) == ["003_notes_citations_disputes.sql"]
+        assert migrate(conn, until="003_notes_citations_disputes.sql") == [
+            "003_notes_citations_disputes.sql"
+        ]
         counts = row_counts(conn)
         question = conn.execute("select source, citations from questions").fetchone()
         attempt = conn.execute(
@@ -204,6 +206,71 @@ def test_003_keeps_milestone_2_data(pg_empty_pool):
     assert counts["questions"] == 1 and counts["attempts"] == 1 and counts["concepts"] == 2
     assert question == {"source": "general", "citations": []}
     assert attempt == {"concept_before": None, "voided_at": None, "citations": []}
+
+
+def test_004_renames_a_duplicate_subject_and_keeps_its_data(pg_empty_pool):
+    with pg_empty_pool.connection() as conn:
+        migrate(conn, until="003_notes_citations_disputes.sql")
+        ids = seed_milestone_1(conn)
+        newer, other, bobs = uuid4(), uuid4(), uuid4()
+        conn.execute("insert into profiles (id) values (%s)", (BOB,))
+        for sid, user, name, day in [
+            (newer, ALICE, "networks", 20),
+            (other, ALICE, "NETWORKS", 21),
+            (bobs, BOB, "Networks", 22),
+        ]:
+            conn.execute(
+                "insert into subjects (id, user_id, name, created_at) values (%s, %s, %s, %s)",
+                (sid, user, name, datetime(2026, 10, day, tzinfo=UTC)),
+            )
+        conn.execute(
+            "insert into concepts (user_id, subject_id, name, description)"
+            " values (%s, %s, 'kept', 'd')",
+            (ALICE, newer),
+        )
+        conn.execute("update subjects set created_at = %s where id = %s", (T, ids["subject"]))
+        assert migrate(conn) == ["004_web_app.sql"]
+        names = {r["id"]: r["name"] for r in conn.execute("select id, name from subjects")}
+        kept = conn.execute(
+            "select count(*) as n from concepts where subject_id = %s", (newer,)
+        ).fetchone()["n"]
+        counts = row_counts(conn)
+    assert names[ids["subject"]] == "Networks"
+    assert names[newer] == "networks (2)"
+    assert names[other] == "NETWORKS (3)"
+    assert names[bobs] == "Networks"
+    assert kept == 1
+    assert counts["concepts"] == 3 and counts["attempts"] == 1
+
+
+def test_004_rename_skips_a_name_already_taken(pg_empty_pool):
+    with pg_empty_pool.connection() as conn:
+        migrate(conn, until="003_notes_citations_disputes.sql")
+        conn.execute("insert into profiles (id) values (%s)", (ALICE,))
+        for name, day in [("Networks", 1), ("networks", 2), ("Networks (2)", 3)]:
+            conn.execute(
+                "insert into subjects (user_id, name, created_at) values (%s, %s, %s)",
+                (ALICE, name, datetime(2026, 10, day, tzinfo=UTC)),
+            )
+        migrate(conn)
+        names = sorted(r["name"] for r in conn.execute("select name from subjects"))
+    assert names == ["Networks", "Networks (2)", "networks (3)"]
+
+
+def test_004_adds_driver_columns_and_llm_usage(pg_pool):
+    with pg_pool.connection() as conn:
+        conn.execute("insert into profiles (id) values (%s)", (ALICE,))
+        conn.execute("insert into llm_usage (user_id, day) values (%s, '2026-10-23')", (ALICE,))
+        row = conn.execute("select calls from llm_usage").fetchone()
+        cols = {
+            r["column_name"]
+            for r in conn.execute(
+                "select column_name from information_schema.columns"
+                " where table_name = 'study_sessions'"
+            )
+        }
+    assert row["calls"] == 0
+    assert {"driver", "driver_seen_at"} <= cols
 
 
 def test_new_tables_reject_cross_user_rows(pg_pool):

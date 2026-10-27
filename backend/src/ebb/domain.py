@@ -29,6 +29,11 @@ class Citation:
     label: str
     page: int | None
     quote: str
+    # `name` is the file name (chunk) or the domain (web), `heading` the chunk's heading and
+    # `title` the web page's title; `label` joins them for display.
+    name: str | None = None
+    heading: str | None = None
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,8 @@ class Source:
     heading: str | None = None
     page_start: int | None = None
     page_offsets: tuple[int, ...] = ()  # offset in text where page page_start + i begins
+    site: str | None = None  # a web source's domain
+    page_title: str | None = None  # a web source's page title
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,23 @@ class Concept:
     next_review_at: datetime | None = None
     last_reviewed_at: datetime | None = None
     review_count: int = 0
+
+
+@dataclass(frozen=True)
+class ConceptResult:
+    """One concept's part of a session summary: its counted answers by grade, and where its
+    stage and tide stood before the session's first of them and stand now."""
+
+    concept_id: UUID
+    concept: str
+    correct: int
+    partial: int
+    incorrect: int
+    stage_before: int
+    stage_after: int
+    tide_before: float | None
+    tide_after: float | None
+    next_review_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -99,6 +123,12 @@ class Grade:
     misconception: str | None = None
     claims: tuple[Claim, ...] = ()
     citations: tuple[Citation, ...] = ()
+
+
+@dataclass(frozen=True)
+class Regrade:
+    grade: Grade
+    ambiguous: bool
 
 
 @dataclass(frozen=True)

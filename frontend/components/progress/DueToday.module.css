@@ -1,0 +1,99 @@
+.card {
+  gap: 12px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.name {
+  flex: 1;
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.level {
+  font: 500 14px var(--mono);
+}
+
+.link {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* Nothing due (D5): the prototype has no such state; the memory panel's quiet line. */
+.calm {
+  margin: 0;
+  padding: 10px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* 375 px (tpl-DashboardMobile) */
+.section {
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.compactRow {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.compactLevel {
+  font: 500 13px var(--mono);
+}
+
+.button {
+  margin-top: 4px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--primary-bg);
+  color: var(--primary-ink);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.button:hover {
+  color: var(--primary-ink);
+}

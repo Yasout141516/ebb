@@ -1,0 +1,30 @@
+/* A tutor message (tpl-Workspace isTutor) titled "Let's fix that". */
+.lesson {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 640px;
+}
+
+.name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-ink);
+}
+
+.title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.text {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+.sources {
+  margin-top: 8px;
+}

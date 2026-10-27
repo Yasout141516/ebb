@@ -1,0 +1,23 @@
+.dots {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.dot {
+  aspect-ratio: 1;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+
+.dot[data-day="studied"] {
+  background: var(--accent-soft);
+}
+
+.dot[data-day="run"] {
+  background: var(--accent);
+}
+
+.dot[data-today] {
+  box-shadow: 0 0 0 2px var(--ink);
+}

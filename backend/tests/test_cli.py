@@ -1,5 +1,6 @@
 """The CLI end to end with typed input, using the fakes instead of Postgres and the LLM."""
 
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -12,7 +13,14 @@ from ebb.config import ConfigError, Settings
 from ebb.domain import ChunkDraft
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.ui import format_day
-from tests.fakes import FakeTutor, FakeWebSearch, MemoryStore, new_document, seed_concept
+from tests.fakes import (
+    FakeTutor,
+    FakeWebSearch,
+    MemoryStore,
+    make_subject,
+    new_document,
+    seed_concept,
+)
 
 runner = CliRunner()
 # Captured at import time, before any test patches cli._tutor or cli._ask.
@@ -118,6 +126,18 @@ def test_unknown_subject_lists_the_real_ones(fakes):
     assert "You have: Networks" in result.output
 
 
+def test_a_subject_is_found_by_its_name_as_the_unique_index_compares_it(fakes):
+    store, _ = fakes
+    user = next(iter(store.profiles))
+    make_subject(store, user, name="STRASSE")
+    make_subject(store, user, name="Straße")  # another subject: lower() keeps ß; listed first
+
+    result = runner.invoke(cli.app, ["status", "strasse"])
+
+    assert result.exit_code == 0, result.output
+    assert "STRASSE" in result.output and "Straße" not in result.output
+
+
 def test_missing_api_key_exits_2(fakes, monkeypatch):
     # Real _tutor, real key check: no key configured means exit 2 before any LLM call.
     store, _ = fakes
@@ -168,6 +188,62 @@ def test_new_shows_the_first_line_of_the_cause(fakes, monkeypatch):
     assert result.exit_code == 1
     assert "503 overloaded" in result.output
     assert "stack detail" not in result.output
+
+
+REFUSED = "The tutor won't help with that topic."
+
+
+def test_new_prints_the_refusal_and_exits_1(fakes):
+    store, tutor = fakes
+    tutor.refuse = {"extract_concepts"}
+
+    result = runner.invoke(cli.app, ["new", "Networks"])
+
+    assert result.exit_code == 1
+    assert REFUSED in result.output
+    assert "couldn't respond" not in result.output
+    assert store.subjects == {}
+
+
+NOTES_REFUSED = "The tutor won't help with these notes."
+
+
+def test_add_prints_the_notes_refusal_and_exits_1(fakes, tmp_path):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    tutor.refuse = {"concepts_from_notes"}
+
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+
+    assert result.exit_code == 1
+    assert NOTES_REFUSED in flat(result.output)
+    assert REFUSED not in flat(result.output)
+    assert store.documents == {}
+
+
+def test_new_with_notes_prints_the_notes_refusal_and_exits_1(fakes, tmp_path):
+    store, tutor = fakes
+    tutor.refuse = {"concepts_from_notes"}
+
+    result = runner.invoke(cli.app, ["new", "Networks", "--notes", str(note_file(tmp_path))])
+
+    assert result.exit_code == 1
+    assert NOTES_REFUSED in flat(result.output)
+    assert store.subjects == {} and store.documents == {}
+
+
+def test_study_refused_generation_shows_the_notice_and_ends_normally(fakes):
+    """Inside the graph a refusal follows the exhausted path: notice, summary, exit 0."""
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    tutor.refuse = {"generate_questions"}
+
+    result = runner.invoke(cli.app, ["study"])
+
+    assert result.exit_code == 0, result.output
+    assert REFUSED in flat(result.output)
+    assert "No answers this session." in result.output
+    assert next(iter(store.sessions.values()))["ended_at"] is not None
 
 
 def test_new_exits_2_on_a_rejected_key(fakes, monkeypatch):
@@ -314,11 +390,50 @@ def test_locked_session_starts_fresh(fakes, monkeypatch):
         result = runner.invoke(cli.app, ["study"], input="q\n")
 
     assert result.exit_code == 0, result.output
-    assert "That session is open in another terminal." in result.output
+    assert "That session is open in another tab or terminal." in result.output
     assert "Resume?" not in result.output
     assert "Nothing is due. Let's learn something new." in result.output
     assert old["ended_at"] is None  # still the other terminal's
     assert len(store.sessions) == 2
+
+
+def test_session_a_browser_tab_is_driving_starts_fresh(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    old_id, old = only_session(store)
+    lease = timedelta(seconds=90)
+    assert store.claim_session(old["user_id"], old["thread_id"], "web:1", datetime.now(UTC), lease)
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "That session is open in another tab or terminal." in result.output
+    assert "Resume?" not in result.output
+    assert old["ended_at"] is None and old["driver"] == "web:1"
+    assert len(store.sessions) == 2
+
+
+def test_session_taken_while_deciding_starts_fresh(fakes, monkeypatch):
+    store, _ = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    interrupted_study(monkeypatch)
+    old_id, old = only_session(store)
+
+    with ExitStack() as elsewhere:
+
+        def another_terminal_resumes_first(question):
+            assert "Resume? [Y/n]" in question
+            elsewhere.enter_context(store.session_lock(old["user_id"], old["thread_id"]))
+            return True
+
+        monkeypatch.setattr(cli, "_confirm", another_terminal_resumes_first)
+        result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "That session is open in another tab or terminal." in result.output
+    assert "Nothing is due. Let's learn something new." in result.output
+    assert old["ended_at"] is None and len(store.sessions) == 2
 
 
 def test_other_subjects_session_is_not_offered(fakes, monkeypatch):
@@ -690,6 +805,34 @@ def test_add_race_refusal_uses_the_same_copy(fakes, tmp_path, monkeypatch):
     assert "wk1.md is already in Networks." in flat(result.output)
 
 
+def test_cli_new_reports_existing_name_raced_in_by_another_terminal(fakes, monkeypatch):
+    from ebb.store import SubjectExists
+
+    store, _ = fakes
+
+    def raced(*args, **kwargs):
+        raise SubjectExists("Networks")
+
+    monkeypatch.setattr(store, "create_subject", raced)
+    result = runner.invoke(cli.app, ["new", "Networks"])
+    assert result.exit_code == 1
+    assert "Networks already exists — add notes to it with: ebb add <file>" in flat(result.output)
+
+
+def test_cli_new_with_notes_reports_a_raced_name(fakes, tmp_path, monkeypatch):
+    from ebb.store import SubjectExists
+
+    store, _ = fakes
+
+    def raced(*args, **kwargs):
+        raise SubjectExists("Networks")
+
+    monkeypatch.setattr(store, "create_subject_with_notes", raced)
+    result = runner.invoke(cli.app, ["new", "Networks", "--notes", str(note_file(tmp_path))])
+    assert result.exit_code == 1
+    assert "Networks already exists — add notes to it with: ebb add <file>" in flat(result.output)
+
+
 def test_new_with_notes_uses_only_note_concepts(fakes, tmp_path, monkeypatch):
     store, tutor = fakes
     tutor.note_concepts = [[("ARP", None), ("NAT", None), ("DNS", None)]]
@@ -859,3 +1002,57 @@ def test_question_shows_its_source_line(fakes):
 
     assert result.exit_code == 0, result.output
     assert "From your notes · p. 12" in result.output
+
+
+DAILY_LIMIT = "Daily limit reached"
+
+
+def test_study_with_no_calls_left_shows_the_daily_limit_and_ends_normally(fakes):
+    """Inside the graph the cap follows the exhausted path: notice, summary, exit 0."""
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    settings = cli._open_store()[0]
+    settings.ebb_daily_ai_calls = 0
+
+    result = runner.invoke(cli.app, ["study"])
+
+    assert result.exit_code == 0, result.output
+    assert DAILY_LIMIT in flat(result.output)
+    assert "No answers this session." in result.output
+    assert tutor.generate_calls == []
+    assert next(iter(store.sessions.values()))["ended_at"] is not None
+
+
+def test_new_with_no_calls_left_shows_the_daily_limit_and_exits_1(fakes):
+    store, tutor = fakes
+    cli._open_store()[0].ebb_daily_ai_calls = 0
+
+    result = runner.invoke(cli.app, ["new", "Networks"])
+
+    assert result.exit_code == 1
+    assert DAILY_LIMIT in flat(result.output)
+    assert store.subjects == {}
+
+
+def test_add_with_no_calls_left_shows_the_daily_limit_and_exits_1(fakes, tmp_path):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    cli._open_store()[0].ebb_daily_ai_calls = 0
+
+    result = runner.invoke(cli.app, ["add", str(note_file(tmp_path))])
+
+    assert result.exit_code == 1
+    assert DAILY_LIMIT in flat(result.output)
+    assert store.documents == {}
+
+
+def test_cli_serve_starts_uvicorn_with_the_factory(monkeypatch):
+    import uvicorn
+
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    result = runner.invoke(cli.app, ["serve", "--port", "9000"])
+    assert result.exit_code == 0
+    assert calls == [
+        (("ebb.api.app:app_from_env",), {"factory": True, "host": "0.0.0.0", "port": 9000})
+    ]

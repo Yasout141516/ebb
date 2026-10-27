@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from uuid import UUID, uuid4
 
 from ebb import mastery
@@ -13,6 +13,7 @@ from ebb.domain import (
     ChunkDraft,
     Claim,
     Concept,
+    ConceptResult,
     Dispute,
     DisputeOutcome,
     DisputeReason,
@@ -23,18 +24,22 @@ from ebb.domain import (
     NewDocument,
     Option,
     Question,
+    Regrade,
     ResumableSession,
     Source,
     Subject,
 )
 from ebb.llm.schemas import ConceptDraft, EvalCaseDraft, NoteConcept
-from ebb.llm.tutor import AllProvidersExhausted, Generated
+from ebb.llm.tutor import AllProvidersExhausted, Generated, TutorRefused
+from ebb.progress import AnswerPoint
 from ebb.store import (
     MAX_DOCUMENTS,
     PRUNE_AFTER,
     RESUME_WINDOW,
     DocumentRefused,
+    SubjectExists,
     concept_after_dispute,
+    concept_result,
     new_concepts,
     restore,
     search_words,
@@ -70,12 +75,21 @@ class MemoryStore:
         self.disputes: dict[UUID, tuple[UUID, Dispute]] = {}  # dispute id -> (user id, dispute)
         self.question_sessions: dict[UUID, UUID] = {}  # question id -> session id
         self.timezones: dict[UUID, str] = {}
+        self.ai_calls: dict[tuple[UUID, date], int] = {}
         self.locks: set[str] = set()
+
+    def ping(self) -> None:
+        pass
 
     def ensure_profile(self, user_id: UUID) -> None:
         self.profiles.add(user_id)
 
     def create_subject(self, user_id: UUID, name: str, concepts: Sequence[tuple[str, str]]) -> UUID:
+        if any(
+            owner == user_id and s.name.lower() == name.lower()
+            for owner, s in self.subjects.values()
+        ):
+            raise SubjectExists(name)
         subject = Subject(uuid4(), name, datetime.now(UTC))
         self.subjects[subject.id] = (user_id, subject)
         for concept_name, description in concepts:
@@ -105,6 +119,8 @@ class MemoryStore:
             "ended_at": None,
             "last_active_at": datetime.now(UTC),
             "pruned_at": None,
+            "driver": None,
+            "driver_seen_at": None,
         }
         return session_id
 
@@ -193,6 +209,37 @@ class MemoryStore:
         self.concepts[current.id] = (owner, after)
         self.disputes[dispute.id] = (user_id, dispute)
         return dispute, after
+
+    def session_summary(
+        self, user_id: UUID, session_id: UUID, now: datetime
+    ) -> list[ConceptResult]:
+        counted: dict[UUID, list[Answer]] = {}
+        for answer in self.attempts.values():
+            if (
+                self.question_sessions[answer.question_id] == session_id
+                and self.sessions[session_id]["user_id"] == user_id
+                and self.concepts[answer.concept_id][0] == user_id
+                and answer.id not in self.voided
+            ):
+                counted.setdefault(answer.concept_id, []).append(answer)
+        position = {concept_id: n for n, concept_id in enumerate(self.concepts)}
+        by_first = sorted(
+            (
+                # attempts are in the order they were recorded, which settles equal times
+                (min(answers, key=lambda a: a.graded_at), answers)
+                for answers in counted.values()
+            ),
+            key=lambda pair: (pair[0].graded_at, position[pair[0].concept_id]),
+        )
+        return [
+            concept_result(
+                self.concepts[first.concept_id][1],
+                {grade: [a.grade for a in answers].count(grade) for grade in GradeValue},
+                (self.stages[first.id][0], self.snapshots.get(first.id), first.graded_at),
+                now,
+            )
+            for first, answers in by_first
+        ]
 
     def get_dispute(self, user_id: UUID, dispute_id: UUID) -> Dispute | None:
         owner, dispute = self.disputes.get(dispute_id, (None, None))
@@ -294,16 +341,6 @@ class MemoryStore:
         scored.sort(key=lambda pair: -pair[0])
         return [chunk for _, chunk in scored[:limit]]
 
-    def count_due(self, user_id: UUID, subject_id: UUID, now: datetime) -> int:
-        return sum(
-            1
-            for c in self.list_concepts(user_id, subject_id)
-            if c.stage >= 1 and mastery.is_due(c, now)
-        )
-
-    def count_new(self, user_id: UUID, subject_id: UUID) -> int:
-        return sum(1 for c in self.list_concepts(user_id, subject_id) if c.stage == 0)
-
     def next_review_at(self, user_id: UUID, subject_id: UUID) -> datetime | None:
         times = [
             c.next_review_at
@@ -312,8 +349,33 @@ class MemoryStore:
         ]
         return min(times, default=None)
 
+    def subject_answers(self, user_id: UUID, subject_id: UUID) -> list[AnswerPoint]:
+        answers = [
+            a
+            for a in self.attempts.values()
+            if a.id not in self.voided
+            and self.concepts[a.concept_id][0] == user_id
+            and self.concepts[a.concept_id][1].subject_id == subject_id
+        ]
+        answers.sort(key=lambda a: (a.graded_at, a.id))
+        return [AnswerPoint(a.concept_id, a.graded_at, a.grade) for a in answers]
+
+    def answer_times(self, user_id: UUID) -> list[datetime]:
+        return sorted(
+            a.graded_at
+            for a in self.attempts.values()
+            if a.id not in self.voided and self.concepts[a.concept_id][0] == user_id
+        )
+
     def set_timezone(self, user_id: UUID, name: str) -> None:
         self.timezones[user_id] = name
+
+    def take_ai_call(self, user_id: UUID, day: date, limit: int) -> bool:
+        used = self.ai_calls.get((user_id, day), 0)
+        if used >= limit:
+            return False
+        self.ai_calls[(user_id, day)] = used + 1
+        return True
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime
@@ -338,10 +400,53 @@ class MemoryStore:
                 s["user_id"] == user_id
                 and s["ended_at"] is None
                 and s["last_active_at"] <= now - RESUME_WINDOW
+                and s["thread_id"] not in self.locks
             ):
                 s["ended_at"] = s["last_active_at"]
                 closed += 1
         return closed
+
+    def _open_session(self, user_id: UUID, thread_id: str) -> tuple[UUID, dict] | None:
+        for session_id, s in self.sessions.items():
+            if s["user_id"] == user_id and s["thread_id"] == thread_id and s["ended_at"] is None:
+                return session_id, s
+        return None
+
+    def get_session(self, user_id: UUID, thread_id: str) -> ResumableSession | None:
+        found = self._open_session(user_id, thread_id)
+        if found is None:
+            return None
+        session_id, s = found
+        return ResumableSession(session_id, s["thread_id"], s["last_active_at"])
+
+    def claim_session(
+        self, user_id: UUID, thread_id: str, driver: str, now: datetime, lease: timedelta
+    ) -> bool:
+        found = self._open_session(user_id, thread_id)
+        if found is None:
+            return False
+        s = found[1]
+        if s["driver"] not in (None, driver) and s["driver_seen_at"] > now - lease:
+            return False
+        s.update(driver=driver, driver_seen_at=now, last_active_at=now)
+        return True
+
+    def session_driver(
+        self, user_id: UUID, thread_id: str, now: datetime, lease: timedelta
+    ) -> str | None:
+        found = self._open_session(user_id, thread_id)
+        seen = None if found is None else found[1]["driver_seen_at"]
+        return found[1]["driver"] if seen is not None and seen > now - lease else None
+
+    def release_session(self, user_id: UUID, thread_id: str, driver: str) -> None:
+        found = self._open_session(user_id, thread_id)
+        if found is not None and found[1]["driver"] == driver:
+            found[1].update(driver=None, driver_seen_at=None)
+
+    def touch_session(self, user_id: UUID, thread_id: str, now: datetime) -> None:
+        found = self._open_session(user_id, thread_id)
+        if found is not None:
+            found[1]["last_active_at"] = now
 
     def threads_to_prune(self, user_id: UUID, now: datetime) -> list[str]:
         return [
@@ -398,7 +503,9 @@ class FakeTutor:
         fail_regrade: bool = False,
         fail_concepts: bool = False,
         fail_eval_on_calls: Sequence[int] = (),
+        refuse: set[str] | None = None,
     ) -> None:
+        self.refuse = refuse or set()  # names of the methods that raise TutorRefused
         self.batch_size = batch_size
         self.fail_grade_times = fail_grade_times
         self.fail_generate = fail_generate
@@ -444,7 +551,12 @@ class FakeTutor:
     def _out[T](self, value: T) -> Generated[T]:
         return Generated(value, "fake-model", self.fell_back)
 
+    def _maybe_refuse(self, method: str) -> None:
+        if method in self.refuse:
+            raise TutorRefused()
+
     def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]:
+        self._maybe_refuse("extract_concepts")
         drafts = [
             ConceptDraft(name=f"{topic} {n}", description=f"Idea {n} of {topic}.")
             for n in range(1, 7)
@@ -455,6 +567,7 @@ class FakeTutor:
         self, subject: str, existing: Sequence[Concept]
     ) -> Generated[list[ConceptDraft]]:
         self.extend_calls.append((subject, [c.name for c in existing]))
+        self._maybe_refuse("extend_concepts")
         if self.fail_extend:
             raise AllProvidersExhausted("extension down")
         call = len(self.extend_calls) - 1
@@ -478,6 +591,7 @@ class FakeTutor:
         self.failures_calls.append(list(failures))
         self.web_count_calls.append(web_count)
         self.rewrite_calls.append(list(rewrite))
+        self._maybe_refuse("generate_questions")
         if self.fail_generate or self.generate_attempts == self.fail_generate_on_call:
             raise AllProvidersExhausted("generation down")
         self.generate_calls.append(concept.name)
@@ -536,6 +650,7 @@ class FakeTutor:
         previous: Grade | None = None,
     ) -> Generated[Grade]:
         self.grade_previous.append(previous)
+        self._maybe_refuse("grade")
         if self.fail_grade_times > 0:
             self.fail_grade_times -= 1
             raise AllProvidersExhausted("grading down")
@@ -556,6 +671,7 @@ class FakeTutor:
         previous: Lesson | None = None,
     ) -> Generated[Lesson]:
         self.teach_previous.append(previous)
+        self._maybe_refuse("teach")
         if self.fail_teach:
             raise AllProvidersExhausted("teaching down")
         claims = self._claims(self.teach_cites, self.teach_attempts)
@@ -566,6 +682,7 @@ class FakeTutor:
         self, subject: str, existing: Sequence[Concept], digest: str
     ) -> Generated[list[NoteConcept]]:
         self.concepts_calls.append((subject, [c.name for c in existing], digest))
+        self._maybe_refuse("concepts_from_notes")
         if self.fail_concepts:
             raise AllProvidersExhausted("concepts down")
         call = len(self.concepts_calls) - 1
@@ -585,22 +702,24 @@ class FakeTutor:
         sources: Sequence[Source] = (),
         failures: Sequence[str] = (),
         previous: Grade | None = None,
-    ) -> Generated[tuple[Grade, bool]]:
+    ) -> Generated[Regrade]:
         self.regrade_calls.append((answer, reason, explanation))
         self.regrade_previous.append(previous)
+        self._maybe_refuse("regrade")
         if self.fail_regrade:
             raise AllProvidersExhausted("regrade down")
         call = len(self.regrade_calls) - 1
         scripted = self.regrades or []
         value, ambiguous = scripted[call] if call < len(scripted) else (grade.value.value, False)
         new = Grade(GradeValue(value), f"Regraded {value}.", grade.misconception)
-        return self._out((new, ambiguous))
+        return self._out(Regrade(new, ambiguous))
 
     def write_eval_case(
         self, topic: str, target: GradeValue, notes: str | None
     ) -> Generated[EvalCaseDraft]:
         """An answer this tutor's own `grade` marks as the target: right, meh or wrong."""
         self.eval_calls.append((topic, target, notes))
+        self._maybe_refuse("write_eval_case")
         if len(self.eval_calls) in self.fail_eval_on_calls:
             raise AllProvidersExhausted("writer down")
         answer = {"correct": "right", "partial": "meh", "incorrect": "wrong"}[target.value]
@@ -641,11 +760,13 @@ def new_document(
     return NewDocument(filename, kind, 100, page_count, sha or f"sha-{filename}", drafts)
 
 
-def make_subject(store: MemoryStore, user_id: UUID, concepts: int = 4) -> UUID:
+def make_subject(
+    store: MemoryStore, user_id: UUID, concepts: int = 4, name: str = "Networks"
+) -> UUID:
     store.ensure_profile(user_id)
     return store.create_subject(
         user_id,
-        "Networks",
+        name,
         [(f"Concept {n}", f"About concept {n}.") for n in range(1, concepts + 1)],
     )
 

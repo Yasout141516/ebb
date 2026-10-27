@@ -71,7 +71,17 @@ def web_sources(pages: Sequence[WebPage]) -> list[Source]:
     sources = []
     for n, page in enumerate(pages, 1):
         domain = (urlparse(page.url).hostname or "").removeprefix("www.")
-        sources.append(Source(f"W{n}", "web", page.url, f"{domain} · {page.title}", page.text))
+        sources.append(
+            Source(
+                f"W{n}",
+                "web",
+                page.url,
+                f"{domain} · {page.title}",
+                page.text,
+                site=domain,
+                page_title=page.title,
+            )
+        )
     return sources
 
 
@@ -150,18 +160,50 @@ def verify(
             failures.append(f"the quote from {claim.source} is not in that source")
         else:
             page = _page_at(source, original)
+            web = source.kind == "web"
             valid.append(
-                Citation(source.kind, source.ref, display_label(source, page), page, quote)
+                Citation(
+                    source.kind,
+                    source.ref,
+                    display_label(source, page),
+                    page,
+                    quote,
+                    name=source.site if web else source.title,
+                    heading=None if web else source.heading,
+                    title=source.page_title if web else None,
+                )
             )
     return tuple(valid[:MAX_CITATIONS]), tuple(failures)
 
 
+def _split_label(kind: str, label: str) -> tuple[str | None, str | None, str | None]:
+    """(name, heading, title) of a milestone 3 citation, which stored only its label:
+    "file.pdf · p. 12", "notes.md · § Heading", "file.txt" or "domain · page title"."""
+    name, _, rest = label.partition(" · ")
+    if kind == "web":
+        return name, None, rest
+    return name, rest.removeprefix("§ ") if rest.startswith("§ ") else None, None
+
+
 def to_dict(c: Citation) -> dict[str, Any]:
-    return {"kind": c.kind, "ref": c.ref, "label": c.label, "page": c.page, "quote": c.quote}
+    return {
+        "kind": c.kind,
+        "ref": c.ref,
+        "label": c.label,
+        "page": c.page,
+        "quote": c.quote,
+        "name": c.name,
+        "heading": c.heading,
+        "title": c.title,
+    }
 
 
 def from_dict(d: Mapping[str, Any]) -> Citation:
-    return Citation(d["kind"], d["ref"], d["label"], d["page"], d["quote"])
+    if "name" in d:
+        name, heading, title = d["name"], d["heading"], d["title"]
+    else:
+        name, heading, title = _split_label(d["kind"], d["label"])
+    return Citation(d["kind"], d["ref"], d["label"], d["page"], d["quote"], name, heading, title)
 
 
 def source_to_dict(s: Source) -> dict[str, Any]:
@@ -174,10 +216,15 @@ def source_to_dict(s: Source) -> dict[str, Any]:
         "heading": s.heading,
         "page_start": s.page_start,
         "page_offsets": list(s.page_offsets),
+        "site": s.site,
+        "page_title": s.page_title,
     }
 
 
 def source_from_dict(d: Mapping[str, Any]) -> Source:
+    site, page_title = d.get("site"), d.get("page_title")
+    if d["kind"] == "web" and "site" not in d:  # milestone 3 stored only "domain · page title"
+        site, _, page_title = _split_label("web", d["title"])
     return Source(
         d["label"],
         d["kind"],
@@ -187,4 +234,6 @@ def source_from_dict(d: Mapping[str, Any]) -> Source:
         d["heading"],
         d["page_start"],
         tuple(d["page_offsets"]),
+        site,
+        page_title,
     )

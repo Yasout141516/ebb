@@ -1,0 +1,28 @@
+/* tpl-Workspace's streaming row (isStream) and tpl-States' <StreamingMessage>. */
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 640px;
+}
+
+.name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.label {
+  font-weight: 400;
+  color: var(--ink-3);
+  animation: ebb-pulse 1.2s ease-in-out infinite;
+}
+
+.text {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+}

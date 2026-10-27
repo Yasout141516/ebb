@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from ebb.domain import Concept
-from ebb.mastery import is_due, tide
+from ebb.mastery import reviews_due, tide
 
 STREAK_TO_FINISH = 2
 MAX_QUESTIONS_PER_CONCEPT = 4
@@ -19,7 +19,7 @@ def pick_next_concept(
 ) -> Concept | None:
     """Due reviews by lowest tide, then new concepts in list order; never a learned, not-due one."""
     candidates = [c for c in concepts if str(c.id) not in studied_ids]
-    due = [c for c in candidates if c.stage >= 1 and is_due(c, now)]
+    due = reviews_due(candidates, now)
     if due:
         # min() keeps the first of equal keys, so ties stay in list order.
         return min(due, key=lambda c: _tide_or_zero(c, now))
@@ -90,16 +90,27 @@ def after_generate(state: Mapping[str, Any]) -> Literal["verify_citations", "sum
     return "summarize" if state["fatal"] else "verify_citations"
 
 
+def candidate_run(state: Mapping[str, Any]) -> dict[str, Any]:
+    """The state's `run` ({mode, candidates, replacing}). A checkpoint saved before it has
+    the old keys instead; `run` is built from them only while it is absent, so a stale old
+    value is never read once a node has written `run`. Routers get the raw state."""
+    if "run" in state:
+        return state["run"]
+    return {
+        "mode": state.get("generation_mode", "notes"),
+        "candidates": list(state.get("candidates", [])),
+        "replacing": state.get("replacements_needed", 0),
+    }
+
+
 def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["search_web"]:
-    """Failures left in state mean the candidates go back for another try. Repeats dropped
-    from a notes batch are replaced from the web, if `web` search is set up and this
-    session hasn't searched for this concept or seen a search fail."""
-    if state["citation_failures"]:
-        return "generate_questions"
+    """Repeats dropped from a notes batch are replaced from the web, if `web` search is set
+    up and this session hasn't searched for this concept or seen a search fail."""
+    run = candidate_run(state)
     if (
         web
-        and state.get("generation_mode", "notes") == "notes"
-        and state.get("replacements_needed", 0) > 0
+        and run["mode"] == "notes"
+        and run["replacing"] > 0
         and state["concept"]["id"] not in state.get("web_searched", [])
         and not state.get("web_failed", False)
     ):
@@ -111,7 +122,7 @@ def after_verify(state: Mapping[str, Any], web: bool) -> NextStep | Literal["sea
 
 def after_search(state: Mapping[str, Any]) -> NextStep:
     """Pages found switch generation to web mode; otherwise the batch goes on without them."""
-    if state.get("generation_mode", "notes") == "web":
+    if candidate_run(state)["mode"] == "web":
         return "generate_questions"
     if state["batch"]:
         return "ask_question"

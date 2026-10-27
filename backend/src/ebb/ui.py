@@ -100,6 +100,21 @@ def caught_up_line(next_review: datetime | None, tz: ZoneInfo) -> str:
     return f"You're all caught up — next review {format_day(next_review, tz)}."
 
 
+def next_review_line(concepts: Sequence[Concept], now: datetime, tz: ZoneInfo) -> str | None:
+    """D4's line: the local day of the soonest review and how many concepts fall on it; an
+    overdue concept counts as today. None when nothing is scheduled."""
+    days = [
+        max(c.next_review_at, now).astimezone(tz).date()
+        for c in concepts
+        if c.stage >= 1 and c.next_review_at is not None
+    ]
+    if not days:
+        return None
+    soonest = min(days)
+    n = days.count(soonest)
+    return f"Next review: {soonest.strftime('%A')} · {n} concept{'' if n == 1 else 's'}"
+
+
 def status_table(concepts: Sequence[Concept], now: datetime, tz: ZoneInfo) -> Table:
     table = Table(title="Memory", title_justify="left")
     table.add_column("Concept")
@@ -149,8 +164,7 @@ def render_citations(
 def render_feedback(
     console: Console,
     grade: dict[str, Any] | None,
-    lesson: str | None,
-    lesson_citations: Sequence[dict[str, Any]] = (),
+    lesson: dict[str, Any] | None,
 ) -> None:
     if grade:
         style = GRADE_STYLE[grade["value"]]
@@ -158,8 +172,8 @@ def render_feedback(
         console.print(f"[bold {style}]{GRADE_MARK[grade['value']]}[/]  {explanation}")
         render_citations(console, grade.get("citations", []), grade.get("general_knowledge", False))
     if lesson:
-        console.print(Panel(escape(lesson), title="Let's fix that", border_style="cyan"))
-        render_citations(console, lesson_citations, False)
+        console.print(Panel(escape(lesson["text"]), title="Let's fix that", border_style="cyan"))
+        render_citations(console, lesson["citations"], False)
 
 
 def render_notices(console: Console, notices: Sequence[str]) -> None:
@@ -215,17 +229,13 @@ def render_turn(console: Console, payload: dict[str, Any]) -> None:
         console.print(escape(dispute_line(result)))
         render_citations(console, result.get("citations", []), False)
     else:
-        render_feedback(
-            console, payload["feedback"], payload["lesson"], payload.get("lesson_citations", [])
-        )
+        render_feedback(console, payload["feedback"], payload["lesson"])
     render_notices(console, payload["notices"])
     render_question(console, payload)
 
 
 def render_summary(console: Console, final: dict[str, Any], tz: ZoneInfo) -> None:
-    render_feedback(
-        console, final.get("grade"), final.get("lesson"), final.get("lesson_citations", [])
-    )
+    render_feedback(console, final.get("grade"), final.get("lesson"))
     render_notices(console, final.get("notices", []))
     results = final.get("results", [])
     if not results:
@@ -257,7 +267,7 @@ PRIVACY_LINE = (
 )
 
 
-def _pages_prefix(page_count: int | None) -> str:
+def pages_prefix(page_count: int | None) -> str:
     return "" if page_count is None else f"{page_count} pages · "
 
 
@@ -269,7 +279,7 @@ def notes_report(
     fresh: Sequence[tuple[str, str]],
 ) -> list[str]:
     """What adding one file found, as plain lines (escape them before printing)."""
-    lines = [f"{filename} · {_pages_prefix(page_count)}{chunk_count} passages"]
+    lines = [f"{filename} · {pages_prefix(page_count)}{chunk_count} passages"]
     summary = f"{len(matched) + len(fresh)} concepts in these notes — "
     if matched:
         summary += f"{len(matched)} already here ({', '.join(matched)}), "
@@ -281,6 +291,6 @@ def notes_report(
 def source_lines(documents: Sequence[Document]) -> list[str]:
     """One line per stored file for `ebb status`."""
     return [
-        f"{d.filename} · {_pages_prefix(d.page_count)}{format_megabytes(d.size_bytes)}"
+        f"{d.filename} · {pages_prefix(d.page_count)}{format_megabytes(d.size_bytes)}"
         for d in documents
     ]

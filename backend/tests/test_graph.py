@@ -12,7 +12,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from ebb.citations import MAX_RETRIES
+from ebb.citations import MAX_RETRIES, note_sources, source_from_dict, source_to_dict, verify
 from ebb.citations import to_dict as citation_to_dict
 from ebb.domain import (
     Answer,
@@ -27,8 +27,8 @@ from ebb.domain import (
     Option,
     Question,
 )
-from ebb.graph.build import build_graph
-from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE, WEB_NOTICE
+from ebb.graph.build import build_graph, step_label
+from ebb.graph.nodes import EXHAUSTED_NOTICE, FALLBACK_NOTICE, WEB_NOTICE, source_line
 from ebb.graph.state import (
     concept_to_dict,
     grade_from_dict,
@@ -217,7 +217,7 @@ def test_wrong_answer_is_taught_then_asked_again_at_same_difficulty():
     final, payloads = run(tutor, store, subject_id, lambda p: next(answers))
 
     assert payloads[1]["feedback"]["value"] == "incorrect"
-    assert payloads[1]["lesson"] == "Here is the idea, with an example."
+    assert payloads[1]["lesson"] == {"text": "Here is the idea, with an example.", "citations": []}
     assert payloads[1]["question"]["difficulty"] == payloads[0]["question"]["difficulty"]
     assert final["results"][0]["tally"]["incorrect"] == 1
 
@@ -258,6 +258,7 @@ def test_failed_grading_asks_the_same_question_again():
     assert payloads[1]["feedback"] is None
     assert payloads[2]["feedback"]["value"] == "correct"
     assert len(store.attempts) == 1
+    assert final["current_question_id"] is None  # cleared once the question is answered
 
 
 def test_failed_generation_ends_the_session_with_a_notice():
@@ -281,6 +282,61 @@ def test_failed_teaching_continues_without_a_lesson():
 
     assert payloads[1]["lesson"] is None
     assert EXHAUSTED_NOTICE in payloads[1]["notices"]
+
+
+REFUSED = "The tutor won't help with that topic."
+
+
+def test_refused_generation_ends_the_session_with_the_refusal_notice():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"generate_questions"})
+    subject_id = make_subject(store, USER)
+
+    final, payloads = run(tutor, store, subject_id, always_right)
+
+    assert payloads == []
+    assert final["fatal"] == REFUSED
+    assert final["notices"] == [REFUSED]
+    assert final["results"] == []
+    assert store.questions == {} and store.attempts == {}
+    assert next(iter(store.sessions.values()))["ended_at"] == NOW
+
+
+def test_refused_extension_ends_the_session_with_the_refusal_notice():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"extend_concepts"})
+    subject_id = make_subject(store, USER, concepts=1)
+
+    final, payloads = run(tutor, store, subject_id, always_right)
+
+    assert len(payloads) == 2
+    assert final["fatal"] == REFUSED and REFUSED in final["notices"]
+    assert len(store.list_concepts(USER, subject_id)) == 1
+
+
+def test_refused_grade_keeps_the_question_waiting():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"grade"})
+    subject_id = make_subject(store, USER, concepts=1)
+    answers = iter([reply("right"), {"quit": True}])
+
+    final, payloads = run(tutor, store, subject_id, lambda p: next(answers))
+
+    assert payloads[0]["question"]["type"] == "short"
+    assert payloads[1]["question"]["prompt"] == payloads[0]["question"]["prompt"]
+    assert payloads[1]["feedback"] is None
+    assert payloads[1]["notices"] == [REFUSED]
+    assert store.attempts == {}
+
+
+def test_refused_lesson_is_skipped_with_notice():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"teach"})
+    subject_id = make_subject(store, USER, concepts=1)
+    turns = iter([always_wrong, always_right, lambda p: {"quit": True}])
+
+    final, payloads = run(tutor, store, subject_id, lambda p: next(turns)(p))
+
+    assert payloads[1]["feedback"]["value"] == "incorrect"
+    assert payloads[1]["lesson"] is None
+    assert payloads[1]["notices"] == [REFUSED]
+    assert final["results"][0]["tally"] == {"correct": 1, "partial": 0, "incorrect": 1}
 
 
 def test_backup_model_notice_is_shown_once():
@@ -598,7 +654,7 @@ def test_uncovered_concept_is_general_without_retry():
     assert payloads[0]["question"]["source_line"] is None
     assert payloads[1]["feedback"]["citations"] == []
     assert payloads[1]["feedback"]["general_knowledge"] is True
-    assert payloads[1]["lesson_citations"] == []
+    assert payloads[1]["lesson"]["citations"] == []
 
 
 def test_topic_only_subject_has_no_label():
@@ -613,7 +669,7 @@ def test_topic_only_subject_has_no_label():
     feedback = [p["feedback"] for p in payloads if p["feedback"]]
     assert feedback
     assert all(f["general_knowledge"] is False and f["citations"] == [] for f in feedback)
-    assert all(p["lesson_citations"] == [] for p in payloads)
+    assert all(p["lesson"] is None or p["lesson"]["citations"] == [] for p in payloads)
 
 
 def test_grade_without_citations_uses_the_question_citations():
@@ -680,8 +736,7 @@ def test_lesson_citations_are_in_the_payload():
 
     _, payloads = run(tutor, store, subject_id, quit_after(1, always_wrong))
 
-    assert payloads[1]["lesson"] == "Here is the idea, with an example."
-    [citation] = payloads[1]["lesson_citations"]
+    [citation] = payloads[1]["lesson"]["citations"]
     assert (citation["label"], citation["quote"]) == ("CSE321.pdf · p. 12", OTHER_QUOTE)
     assert payloads[1]["feedback"]["general_knowledge"] is False
 
@@ -696,8 +751,8 @@ def test_lesson_without_valid_citations_shows_none_of_its_own():
     assert tutor.teach_attempts == 1 + MAX_RETRIES
     lesson = Lesson("Here is the idea, with an example.", (Claim("N9", "x"),))
     assert tutor.teach_previous == [None, lesson, lesson]  # each retry sees the last lesson
-    assert payloads[1]["lesson"] == "Here is the idea, with an example."
-    assert payloads[1]["lesson_citations"] == []
+    assert payloads[1]["lesson"]["text"] == "Here is the idea, with an example."
+    assert payloads[1]["lesson"]["citations"] == []
     assert [c["quote"] for c in payloads[1]["feedback"]["citations"]] == [QUOTE]  # the question's
 
 
@@ -804,10 +859,11 @@ def test_milestone_2_checkpoint_still_resumes():
     assert first["question"]["prompt"] == "An old question?"
     assert first["question"]["source_line"] is None
     assert first["feedback"]["citations"] == []
-    assert first["lesson_citations"] == []
+    assert first["lesson"] is None
+    assert "lesson_citations" not in first
     assert second["feedback"]["value"] == "incorrect"
     assert second["feedback"]["general_knowledge"] is False
-    assert second["lesson"] == "Here is the idea, with an example."
+    assert second["lesson"]["text"] == "Here is the idea, with an example."
     assert tutor.sources_calls == [[]]  # the next batch, generated without retrieval
     assert second["question"]["source"] == "general"
 
@@ -904,7 +960,7 @@ def test_web_questions_avoid_and_skip_the_pending_batch():
     assert WEB_PROMPT in tutor.avoid_calls[1]  # still waiting in the batch
     assert all(q.source != "web" for q in store.questions.values())
     assert len(store.questions) == 1 + 4
-    assert final["replacements_needed"] == 0
+    assert final["run"]["replacing"] == 0
 
 
 def test_web_question_with_bad_citations_is_dropped():
@@ -922,8 +978,8 @@ def test_web_question_with_bad_citations_is_dropped():
     assert all(q.prompt != WEB_PROMPT and q.source != "web" for q in store.questions.values())
     assert len(store.questions) == 1 + 4
     assert payloads[0]["question"]["source"] == "general"
-    assert final["generation_mode"] == "notes"
-    assert final["replacements_needed"] == 0
+    assert final["run"]["mode"] == "notes"
+    assert final["run"]["replacing"] == 0
 
 
 def test_no_web_key_drops_repeats_with_one_notice():
@@ -1003,6 +1059,9 @@ def test_web_question_is_graded_with_its_page():
             "label": "example.org · Subnetting basics",
             "page": None,
             "quote": OTHER_PAGE_QUOTE,
+            "name": "example.org",
+            "heading": None,
+            "title": "Subnetting basics",
         }
     ]
     assert feedback["general_knowledge"] is False
@@ -1034,7 +1093,7 @@ def test_failed_web_generation_keeps_the_batch():
     assert final["fatal"] is None
     assert EXHAUSTED_NOTICE not in payloads[0]["notices"]
     assert len(store.questions) == 1 + 4
-    assert final["generation_mode"] == "notes"
+    assert final["run"]["mode"] == "notes"
 
 
 # --- disputes --------------------------------------------------------------------------
@@ -1139,7 +1198,6 @@ def test_ambiguous_dispute_voids_the_answer():
     assert store.concept(concept.id) == concept  # restored to its state before the answer
     [attempt_id] = store.attempts
     assert attempt_id in store.voided
-    assert final["tally"] == {"correct": 0, "partial": 0, "incorrect": 0}
     assert final["results"] == []  # nothing left to summarise
 
 
@@ -1171,7 +1229,7 @@ def test_dispute_reshows_the_same_question():
     assert payloads[3]["question"]["prompt"] != payloads[1]["question"]["prompt"]
     assert payloads[3]["dispute_result"] is None
     assert payloads[3]["can_dispute"] is False  # an MCQ answer
-    assert final["pending_question_id"] is None
+    assert final["current_question_id"] is None
     assert len(store.attempts) == 2
 
 
@@ -1258,6 +1316,20 @@ def test_regrade_unavailable_keeps_the_grade():
     assert final["results"][0]["tally"] == {"correct": 0, "partial": 1, "incorrect": 0}
 
 
+def test_refused_regrade_reports_failed():
+    store, tutor = MemoryStore(), FakeTutor(refuse={"regrade"})
+    subject_id, _ = due_subject(store)
+
+    final, payloads = run(tutor, store, subject_id, script(reply("meh"), dispute()))
+
+    assert len(tutor.regrade_calls) == 1
+    assert payloads[2]["dispute_result"] == {"outcome": "failed"}
+    assert payloads[2]["can_dispute"] is True
+    assert store.disputes == {}
+    [attempt] = store.attempts.values()
+    assert attempt.grade is GradeValue.PARTIAL
+
+
 def test_regrade_checks_the_grades_sources_and_cites_them():
     class CitingTutor(FakeTutor):
         def regrade(
@@ -1273,9 +1345,9 @@ def test_regrade_checks_the_grades_sources_and_cites_them():
         ):
             self.regrade_sources = [s.label for s in sources]
             generated = super().regrade(question, answer, grade, reason, explanation)
-            new, ambiguous = generated.value
-            cited = replace(new, claims=(Claim("N1", OTHER_QUOTE),))
-            return replace(generated, value=(cited, ambiguous))
+            regraded = generated.value
+            cited = replace(regraded.grade, claims=(Claim("N1", OTHER_QUOTE),))
+            return replace(generated, value=replace(regraded, grade=cited))
 
     store = MemoryStore()
     tutor = CitingTutor(cite=[[("N1", QUOTE)]], regrades=[("correct", False)])
@@ -1341,7 +1413,7 @@ def test_resume_while_regrading_resolves_once():
     assert len(store.disputes) == 1
     assert store.concept(concept.id).stage == 3
     state = graph.get_state(config).values
-    assert state["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}
+    assert summary_tally(store, state) == {"correct": 1, "partial": 0, "incorrect": 0}
     assert state["last_graded"]["disputed"] is True
     assert state["dispute"] is None
 
@@ -1359,5 +1431,410 @@ def test_resume_while_regrading_needs_no_model():
     assert len(tutor.regrade_calls) == 1
     assert store.concept(concept.id).stage == 3
     state = graph.get_state(config).values
-    assert state["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}  # corrected once
+    assert summary_tally(store, state) == {"correct": 1, "partial": 0, "incorrect": 0}  # once
     assert state["concept"]["stage"] == 3
+
+
+def summary_tally(store: MemoryStore, state: dict[str, Any]) -> dict[str, int]:
+    """The one concept's tally in the session summary the store gives now."""
+    [row] = store.session_summary(USER, UUID(state["session_id"]), NOW)
+    return {"correct": row.correct, "partial": row.partial, "incorrect": row.incorrect}
+
+
+def step_labels(store: MemoryStore, subject_id: UUID, tutor: FakeTutor) -> list[str]:
+    """The labels streamed from the start of a session to its first question."""
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": str(uuid4())}}
+    start = {"user_id": str(USER), "subject_id": str(subject_id), "thread_id": "t-1"}
+    events = graph.stream(start, config, stream_mode="custom")
+    return [event["label"] for event in events]
+
+
+def test_step_events_name_each_labelled_step_in_order():
+    store = MemoryStore()
+
+    labels = step_labels(store, make_subject(store, USER, concepts=1), FakeTutor())
+
+    assert labels == ["Writing questions…", "Checking citations against your notes…"]
+
+
+def test_step_events_start_with_reading_the_notes_when_there_are_some():
+    store = MemoryStore()
+
+    labels = step_labels(store, notes_subject(store), FakeTutor(cite=[[("N1", QUOTE)]]))
+
+    assert labels == [
+        "Reading your notes…",
+        "Writing questions…",
+        "Checking citations against your notes…",
+    ]
+
+
+def test_a_citation_retry_is_part_of_checking_citations():
+    store = MemoryStore()
+    tutor = FakeTutor(cite=[[("N9", "x")], [("N1", QUOTE)]])
+
+    labels = step_labels(store, notes_subject(store), tutor)
+
+    assert len(tutor.generate_calls) == 2  # the batch, then its rewrite
+    assert labels == [
+        "Reading your notes…",
+        "Writing questions…",
+        "Checking citations against your notes…",
+    ]
+
+
+def test_grade_label_without_notes_is_grading():
+    assert step_label("grade_answer", {"has_notes": False}) == "Grading…"
+    assert step_label("grade_answer", {"has_notes": True}) == "Grading against your notes…"
+
+
+def test_web_mode_and_unlabelled_steps():
+    web_run = {"mode": "web", "candidates": [], "replacing": 1}
+    assert step_label("generate_questions", {"run": web_run}) == "Writing questions from the web…"
+    assert step_label("pick_concept", {}) is None
+
+
+def test_source_line_uses_structured_fields():
+    def line(source: str, **citation: Any) -> str | None:
+        cite = {"kind": "chunk", "ref": "r", "label": "x", "page": None, "quote": "q"}
+        return source_line({"source": source, "citations": [{**cite, **citation}]})
+
+    assert line("notes", page=12, name="a.pdf", heading=None, title=None) == (
+        "From your notes · p. 12"
+    )
+    assert line("notes", name="n.md", heading="Subnet masks", title=None) == (
+        "From your notes · § Subnet masks"
+    )
+    assert line("notes", name="n.txt", heading=None, title=None) == "From your notes"
+    assert line("web", kind="web", name="cloudflare.com", heading=None, title="DNS") == (
+        "From the web · cloudflare.com"
+    )
+
+
+def test_source_line_of_a_verified_milestone3_web_source():
+    old = {
+        "label": "W1",
+        "kind": "web",
+        "ref": "u",
+        "title": "cloudflare.com · What is DNS?",
+        "text": "DNS maps names to addresses.",
+        "heading": None,
+        "page_start": None,
+        "page_offsets": [],
+    }
+    (cite,), _ = verify([Claim("W1", "DNS maps names")], [source_from_dict(old)])
+    assert source_line({"source": "web", "citations": [citation_to_dict(cite)]}) == (
+        "From the web · cloudflare.com"
+    )
+
+
+def test_milestone3_checkpoint_with_label_only_citations_resumes():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=1)
+    session_id = store.create_session(USER, subject_id, "t-m3")
+    concept = store.list_concepts(USER, subject_id)[0]
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": "t-m3"}}
+    # Milestone 3 stored citations with a label and no name, heading or title.
+    cite = {"kind": "chunk", "ref": str(uuid4()), "page": None, "quote": QUOTE}
+    question = {
+        **question_to_dict(
+            Question(uuid4(), concept.id, "short", 1, "Why?", "Because.", (), "notes")
+        ),
+        "citations": [{**cite, "label": "networks.md · § Subnet masks"}],
+    }
+    old_source = {
+        "label": "N1",
+        "kind": "chunk",
+        "ref": cite["ref"],
+        "title": "networks.md",
+        "text": QUOTE,
+        "heading": "Subnet masks",
+        "page_start": None,
+        "page_offsets": [],
+    }
+    state = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-m3",
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(concept.id)],
+        "concept": concept_to_dict(concept),
+        "start": {"stage": concept.stage, "tide": None},
+        "batch": [question],
+        "sources": [old_source],
+        "has_notes": True,
+        "citation_failures": [],
+        "run": {"mode": "notes", "candidates": [], "replacing": 0},
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "tally": {"correct": 0, "partial": 0, "incorrect": 0},
+        "asked_prompts": [],
+        "asked_on_concept": 0,
+        "correct_streak": 0,
+        "generation_calls_on_concept": 0,
+        "difficulty": None,
+        "retry_question": False,
+        "grade": None,
+        "lesson": None,
+    }
+    store.save_questions(USER, session_id, [question_from_dict(question)])
+    graph.update_state(config, state, as_node="verify_citations")
+
+    result = graph.invoke(None, config)
+
+    shown = result["__interrupt__"][0].value["question"]
+    assert shown["source_line"] == "From your notes · § Subnet masks"
+    result = graph.invoke(Command(resume=always_right(result["__interrupt__"][0].value)), config)
+    assert "__interrupt__" in result  # the session goes on
+
+
+def test_milestone2_checkpoint_without_new_keys_resumes():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=1)
+    session_id = store.create_session(USER, subject_id, "t-old")
+    concept = store.list_concepts(USER, subject_id)[0]
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": "t-old"}}
+    # A thread saved by milestone 2 right after retrieve_notes: none of the later keys exist.
+    old = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-old",
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(concept.id)],
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "concept": concept_to_dict(concept),
+        "start": {"stage": concept.stage, "tide": None},
+        "tally": {"correct": 0, "partial": 0, "incorrect": 0},
+        "batch": [],
+        "asked_prompts": [],
+        "asked_on_concept": 0,
+        "correct_streak": 0,
+        "generation_calls_on_concept": 0,
+        "difficulty": None,
+        "retry_question": False,
+        "grade": None,
+        "lesson": None,
+    }
+    graph.update_state(config, old, as_node="retrieve_notes")
+
+    result = graph.invoke(None, config)
+    assert result["__interrupt__"][0].value["concept"] == "Concept 1"
+    result = graph.invoke(Command(resume=always_right(result["__interrupt__"][0].value)), config)
+
+    assert "__interrupt__" in result  # the session goes on to the next question
+    assert len(store.attempts) == 1
+    values = graph.get_state(config).values
+    assert summary_tally(store, values) == {"correct": 1, "partial": 0, "incorrect": 0}
+
+
+# --- one current question id; the lesson as one object ---------------------------------
+
+
+def old_checkpoint_graph():
+    """A milestone 3 checkpoint's state, with two short questions waiting in the batch."""
+    store = MemoryStore()
+    subject_id = make_subject(store, USER, concepts=1)
+    session_id = store.create_session(USER, subject_id, "t-old")
+    concept = store.list_concepts(USER, subject_id)[0]
+    batch = [
+        question_to_dict(Question(uuid4(), concept.id, "short", 1, p, "right", (), "general"))
+        for p in ("First?", "Second?")
+    ]
+    store.save_questions(USER, session_id, [question_from_dict(q) for q in batch])
+    saved = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-old",
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(concept.id)],
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "concept": concept_to_dict(concept),
+        "start": {"stage": concept.stage, "tide": None},
+        "tally": {"correct": 0, "partial": 0, "incorrect": 0},
+        "batch": batch,
+        "asked_prompts": [],
+        "asked_on_concept": 0,
+        "correct_streak": 0,
+        "generation_calls_on_concept": 1,
+        "question": None,
+        "difficulty": None,
+        "retry_question": False,
+        "grade": None,
+        "lesson": None,
+        "lesson_citations": [],
+        "pending_question_id": None,
+    }
+    graph = build_graph(FakeTutor(), store, InMemorySaver(), now=lambda: NOW)
+    return graph, {"configurable": {"thread_id": "t-old"}}, batch, saved
+
+
+def test_old_checkpoint_with_pending_question_id_resumes():
+    graph, config, batch, saved = old_checkpoint_graph()
+    saved["pending_question_id"] = batch[1]["id"]
+    graph.update_state(config, saved, as_node="regrade")
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=reply("right")), config)
+
+    assert shown["question"]["prompt"] == "Second?"  # the interrupted one, not the first
+    assert "__interrupt__" in result  # the session goes on
+    assert graph.get_state(config).values["current_question_id"] is None
+
+
+def test_old_checkpoint_with_tally_start_and_results_resumes_to_a_summary_from_the_store():
+    graph, config, _, saved = old_checkpoint_graph()
+    stale = {  # a concept studied earlier in the session, whose answers the store has lost
+        "concept": "Gone",
+        "concept_id": str(uuid4()),
+        "tally": {"correct": 5, "partial": 0, "incorrect": 0},
+        "stage_before": 0,
+        "stage_after": 1,
+        "tide_before": None,
+        "tide_after": None,
+        "next_review_at": None,
+    }
+    saved |= {"results": [stale], "tally": {"correct": 7, "partial": 0, "incorrect": 0}}
+    graph.update_state(config, saved, as_node="regrade")
+
+    graph.invoke(None, config)
+    result = graph.invoke(Command(resume=reply("right")), config)
+    final = graph.invoke(Command(resume={"quit": True}), config)
+
+    assert "__interrupt__" in result
+    [row] = final["results"]
+    assert row["concept"] == "Concept 1"
+    assert row["tally"] == {"correct": 1, "partial": 0, "incorrect": 0}
+    assert (row["stage_before"], row["stage_after"]) == (0, 1)
+    assert row["tide_before"] is None
+    assert isinstance(row["next_review_at"], str)
+
+
+def test_old_checkpoint_with_retry_question_resumes():
+    graph, config, _, saved = old_checkpoint_graph()
+    saved["retry_question"] = True
+    graph.update_state(config, saved, as_node="grade_answer")
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=reply("right")), config)
+
+    assert shown["question"]["prompt"] == "First?"  # the failed one, at the front
+    assert "__interrupt__" in result
+
+
+def test_old_checkpoint_with_string_lesson_resumes():
+    graph, config, _, saved = old_checkpoint_graph()
+    cite = {"kind": "chunk", "label": "a.md", "quote": "Quote."}
+    saved |= {
+        "grade": {"value": "incorrect", "explanation": "No.", "misconception": None},
+        "lesson": "An old lesson.",
+        "lesson_citations": [cite],
+    }
+    graph.update_state(config, saved, as_node="teach")
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=reply("right")), config)
+
+    assert shown["lesson"] == {"text": "An old lesson.", "citations": [cite]}
+    assert "lesson_citations" not in shown
+    assert "__interrupt__" in result
+
+
+def test_payload_lesson_is_text_and_citations():
+    store = MemoryStore()
+    tutor = FakeTutor(cite=[[("N1", QUOTE)]], teach_cites=[[("N1", OTHER_QUOTE)]])
+    subject_id = notes_subject(store)
+
+    _, payloads = run(tutor, store, subject_id, quit_after(1, always_wrong))
+
+    assert set(payloads[1]["lesson"]) == {"text", "citations"}
+    assert payloads[1]["lesson"]["text"] == "Here is the idea, with an example."
+    assert [c["quote"] for c in payloads[1]["lesson"]["citations"]] == [OTHER_QUOTE]
+    assert "lesson_citations" not in payloads[1]
+    assert payloads[0]["lesson"] is None
+
+
+def test_old_checkpoint_with_generation_mode_resumes():
+    graph, config, _, saved = old_checkpoint_graph()
+    # Saved by milestone 3 while replacements for a repeat were being written from the web.
+    saved |= {"generation_mode": "web", "replacements_needed": 1, "candidates": []}
+    graph.update_state(config, saved, as_node="search_web")
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=reply("right")), config)
+
+    assert shown["question"]["prompt"] == "First?"  # the web run found nothing to add
+    assert "__interrupt__" in result
+    values = graph.get_state(config).values
+    assert values["run"] == {"mode": "notes", "candidates": [], "replacing": 0}
+
+
+def test_old_checkpoint_saved_mid_citation_retry_resumes():
+    store = MemoryStore()
+    tutor = FakeTutor(cite=[[("N1", QUOTE)]])
+    subject_id = notes_subject(store)
+    session_id = store.create_session(USER, subject_id, "t-old")
+    concept = store.list_concepts(USER, subject_id)[0]
+    chunks = store.search_chunks(USER, subject_id, f"{concept.name} {concept.description}")
+    bad = replace(
+        Question(uuid4(), concept.id, "short", 1, "Why?", "Because.", ()),
+        claims=(Claim("N9", "x"),),
+    )
+    graph = build_graph(tutor, store, InMemorySaver(), now=lambda: NOW)
+    config = {"configurable": {"thread_id": "t-old"}}
+    # Saved by milestone 3 after verify_citations sent its first candidates back for a fix.
+    saved = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-old",
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(concept.id)],
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "has_notes": True,
+        "concept": concept_to_dict(concept),
+        "start": {"stage": concept.stage, "tide": None},
+        "tally": {"correct": 0, "partial": 0, "incorrect": 0},
+        "batch": [],
+        "asked_prompts": [],
+        "asked_on_concept": 0,
+        "correct_streak": 0,
+        "generation_calls_on_concept": 1,
+        "sources": [source_to_dict(s) for s in note_sources(chunks)],
+        "earlier_prompts": [],
+        "difficulty": None,
+        "grade": None,
+        "lesson": None,
+        "generation_mode": "notes",
+        "candidates": [question_to_dict(bad)],
+        "replacements_needed": 0,
+        "citation_retries": 1,
+        "citation_failures": ["question 1: N9 is not one of the sources you were given"],
+        "citation_failing": [0],
+    }
+    graph.update_state(config, saved, as_node="verify_citations")
+    assert graph.get_state(config).next == ("generate_questions",)
+
+    shown = graph.invoke(None, config)["__interrupt__"][0].value
+    result = graph.invoke(Command(resume=always_right(shown)), config)
+
+    assert shown["concept"] == concept.name
+    assert shown["question"]["source"] == "notes"  # a fresh batch, cited
+    assert "__interrupt__" in result  # the session goes on
+    assert len(store.attempts) == 1

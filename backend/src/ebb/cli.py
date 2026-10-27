@@ -6,10 +6,10 @@ the commands that use them; `ebb --help` and `ebb status` never load them.
 
 import atexit
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack
-from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
@@ -19,19 +19,36 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from ebb.clock import utc_now
 from ebb.config import ConfigError, Settings, resolve_timezone
-from ebb.db.migrate import migrate, migration_lock
+from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
-from ebb.domain import Concept, NewDocument, ResumableSession, Subject
-from ebb.store import MAX_DOCUMENTS, DocumentRefused, Store, merge_note_concepts
+from ebb.domain import NewDocument, Subject
+from ebb.store import (
+    MAX_DOCUMENTS,
+    DocumentRefused,
+    SubjectExists,
+)
+from ebb.subjects import (
+    NOTES_REFUSED_NOTICE,
+    NotesReport,
+    add_notes,
+    duplicate_copy,
+    ensure_name_free,
+    ensure_room,
+    find_note_concepts,
+    find_subject,
+    room_copy,
+    subject_from_topic,
+    too_many_copy,
+)
 from ebb.ui import (
     DISPUTE_REASONS,
     NOT_DISPUTABLE,
     PRIVACY_LINE,
     caught_up_line,
     format_ago,
-    greeting,
     notes_report,
     read_reply,
     read_yes_no,
@@ -44,9 +61,9 @@ from ebb.ui import (
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
-    from langgraph.graph.state import CompiledStateGraph
 
-    from ebb.llm.tutor import LangChainTutor
+    from ebb.llm.tutor import LangChainTutor, Tutor, TutorUnavailable
+    from ebb.study import Event, Finished, Pending, StudySessions
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -89,6 +106,20 @@ def _tutor(settings: Settings, fallback: bool = True) -> LangChainTutor:
     return _configured(lambda: LangChainTutor.from_settings(settings, fallback))
 
 
+def _capped(tutor: Tutor, settings: Settings, store: PgStore) -> Tutor:
+    """The learner-facing tutor behind the daily cap on AI calls."""
+    from ebb.llm.quota import CappedTutor
+
+    return CappedTutor(
+        tutor,
+        store,
+        settings.ebb_dev_user_id,
+        settings.ebb_daily_ai_calls,
+        _timezone(settings),
+        utc_now,
+    )
+
+
 def _timezone(settings: Settings) -> ZoneInfo:
     return _configured(lambda: resolve_timezone(settings.ebb_timezone))
 
@@ -99,9 +130,8 @@ def _subject(store: PgStore, user_id: UUID, name: str | None) -> Subject:
         _fail('No subjects yet. Create one with: ebb new "Computer Networks"')
     if name is None:
         return subjects[0]
-    for subject in subjects:
-        if subject.name.casefold() == name.strip().casefold():
-            return subject
+    if subject := find_subject(subjects, name):
+        return subject
     _fail(f"No subject called {name!r}. You have: " + ", ".join(s.name for s in subjects))
 
 
@@ -152,10 +182,10 @@ def _ask(payload: dict[str, Any]) -> dict[str, Any]:
         return reply
 
 
-def _exhausted(error: Exception) -> NoReturn:
-    from ebb.graph.nodes import EXHAUSTED_NOTICE
-
-    console.print(f"[red]{escape(EXHAUSTED_NOTICE)}[/red]")
+def _exhausted(error: TutorUnavailable, notice: str | None = None) -> NoReturn:
+    """A tutor call outside the graph failed or was refused: the notice (the error's own
+    unless given), then exit 1."""
+    console.print(f"[red]{escape(notice or error.notice)}[/red]")
     cause = str(error).strip()
     if cause:
         console.print(f"[dim]{escape(cause.splitlines()[0])}[/dim]")
@@ -179,33 +209,30 @@ def _prepare(path: Path) -> NewDocument:
         _fail(message)
 
 
-def _find_concepts(
-    tutor: LangChainTutor,
-    subject: str,
-    known: list[tuple[str, str]],
-    document: NewDocument,
-) -> tuple[list[str], list[tuple[str, str]]]:
-    """Ask for the concepts in one file; returns (matched names, new (name, description))."""
-    from ebb.chunking import digest
-    from ebb.llm.tutor import AllProvidersExhausted
+def _ai[T](doing: str, call: Callable[[], T], refused: str | None = None) -> T:
+    """`call()` behind a spinner; a tutor failure or a missing key exits with its message
+    (`refused` replaces the notice of a refusal)."""
+    from ebb.llm.tutor import TutorRefused, TutorUnavailable
 
-    # Placeholders: the prompt only uses names and descriptions, so these ids are never stored.
-    placeholder = uuid4()
-    existing = [Concept(uuid4(), placeholder, name, text) for name, text in known]
-    with console.status("Finding the concepts in your notes…"):
+    with console.status(doing):
         try:
-            generated = tutor.concepts_from_notes(subject, existing, digest(document.chunks))
-        except AllProvidersExhausted as error:
+            return call()
+        except TutorRefused as error:
+            _exhausted(error, refused)
+        except TutorUnavailable as error:
             _exhausted(error)
         except ConfigError as error:
             _fail(str(error), code=2)
-    found = [(c.name, c.description, c.same_as) for c in generated.value]
-    return merge_note_concepts([name for name, _ in known], found)
 
 
-def _print_report(document: NewDocument, matched: list[str], fresh: list[tuple[str, str]]) -> None:
+def _finding_concepts[T](call: Callable[[], T]) -> T:
+    """`call()` while Ebb finds the concepts in a notes file; a refusal says so."""
+    return _ai("Finding the concepts in your notes…", call, NOTES_REFUSED_NOTICE)
+
+
+def _print_report(document: NewDocument, report: NotesReport) -> None:
     pages, chunks = document.page_count, len(document.chunks)
-    for line in notes_report(document.filename, pages, chunks, matched, fresh):
+    for line in notes_report(document.filename, pages, chunks, report.matched, report.fresh):
         console.print(escape(line))
 
 
@@ -218,29 +245,25 @@ def new(
     ] = None,
 ) -> None:
     """Create a subject from a topic, or from your notes: Ebb lists its core concepts."""
-    from ebb.llm.tutor import AllProvidersExhausted
-
     topic = topic.strip()
     if not topic:
         _fail('Give a topic, e.g. ebb new "Computer Networks"')
     settings, store = _open_store()
     user_id = settings.ebb_dev_user_id
-    for existing in store.list_subjects(user_id):
-        if existing.name.casefold() == topic.casefold():
-            _fail(f"{existing.name} already exists — add notes to it with: ebb add <file>")
+    try:
+        ensure_name_free(store, user_id, topic)
+    except SubjectExists as error:
+        _fail(_exists_copy(error.name))
     if notes:
         _new_from_notes(settings, store, topic, notes)
         return
-    tutor = _tutor(settings)
-    with console.status("Mapping the topic…"):
-        try:
-            generated = tutor.extract_concepts(topic)
-        except AllProvidersExhausted as error:
-            _exhausted(error)
-        except ConfigError as error:
-            _fail(str(error), code=2)
-    concepts = [(c.name, c.description) for c in generated.value]
-    store.create_subject(user_id, topic, concepts)
+    tutor = _capped(_tutor(settings), settings, store)
+    try:
+        _, concepts = _ai(
+            "Mapping the topic…", lambda: subject_from_topic(tutor, store, user_id, topic)
+        )
+    except SubjectExists:  # another terminal got there first
+        _fail(_exists_copy(topic))
     console.print(f"[bold]{escape(topic)}[/bold] · {len(concepts)} concepts")
     for number, (name, description) in enumerate(concepts, start=1):
         console.print(f"  {number}. [bold]{escape(name)}[/bold] [dim]— {escape(description)}[/dim]")
@@ -250,34 +273,33 @@ def new(
 def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[Path]) -> None:
     """All or nothing: every file is checked, then every concept call made, before any save."""
     if len(paths) > MAX_DOCUMENTS:
-        _fail(f"{topic} can have at most {MAX_DOCUMENTS} files.")
+        _fail(too_many_copy(topic))
     documents: list[NewDocument] = []
     for path in paths:
         document = _prepare(path)
         if any(d.sha256 == document.sha256 for d in documents):
-            _fail(f"{document.filename} is already in {topic}.")
+            _fail(duplicate_copy(topic, document.filename))
         documents.append(document)
-    tutor = _tutor(settings)
+    tutor = _capped(_tutor(settings), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
     known: list[tuple[str, str]] = []
-    reports: list[tuple[NewDocument, list[str], list[tuple[str, str]]]] = []
+    reports: list[tuple[NewDocument, NotesReport]] = []
     for document in documents:
-        matched, fresh = _find_concepts(tutor, topic, known, document)
-        known += fresh
-        reports.append((document, matched, fresh))
-    store.create_subject_with_notes(settings.ebb_dev_user_id, topic, documents, known)
+        report = _finding_concepts(partial(find_note_concepts, tutor, topic, known, document))
+        known += report.fresh
+        reports.append((document, report))
+    try:
+        store.create_subject_with_notes(settings.ebb_dev_user_id, topic, documents, known)
+    except SubjectExists:  # another terminal got there first
+        _fail(_exists_copy(topic))
     console.print(f"[bold]{escape(topic)}[/bold]")
-    for document, matched, fresh in reports:
-        _print_report(document, matched, fresh)
+    for document, report in reports:
+        _print_report(document, report)
     console.print("\nStart with: [bold]ebb study[/bold]")
 
 
-def _full_copy(subject: Subject) -> str:
-    return f"{subject.name} already has {MAX_DOCUMENTS} of {MAX_DOCUMENTS} files."
-
-
-def _duplicate_copy(subject: Subject, document: NewDocument) -> str:
-    return f"{document.filename} is already in {subject.name}."
+def _exists_copy(name: str) -> str:
+    return f"{name} already exists — add notes to it with: ebb add <file>"
 
 
 @app.command()
@@ -290,29 +312,23 @@ def add(
     user_id = settings.ebb_dev_user_id
     chosen = _subject(store, user_id, subject)
     document = _prepare(path)
-    if store.count_documents(user_id, chosen.id) >= MAX_DOCUMENTS:
-        _fail(_full_copy(chosen))
-    if store.has_document(user_id, chosen.id, document.sha256):
-        _fail(_duplicate_copy(chosen, document))
-    tutor = _tutor(settings)
-    console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
-    known = [(c.name, c.description) for c in store.list_concepts(user_id, chosen.id)]
-    matched, fresh = _find_concepts(tutor, chosen.name, known, document)
     try:
-        store.add_document(user_id, chosen.id, document, fresh)
+        ensure_room(store, user_id, chosen, document)
+    except DocumentRefused as error:
+        _fail(room_copy(error, chosen.name, document.filename))
+    tutor = _capped(_tutor(settings), settings, store)
+    console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
+    try:
+        report = _finding_concepts(lambda: add_notes(tutor, store, user_id, chosen, document))
     except DocumentRefused as error:  # another terminal got there first
-        _fail(_full_copy(chosen) if error.reason == "full" else _duplicate_copy(chosen, document))
-    _print_report(document, matched, fresh)
+        _fail(room_copy(error, chosen.name, document.filename))
+    _print_report(document, report)
 
 
 def _checkpointer(store: PgStore) -> BaseCheckpointSaver:
-    from langgraph.checkpoint.postgres import PostgresSaver
+    from ebb.db.saver import postgres_saver
 
-    saver = PostgresSaver(store.pool)
-    # setup() creates or upgrades its own tables; two first runs at once must not race.
-    with migration_lock(store.pool):
-        saver.setup()
-    return saver
+    return postgres_saver(store)
 
 
 def _confirm(question: str) -> bool | None:
@@ -328,59 +344,43 @@ def _confirm(question: str) -> bool | None:
             return answer
 
 
-def _config(thread_id: str) -> dict[str, Any]:
-    return {"configurable": {"thread_id": thread_id}}
+def _resumed(
+    sessions: StudySessions, user_id: UUID, subject: Subject, driver: str, held: ExitStack
+) -> str | None:
+    """The thread of the subject's open session if the learner resumes it, else None (start
+    fresh). A resumed session stays held in `held` until the command exits."""
+    from ebb.study import BUSY
 
-
-def _pending(result: dict[str, Any]) -> dict[str, Any] | None:
-    return result["__interrupt__"][0].value if "__interrupt__" in result else None
-
-
-@dataclass(frozen=True)
-class _Resume:
-    thread_id: str
-    payload: dict[str, Any] | None  # the pending question, or None to finish the cut-off step
-
-
-def _offer_resume(
-    store: Store,
-    graph: CompiledStateGraph,
-    user_id: UUID,
-    found: ResumableSession,
-    held: ExitStack,
-    now: datetime,
-) -> _Resume | None:
-    """How to carry on with `found` if the learner resumes it, else None (start fresh).
-
-    On resume the session's lock moves into `held`, so it lasts until the command exits.
-    """
-    with ExitStack() as trying:
-        if not trying.enter_context(store.session_lock(user_id, found.thread_id)):
-            console.print("That session is open in another terminal.")
-            return None
-        saved = graph.get_state(_config(found.thread_id))
-        payload = saved.interrupts[0].value if saved.interrupts else None
-        if payload is not None:
-            stopped_on = payload
-        elif saved.next and saved.values.get("concept"):
-            # Stopped mid-step, e.g. while grading: the answer is in the state but its
-            # step never finished. The stored attempt_id makes re-running it count once.
-            stopped_on = {
-                "concept": saved.values["concept"]["name"],
-                "number": saved.values["asked_on_concept"] + 1,
-            }
-        else:
-            stopped_on = None  # nothing to carry on with; recorded answers stay
-        if stopped_on is not None:
-            ago = format_ago(now - found.last_active_at)
-            answer = _confirm(resume_question(stopped_on, ago))
-            if answer is None:
-                raise typer.Exit(0)  # leaves the session as it was, still resumable
-            if answer:
-                held.enter_context(trying.pop_all())
-                return _Resume(found.thread_id, payload)
-        store.end_session(user_id, found.session_id, now)
+    offer = sessions.offer(user_id, subject.id, driver)
+    if offer is None:
         return None
+    if offer.busy:
+        console.print(escape(BUSY))
+        return None
+    stopped_on = {"concept": offer.concept, "number": offer.number}
+    ago = format_ago(sessions.now() - offer.last_active_at)
+    answer = _confirm(resume_question(stopped_on, ago))
+    if answer is None:
+        raise typer.Exit(0)  # leaves the session as it was, still resumable
+    if not answer:
+        sessions.discard(user_id, offer.thread_id, driver)
+        return None
+    if not held.enter_context(sessions.hold(user_id, offer.thread_id)):
+        console.print(escape(BUSY))  # taken while the learner was deciding
+        return None
+    return offer.thread_id
+
+
+def _until_turn(events: Iterator[Event], doing: str) -> Pending | Finished:
+    """Show each step of a graph run until it stops at a question or the summary."""
+    from ebb.study import Step
+
+    with console.status(doing) as status:
+        for event in events:
+            if not isinstance(event, Step):
+                return event
+            status.update(escape(event.label))
+    raise RuntimeError("the session stopped without a question or a summary")
 
 
 @app.command()
@@ -388,73 +388,50 @@ def study(
     subject: Annotated[str | None, typer.Argument(help="Subject name (default: newest).")] = None,
 ) -> None:
     """Run a quiz session."""
-    from langgraph.types import Command
-
     from ebb.graph.build import build_graph
+    from ebb.study import Finished, StudySessions
     from ebb.web import web_search
 
     settings, store = _open_store()
     user_id = settings.ebb_dev_user_id
     tz = _timezone(settings)
-    tutor = _tutor(settings)
+    tutor = _capped(_tutor(settings), settings, store)
 
     store.set_timezone(user_id, tz.key)
-    now = datetime.now(UTC)
-    store.close_stale_sessions(user_id, now)
     saver = _checkpointer(store)
-    # Learning state lives in Ebb's own tables; old checkpoints are only resume data.
-    old_threads = store.threads_to_prune(user_id, now)
-    for old_thread in old_threads:
-        saver.delete_thread(old_thread)
-    if old_threads:
-        store.mark_pruned(user_id, old_threads, now)
+    graph = build_graph(tutor, store, saver, web=web_search(settings))
+    sessions = StudySessions(store, graph, saver, utc_now)
+    sessions.housekeeping(user_id)
 
     chosen = _subject(store, user_id, subject)
-    graph = build_graph(tutor, store, saver, web=web_search(settings))
+    driver = f"cli:{uuid4()}"
     with ExitStack() as held:
-        found = store.resumable_session(user_id, chosen.id, now)
-        resume = None if found is None else _offer_resume(store, graph, user_id, found, held, now)
-        if resume is not None:
-            config = _config(resume.thread_id)
-            payload = resume.payload
+        thread_id = _resumed(sessions, user_id, chosen, driver, held)
+        if thread_id is not None:
+            events = sessions.resume(user_id, thread_id, driver)
+            doing = "Thinking…"  # finishing a cut-off step, if there is one
         else:
-            thread_id = str(uuid4())
-            config = _config(thread_id)
-            held.enter_context(store.session_lock(user_id, thread_id))  # a new id: always ours
-            due = store.count_due(user_id, chosen.id, now)
-            console.print(escape(greeting(due, store.count_new(user_id, chosen.id))))
-            payload = None
+            thread_id, text, events = sessions.start(user_id, chosen.id, driver)
+            held.enter_context(sessions.hold(user_id, thread_id))  # a new id: always ours
+            console.print(escape(text))
+            doing = "Preparing questions…"
         console.print(
             f"Studying [bold]{escape(chosen.name)}[/bold]. Type q at any question to stop.\n"
         )
         try:
-            if resume is not None and payload is None:
-                with console.status("Thinking…"):
-                    result = graph.invoke(None, config)  # finish the step that was cut off
-                payload = _pending(result)
-            elif resume is None:
-                start = {
-                    "user_id": str(user_id),
-                    "subject_id": str(chosen.id),
-                    "thread_id": thread_id,
-                }
-                with console.status("Preparing questions…"):
-                    result = graph.invoke(start, config)
-                payload = _pending(result)
-            while payload is not None:
-                render_turn(console, payload)
-                reply = _ask(payload)
-                with console.status("Re-checking…" if "dispute" in reply else "Thinking…"):
-                    result = graph.invoke(Command(resume=reply), config)
-                payload = _pending(result)
+            turn = _until_turn(events, doing)
+            while not isinstance(turn, Finished):
+                render_turn(console, turn.payload)
+                reply = _ask(turn.payload)
+                events = sessions.reply(user_id, thread_id, driver, reply)
+                turn = _until_turn(events, "Re-checking…" if "dispute" in reply else "Thinking…")
         except ConfigError as error:
             _fail(str(error), code=2)
         except KeyboardInterrupt:
             _fail("Stopped. Every answer you finished is saved.", code=130)
-        render_summary(console, result, tz)
-        if result.get("caught_up"):
-            soonest = store.next_review_at(user_id, chosen.id)
-            console.print(escape(caught_up_line(soonest, tz)))
+        render_summary(console, {**turn.final, "results": turn.results}, tz)
+        if turn.caught_up:
+            console.print(escape(caught_up_line(turn.next_review_at, tz)))
 
 
 @app.command()
@@ -467,7 +444,7 @@ def status(
     chosen = _subject(store, settings.ebb_dev_user_id, subject)
     concepts = store.list_concepts(settings.ebb_dev_user_id, chosen.id)
     console.print(f"[bold]{escape(chosen.name)}[/bold]")
-    console.print(status_table(concepts, datetime.now(UTC), tz))
+    console.print(status_table(concepts, utc_now(), tz))
     documents = store.list_documents(settings.ebb_dev_user_id, chosen.id)
     console.print("\n[bold]Sources[/bold]")
     if documents:
@@ -567,3 +544,14 @@ def eval_run(
     path.write_text(text, encoding="utf-8")
     console.print(escape(agreement_line(result)))
     console.print(f"Report: {escape(str(path))}")
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option(help="Address to listen on.")] = "0.0.0.0",  # noqa: S104
+    port: Annotated[int, typer.Option(help="Port to listen on.")] = 8000,
+) -> None:
+    """Run the web API."""
+    import uvicorn
+
+    uvicorn.run("ebb.api.app:app_from_env", factory=True, host=host, port=port)

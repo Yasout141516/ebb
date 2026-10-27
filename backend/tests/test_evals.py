@@ -85,6 +85,17 @@ def test_failed_writer_case_is_skipped():
     assert [c.label for c in cases] == [CORRECT, INCORRECT, CORRECT]
 
 
+def test_refused_writer_case_is_skipped():
+    writer = FakeTutor(refuse={"write_eval_case"})
+    pauses: list[float] = []
+
+    cases = build_cases(writer, EVAL_TOPICS[:3], NOTES, grounded=0, sleep=pauses.append)
+
+    assert cases == []
+    assert len(writer.eval_calls) == 3  # one call each, never retried
+    assert pauses == [PACE_SECONDS] * 3
+
+
 def test_cases_round_trip_jsonl(tmp_path):
     cases = build_cases(FakeTutor(), EVAL_TOPICS[:3], NOTES, grounded=2, sleep=_no_sleep)
     path = tmp_path / "out" / "grading.jsonl"
@@ -172,6 +183,17 @@ def test_run_gives_up_on_a_case_after_the_last_wait():
 
     assert grades == [None]
     assert pauses == [*RETRY_WAITS, PACE_SECONDS]
+
+
+def test_run_skips_a_refused_case_without_waiting():
+    grader = FakeTutor(refuse={"grade"})
+    pauses: list[float] = []
+
+    grades = run_cases(grader, [_case(CORRECT, 1), _case(CORRECT, 2)], sleep=pauses.append)
+
+    assert grades == [None, None]
+    assert len(grader.grade_previous) == 2  # one call per case
+    assert pauses == [PACE_SECONDS, PACE_SECONDS]
 
 
 def test_run_stops_on_a_config_error():

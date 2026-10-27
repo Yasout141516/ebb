@@ -1,0 +1,174 @@
+/* tpl-Workspace's LEFT column (subjects + sources); at 375 px, tpl-WorkspaceMobile's header bar. */
+.left {
+  flex: 1 1 248px;
+  max-width: 100%;
+  padding: 24px 20px;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.heading {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.subject {
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  text-decoration: none;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.subject:hover {
+  color: var(--ink);
+}
+
+.current {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.gauge {
+  width: 14px;
+  height: 32px;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 4px;
+}
+
+.subjectText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.subjectName {
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.subjectMeta {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+.add {
+  height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink-2);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.plus {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* The 375 px bar: only on small screens. */
+.bar {
+  display: none;
+}
+
+.scrim {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .bar {
+    height: 56px;
+    flex: none;
+    padding: 0 8px 0 12px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .menu {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    border: 0;
+    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  .icon {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  .barText {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .barName {
+    font-family: var(--serif);
+    font-size: 18px;
+    font-weight: 500;
+    line-height: 1.2;
+  }
+
+  .barMeta {
+    font-size: 12px;
+    color: var(--ink-3);
+  }
+
+  /* The column becomes a drawer over the thread, opened from the bar. */
+  .left {
+    display: none;
+  }
+
+  .left.open {
+    display: flex;
+    position: fixed;
+    z-index: 20;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(320px, 85vw);
+    overflow-y: auto;
+    background: var(--bg);
+    box-shadow: var(--shadow);
+  }
+
+  .scrim {
+    display: block;
+    position: fixed;
+    z-index: 19;
+    inset: 0;
+    background: rgba(11, 20, 34, 0.45);
+  }
+}

@@ -4,7 +4,7 @@ import zlib
 import pytest
 
 from ebb import notes
-from ebb.notes import MAX_BYTES, NotesError, prepare, read_notes
+from ebb.notes import MAX_BYTES, NotesError, prepare, prepare_bytes, read_notes
 from tests.pdfs import build_pdf, slide_page, text_page
 
 LONG = "Subnetting splits a network into smaller networks. " * 3
@@ -194,3 +194,23 @@ def test_prepare_text_file_has_no_page_count(tmp_path):
     path.write_text("some notes", encoding="utf-8")
     doc = prepare(path)
     assert doc.page_count is None and len(doc.chunks) == 1
+
+
+def test_prepare_bytes_matches_prepare_path(tmp_path):
+    path = build_pdf(tmp_path / "wk1.pdf", [text_page(LONG), text_page(LONG + " More.")])
+    assert prepare_bytes("wk1.pdf", path.read_bytes()) == prepare(path)
+
+
+def test_prepare_bytes_refuses_21_mb():
+    with pytest.raises(NotesError) as err:
+        prepare_bytes("big.txt", b"a" * (21 * 1024 * 1024))
+    assert str(err.value) == (
+        "big.txt is 21.0 MB — over the 20 MB limit. "
+        "Split it into chapters, or upload just the pages you're studying."
+    )
+
+
+def test_prepare_bytes_names_the_file_when_a_pdf_is_damaged():
+    with pytest.raises(NotesError) as err:
+        prepare_bytes("broken.pdf", b"this is not a pdf")
+    assert str(err.value) == "Can't open broken.pdf."
