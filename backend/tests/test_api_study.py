@@ -14,14 +14,17 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import psycopg
+import pytest
 from fastapi.sse import format_sse_event
 from langgraph.checkpoint.memory import InMemorySaver
 
 from ebb.api.app import create_app
+from ebb.api.drafts import SOMETHING_WRONG
 from ebb.api.services import NoTutor, Services
 from ebb.api.sse import event_stream
 from ebb.db.pool import DATABASE_DOWN
 from ebb.graph.build import build_graph
+from ebb.graph.nodes import FALLBACK_NOTICE
 from ebb.llm.quota import CappedTutor, UserQuotaExceeded
 from ebb.llm.tutor import EXHAUSTED_NOTICE, AllProvidersExhausted, Tutor
 from ebb.study import BUSY, Step, StudySessions
@@ -424,11 +427,19 @@ def test_malformed_dispute_id_is_422():
     assert services.store.disputes == {}
 
 
-def test_the_website_knows_the_exhausted_notice_by_this_text():
-    # The website turns this notice into an error card with Retry: its copy must match.
+@pytest.mark.parametrize(
+    ("name", "backend"),
+    [
+        ("EXHAUSTED_NOTICE", EXHAUSTED_NOTICE),  # an error card with Retry
+        ("FALLBACK_NOTICE", FALLBACK_NOTICE),  # the backup-model badge
+        ("SOMETHING_WRONG", SOMETHING_WRONG),
+    ],
+)
+def test_the_website_knows_the_notices_by_this_text(name, backend):
+    # The website recognises these notices or shows them itself: its copy must match.
     notices = Path(__file__).parents[2] / "frontend" / "lib" / "notices.ts"
-    [text] = re.findall(r'export const EXHAUSTED_NOTICE =\s*"([^"]*)";', notices.read_text("utf-8"))
-    assert text == EXHAUSTED_NOTICE
+    [text] = re.findall(rf'export const {name} =\s*"([^"]*)";', notices.read_text("utf-8"))
+    assert text == backend
 
 
 def test_the_daily_cap_reaches_the_stream_as_notices():

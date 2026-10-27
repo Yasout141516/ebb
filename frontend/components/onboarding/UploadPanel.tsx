@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
 import { ApiError, del, postJson, uploadFile } from "@/lib/api";
 import { MAX_FILES, uploadRefusal } from "@/lib/notes";
+import { SOMETHING_WRONG } from "@/lib/notices";
 import { CUT_OFF } from "@/lib/sse";
 import type {
   CommittedDraft,
@@ -27,8 +28,6 @@ type Props =
   | { mode: "add"; subject: SubjectSummary; sources: Source[] };
 
 type Row = { key: number; file: File; state: RowState };
-
-const SOMETHING_WRONG = "Something went wrong — try again.";
 
 const existsCopy = (name: string) =>
   `${name} already exists — add notes to it from its Sources list.`;

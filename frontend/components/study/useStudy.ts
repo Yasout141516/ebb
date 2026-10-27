@@ -3,6 +3,7 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { ApiError, getJson, postJson, postOnLeave } from "@/lib/api";
 import { clockTime } from "@/lib/format";
+import { FALLBACK_NOTICE, SOMETHING_WRONG } from "@/lib/notices";
 import {
   activeThread,
   answered,
@@ -23,8 +24,6 @@ import {
 import { streamPost, type SseEvent } from "@/lib/sse";
 import type { DisputeReason, Finished, Offer, SessionOffer, Started, StreamError, TurnPayload } from "@/lib/types";
 
-const FALLBACK = "Switched to a backup model while the main one is busy.";
-const SOMETHING_WRONG = "Something went wrong — try again.";
 const UNREACHABLE = "Can't reach the API.";
 /** How often an open session renews this tab's lease on it. */
 const HEARTBEAT_MS = 30_000;
@@ -399,7 +398,7 @@ export default function useStudy(subjectId: string): Study {
     error,
     fatal,
     running,
-    backup: cards.some((c) => c.kind === "notice" && c.text.startsWith(FALLBACK)),
+    backup: cards.some((c) => c.kind === "notice" && c.text.startsWith(FALLBACK_NOTICE)),
     waiting,
     open: sessionOpen,
     updates,
