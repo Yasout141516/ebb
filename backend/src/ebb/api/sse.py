@@ -22,8 +22,10 @@ async def _pull(events: Iterator[Any], encode: Callable[[Any], bytes]) -> AsyncI
 
 
 class _EventStream(EventSourceResponse):
-    def __init__(self, events: Iterator[Any], encode: Callable[[Any], bytes]) -> None:
-        self._events = events
+    def __init__(
+        self, events: Iterator[Any], encode: Callable[[Any], bytes], source: Iterator[Any] | None
+    ) -> None:
+        self._events, self._source = events, source
         self._chunks = _pull(events, encode)
         super().__init__(self._chunks, headers={"Cache-Control": "no-cache"})
 
@@ -36,10 +38,19 @@ class _EventStream(EventSourceResponse):
             # may block; left to garbage collection, it would run on the event loop.
             with anyio.CancelScope(shield=True):
                 await self._chunks.aclose()
-                await run_in_threadpool(close, self._events)
+                await run_in_threadpool(self._close)
+
+    def _close(self) -> None:
+        close(self._events)
+        if self._source is not None:
+            close(self._source)
 
 
-def event_stream[T](events: Iterator[T], encode: Callable[[T], bytes]) -> EventSourceResponse:
+def event_stream[T](
+    events: Iterator[T], encode: Callable[[T], bytes], source: Iterator[Any] | None = None
+) -> EventSourceResponse:
     """Each event, encoded. A reader that goes away stops the pulling, and `events` is
-    closed, if it can be, once the response is over."""
-    return _EventStream(events, encode)
+    closed, if it can be, once the response is over; so is `source`, an iterator `events`
+    reads from: if the response never starts, `events` was never advanced, and closing it
+    alone would leave `source` open."""
+    return _EventStream(events, encode, source)

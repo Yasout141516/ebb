@@ -1,6 +1,6 @@
 // Mirrors backend/src/ebb/api/schemas.py and the routes. Datetimes arrive as ISO strings.
 
-export type Health = { database: string; tutor: string };
+export type Health = { database: string; tutor: string; timezone: string };
 
 export type SubjectSummary = {
   id: string;

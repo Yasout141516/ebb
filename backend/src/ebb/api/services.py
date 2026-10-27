@@ -26,7 +26,8 @@ from ebb.web import WebSearch
 class Services:
     """One instance serves every request. `sessions` is shared by many drivers, so
     the API never calls its `hold`. `tutor` is None when it could not be configured;
-    `config_error` then says why."""
+    `config_error` then says why. `timezone_error` says why EBB_TIMEZONE was not used
+    (`tz` is then UTC)."""
 
     settings: Settings
     store: Store
@@ -38,6 +39,7 @@ class Services:
     user_id: UUID
     tz: ZoneInfo
     now: Callable[[], datetime]
+    timezone_error: str | None = None
 
     def require_tutor(self) -> Tutor:
         """The tutor; raises ConfigError, saying why, when it isn't configured."""
@@ -90,7 +92,11 @@ def build_services(settings: Settings) -> Services:
     store = PgStore(pool)
     user_id = settings.ebb_dev_user_id
     store.ensure_profile(user_id)
-    tz = resolve_timezone(settings.ebb_timezone)
+    timezone_error: str | None = None
+    try:
+        tz = resolve_timezone(settings.ebb_timezone)
+    except ConfigError as error:  # shown on /health; the API still starts
+        tz, timezone_error = ZoneInfo("UTC"), str(error)
     store.set_timezone(user_id, tz.key)
 
     tutor: Tutor | None
@@ -121,5 +127,6 @@ def build_services(settings: Settings) -> Services:
         user_id=user_id,
         tz=tz,
         now=_utc_now,
+        timezone_error=timezone_error,
     )
     return services

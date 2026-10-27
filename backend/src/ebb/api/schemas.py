@@ -12,6 +12,7 @@ from ebb.domain import DisputeReason
 class Health(BaseModel):
     database: str
     tutor: str
+    timezone: str
 
 
 class SubjectSummary(BaseModel):

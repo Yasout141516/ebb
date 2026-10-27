@@ -128,7 +128,7 @@ def _respond(services: Services, events: Iterator[Event], *before: Sse) -> Event
         raise
     except Exception as error:
         return event_stream(iter([*before, _failure(error)]), _encode)
-    return event_stream(_items(services, before, first, events), _encode)
+    return event_stream(_items(services, before, first, events), _encode, source=events)
 
 
 def _items(

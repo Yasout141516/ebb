@@ -1,35 +1,72 @@
+import os
+from zoneinfo import ZoneInfo
+
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from ebb.api.app import create_app
-from ebb.config import ConfigError
+from ebb.api.services import build_services
+from ebb.config import ConfigError, Settings
 from ebb.db.pool import DATABASE_DOWN
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.store import SubjectExists
 from ebb.study import BUSY, SessionBusy
 from tests.api_support import client, make_services
+from tests.conftest import DEFAULT_TEST_URL
 
 
 def test_health_ok():
     response = client(make_services()).get("/health")
     assert response.status_code == 200
-    assert response.json() == {"database": "ok", "tutor": "ok"}
+    assert response.json() == {"database": "ok", "tutor": "ok", "timezone": "ok"}
 
 
 def test_health_reports_missing_groq_key():
     text = "GROQ_API_KEY is not set (get one free at console.groq.com)"
     response = client(make_services(tutor=None, config_error=text)).get("/health")
-    assert response.json() == {"database": "ok", "tutor": text}
+    assert response.json() == {"database": "ok", "tutor": text, "timezone": "ok"}
+
+
+def test_a_bad_time_zone_falls_back_to_utc_and_shows_on_health(pg_pool):
+    settings = Settings(
+        _env_file=None,
+        database_url=os.environ.get("TEST_DATABASE_URL", DEFAULT_TEST_URL),
+        ebb_timezone="Mars/Olympus_Mons",
+        groq_api_key=None,
+        tavily_api_key=None,
+    )
+
+    services = build_services(settings)  # no crash at startup
+    try:
+        health = client(services).get("/health").json()
+    finally:
+        services.store.pool.close()
+
+    assert services.tz == ZoneInfo("UTC")
+    assert health["timezone"] == "EBB_TIMEZONE 'Mars/Olympus_Mons' is not a known time zone"
 
 
 def test_cors_allows_the_web_origin_only():
     web = client(make_services())
-    allowed = web.get("/health", headers={"Origin": "http://localhost:3000"})
-    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    for origin in ("http://localhost:3000", "http://127.0.0.1:3000"):  # the same website
+        allowed = web.get("/health", headers={"Origin": origin})
+        assert allowed.headers["access-control-allow-origin"] == origin
     other = web.get("/health", headers={"Origin": "http://evil.example"})
     assert "access-control-allow-origin" not in other.headers
+
+
+def test_cors_takes_a_list_of_web_origins():
+    services = make_services()
+    services.settings.ebb_web_origin = " http://pc.lan:3000 , http://localhost:3100"
+    web = client(services)
+
+    for origin in ("http://pc.lan:3000", "http://localhost:3100"):
+        allowed = web.get("/health", headers={"Origin": origin})
+        assert allowed.headers["access-control-allow-origin"] == origin
+    default = web.get("/health", headers={"Origin": "http://localhost:3000"})
+    assert "access-control-allow-origin" not in default.headers
 
 
 def test_health_reports_a_database_that_is_down(monkeypatch):

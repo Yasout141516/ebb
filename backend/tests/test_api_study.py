@@ -1,6 +1,7 @@
 """Study sessions over HTTP: each run's steps, then the turn or the summary, arrive as SSE."""
 
 import asyncio
+import contextlib
 import json
 import threading
 from collections.abc import Iterator
@@ -139,6 +140,28 @@ def test_double_reply_counts_once_and_returns_the_same_turn():
     assert len(services.store.attempts) == 1
 
 
+def _post_scope(path: str, data: bytes, spec_version: str = "2.3") -> dict[str, Any]:
+    """An ASGI scope for POSTing `data` (JSON) to `path`; uvicorn says spec 2.3."""
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": spec_version},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(data)).encode()),
+        ],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+    }
+
+
 def _post_and_leave(app, path: str, body: dict[str, Any]) -> list[Sse]:
     """POST `body` straight to the ASGI app and go away once the first `step` arrives, as a
     closed tab does; returns what was sent before that."""
@@ -162,29 +185,29 @@ def _post_and_leave(app, path: str, body: dict[str, Any]) -> list[Sse]:
             if b"event: step" in message.get("body", b""):
                 stepped.set()
 
-        scope = {
-            "type": "http",
-            "asgi": {"version": "3.0", "spec_version": "2.3"},  # as uvicorn says
-            "http_version": "1.1",
-            "method": "POST",
-            "scheme": "http",
-            "path": path,
-            "raw_path": path.encode(),
-            "root_path": "",
-            "query_string": b"",
-            "headers": [
-                (b"host", b"testserver"),
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(data)).encode()),
-            ],
-            "client": ("127.0.0.1", 50000),
-            "server": ("testserver", 80),
-        }
-        await app(scope, receive, send)
+        await app(_post_scope(path, data), receive, send)
 
     asyncio.run(asyncio.wait_for(run(), 30))  # a regression fails here instead of hanging
     assert sent[0]["status"] == 200
     return _parse(b"".join(m.get("body", b"") for m in sent[1:]).decode())
+
+
+def _post_gone_at_once(app, path: str, body: dict[str, Any]) -> None:
+    """POST `body` straight to the ASGI app from a reader already gone: the response can't
+    even start (the server's send fails, as uvicorn's does for spec 2.4)."""
+    data = json.dumps(body).encode()
+
+    async def run() -> None:
+        async def receive() -> dict:
+            return {"type": "http.request", "body": data, "more_body": False}
+
+        async def send(message: dict) -> None:
+            raise OSError("the connection is gone")
+
+        with contextlib.suppress(Exception):
+            await app(_post_scope(path, data, spec_version="2.4"), receive, send)
+
+    asyncio.run(asyncio.wait_for(run(), 30))
 
 
 def test_disconnect_mid_turn_then_resume_finishes_once():
@@ -242,6 +265,78 @@ def test_a_reader_going_away_closes_the_events_in_a_worker_thread():
     asyncio.run(run())
     # Closed mid-stream, and not on the event loop's thread.
     assert len(closed_on) == 1 and closed_on[0] is not threading.main_thread()
+
+
+def test_a_response_that_never_starts_closes_the_source_in_a_worker_thread():
+    # The events read from `source`, which was already advanced; if the response can't even
+    # start, the events are never advanced, and closing them alone does nothing.
+    closed_on: list[threading.Thread] = []
+
+    def run() -> Iterator[str]:
+        try:
+            yield "a"
+            yield "b"
+        except GeneratorExit:
+            closed_on.append(threading.current_thread())
+            raise
+
+    source = run()
+    first = next(source)
+
+    def events() -> Iterator[str]:
+        yield first
+        yield from source
+
+    response = event_stream(
+        events(), lambda e: format_sse_event(event="x", data_str=e), source=source
+    )
+
+    async def gone() -> None:
+        async def receive() -> dict:
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict) -> None:
+            raise OSError("the connection is gone")
+
+        with contextlib.suppress(Exception):
+            await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+
+    asyncio.run(gone())
+    assert len(closed_on) == 1 and closed_on[0] is not threading.main_thread()
+
+
+def test_a_reader_gone_before_the_response_starts_still_closes_the_run_off_the_loop(
+    monkeypatch,
+):
+    # The run was already advanced (to its first step, under the thread's lock) when the
+    # response failed to start: it must still be closed in a worker thread, finishing the
+    # turn there, not left to garbage collection on the event loop.
+    services = make_services()
+    subject_id = make_subject(services.store, USER, concepts=2)
+    thread_id, events = _start(client(services), subject_id)
+    closed_on: list[threading.Thread] = []
+    runs: list[Iterator[Any]] = []  # kept: closing must not wait on the last reference
+    real_reply = services.sessions.reply
+
+    def run(*args: Any) -> Iterator[Any]:
+        try:
+            yield from real_reply(*args)
+        except GeneratorExit:
+            closed_on.append(threading.current_thread())
+            raise
+
+    def reply(*args: Any) -> Iterator[Any]:
+        runs.append(run(*args))
+        return runs[-1]
+
+    monkeypatch.setattr(services.sessions, "reply", reply)
+    body = {"driver": "tab-a", "reply": _answer(_turn(events))}
+
+    _post_gone_at_once(create_app(services), f"/sessions/{thread_id}/reply", body)
+
+    assert len(closed_on) == 1 and closed_on[0] is not threading.main_thread()
+    assert len(services.store.attempts) == 1  # the turn finished: the answer counts
+    assert services.store.locks == set()
 
 
 def test_second_tab_gets_409_busy():

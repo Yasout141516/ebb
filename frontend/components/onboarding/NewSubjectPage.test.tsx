@@ -16,7 +16,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getJson).mockImplementation(async (path: string) =>
-    path === "/health" ? { database: "ok", tutor: "ok" } : [],
+    path === "/health" ? { database: "ok", tutor: "ok", timezone: "ok" } : [],
   );
 });
 

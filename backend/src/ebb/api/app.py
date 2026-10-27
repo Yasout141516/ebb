@@ -20,7 +20,7 @@ def create_app(services: Services) -> FastAPI:
     app.state.services = services
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[services.settings.ebb_web_origin],
+        allow_origins=[o.strip() for o in services.settings.ebb_web_origin.split(",") if o.strip()],
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -37,7 +37,11 @@ def create_app(services: Services) -> FastAPI:
             database = "ok"
         except psycopg.Error:
             database = DATABASE_DOWN
-        return Health(database=database, tutor=services.config_error or "ok")
+        return Health(
+            database=database,
+            tutor=services.config_error or "ok",
+            timezone=services.timezone_error or "ok",
+        )
 
     return app
 

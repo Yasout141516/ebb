@@ -9,8 +9,8 @@ import styles from "./HealthGate.module.css";
 type State = { kind: "checking" | "ok" | "unreachable" } | { kind: "down"; message: string };
 
 /**
- * Checks GET /health on load (ruling R6). While the database or the tutor's setup is
- * broken, its message replaces the page full width; an API that can't be reached gets
+ * Checks GET /health on load (ruling R6). While the database, the tutor's setup or the
+ * time zone setting is broken, its message replaces the page full width; an API that can't be reached gets
  * an error card with Retry.
  */
 export default function HealthGate({ children }: { children: React.ReactNode }) {
@@ -23,6 +23,7 @@ export default function HealthGate({ children }: { children: React.ReactNode }) 
       .then((health) => {
         if (health.tutor !== "ok") setState({ kind: "down", message: health.tutor });
         else if (health.database !== "ok") setState({ kind: "down", message: health.database });
+        else if (health.timezone !== "ok") setState({ kind: "down", message: health.timezone });
         else setState({ kind: "ok" });
       })
       .catch((error) => {
