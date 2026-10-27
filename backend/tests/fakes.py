@@ -78,7 +78,7 @@ class MemoryStore:
         self.question_sessions: dict[UUID, UUID] = {}  # question id -> session id
         self.timezones: dict[UUID, str] = {}
         self.ai_calls: dict[tuple[UUID, date], int] = {}
-        self.llm_call_log: list[tuple[UUID, LlmCall]] = []
+        self.llm_call_log: list[LlmCall] = []
         self.locks: set[str] = set()
 
     def ping(self) -> None:
@@ -381,13 +381,15 @@ class MemoryStore:
         return True
 
     def record_llm_call(self, user_id: UUID, call: LlmCall) -> None:
-        self.llm_call_log.append((user_id, call))
+        if call.user_id != user_id:
+            raise ValueError("the call belongs to another user")
+        self.llm_call_log.append(call)
 
     def llm_calls(
         self, user_id: UUID, since: datetime, until: datetime, all_tenants: bool = False
     ) -> list[LlmCall]:
-        mine = [c for u, c in self.llm_call_log if (all_tenants or u == user_id)]
-        return sorted((c for c in mine if since <= c.at < until), key=lambda c: c.at)
+        mine = [c for c in self.llm_call_log if all_tenants or c.user_id == user_id]
+        return sorted((c for c in mine if since <= c.at < until), key=lambda c: (c.at, c.id))
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime

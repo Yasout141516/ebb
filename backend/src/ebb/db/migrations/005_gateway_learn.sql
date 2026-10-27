@@ -28,7 +28,7 @@ create index llm_calls_user_endpoint_at on llm_calls (user_id, endpoint, at);
 
 create table concept_lessons (
     user_id uuid not null references profiles (id) on delete cascade,
-    concept_id uuid primary key references concepts (id) on delete cascade,
+    concept_id uuid primary key,
     markdown text not null,
     citations jsonb not null default '[]',
     web_pages jsonb not null default '[]',
@@ -36,13 +36,14 @@ create table concept_lessons (
     source_summary jsonb not null default '{}',
     model text not null,
     written_at timestamptz not null,
-    learned_at timestamptz
+    learned_at timestamptz,
+    foreign key (concept_id, user_id) references concepts (id, user_id) on delete cascade
 );
 
 create table lesson_exchanges (
     id uuid primary key default gen_random_uuid(),
     user_id uuid not null references profiles (id) on delete cascade,
-    concept_id uuid not null references concepts (id) on delete cascade,
+    concept_id uuid not null,
     position integer not null,
     kind text not null check (kind in ('check', 'suggested', 'typed')),
     question text not null,
@@ -50,5 +51,6 @@ create table lesson_exchanges (
     citations jsonb not null default '[]',
     suggestions jsonb not null default '[]',
     asked_at timestamptz not null,
-    unique (concept_id, position)
+    unique (concept_id, position),
+    foreign key (concept_id, user_id) references concepts (id, user_id) on delete cascade
 );

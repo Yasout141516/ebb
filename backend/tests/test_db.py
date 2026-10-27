@@ -1089,6 +1089,7 @@ def llm_call(at: datetime, **fields) -> LlmCall:
         id=uuid4(),
         call_id=uuid4(),
         request_id=None,
+        user_id=ALICE,
         at=at,
         role="teach",
         endpoint="lesson",
@@ -1135,7 +1136,7 @@ def test_record_and_list_llm_calls_round_trip(usage_store):
 def test_llm_calls_filters_by_user_and_range(usage_store):
     t = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
     early, inside, late = (llm_call(t + timedelta(hours=h)) for h in (-2, 0, 2))
-    theirs = llm_call(t)
+    theirs = llm_call(t, user_id=BOB)
     for call in (early, inside, late):
         usage_store.record_llm_call(ALICE, call)
     usage_store.record_llm_call(BOB, theirs)
@@ -1144,7 +1145,14 @@ def test_llm_calls_filters_by_user_and_range(usage_store):
     assert usage_store.llm_calls(ALICE, since, until) == [inside]
     assert usage_store.llm_calls(BOB, since, until) == [theirs]
     everyone = usage_store.llm_calls(ALICE, since, until, all_tenants=True)
-    assert {c.id for c in everyone} == {inside.id, theirs.id}
+    assert {(c.id, c.user_id) for c in everyone} == {(inside.id, ALICE), (theirs.id, BOB)}
+
+
+def test_record_llm_call_refuses_a_call_owned_by_someone_else(usage_store):
+    call = llm_call(datetime(2026, 10, 20, 9, 0, tzinfo=UTC), user_id=BOB)
+
+    with pytest.raises(ValueError):
+        usage_store.record_llm_call(ALICE, call)
 
 
 # --- who drives a session, in either store ------------------------------------------------

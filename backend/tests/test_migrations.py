@@ -294,6 +294,15 @@ def test_migration_005_applies_on_004(pg_empty_pool):
         insert_exchange(conn, ids["c1"], 1)
         with pytest.raises(psycopg.errors.UniqueViolation):
             insert_exchange(conn, ids["c1"], 1)
+        conn.execute("insert into profiles (id) values (%s)", (BOB,))
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            conn.execute(
+                "insert into concept_lessons (user_id, concept_id, markdown, model, written_at)"
+                " values (%s, %s, '# x', 'm', %s)",
+                (BOB, ids["c2"], T),
+            )
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            insert_exchange(conn, ids["c1"], 2, user_id=BOB)
         conn.execute("delete from concepts where id = %s", (ids["c1"],))
         left = conn.execute("select count(*) as n from concept_lessons").fetchone()["n"]
     assert row == {"backup": False, "cost_usd": None, "request_id": None}
@@ -301,11 +310,11 @@ def test_migration_005_applies_on_004(pg_empty_pool):
     assert left == 0
 
 
-def insert_exchange(conn, concept_id, position) -> None:
+def insert_exchange(conn, concept_id, position, user_id=ALICE) -> None:
     conn.execute(
         "insert into lesson_exchanges (user_id, concept_id, position, kind, question, answer,"
         " asked_at) values (%s, %s, %s, 'typed', 'q', 'a', %s)",
-        (ALICE, concept_id, position, T),
+        (user_id, concept_id, position, T),
     )
 
 

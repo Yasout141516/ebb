@@ -629,12 +629,14 @@ class PgStore:
         return row is not None
 
     def record_llm_call(self, user_id: UUID, call: LlmCall) -> None:
+        if call.user_id != user_id:
+            raise ValueError("the call belongs to another user")
         columns = list(asdict(call))
+        marks = ", ".join(["%s"] * len(columns))
         with self.pool.connection() as conn:
             conn.execute(
-                f"insert into llm_calls (user_id, {', '.join(columns)})"
-                f" values (%s{', %s' * len(columns)})",
-                (user_id, *(getattr(call, c) for c in columns)),
+                f"insert into llm_calls ({', '.join(columns)}) values ({marks})",
+                tuple(getattr(call, c) for c in columns),
             )
 
     def llm_calls(
@@ -646,7 +648,7 @@ class PgStore:
                 " order by at, id",
                 (user_id, all_tenants, since, until),
             ).fetchall()
-        return [LlmCall(**{k: v for k, v in row.items() if k != "user_id"}) for row in rows]
+        return [LlmCall(**row) for row in rows]
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime

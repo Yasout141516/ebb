@@ -228,6 +228,7 @@ class LlmCall:
     id: UUID
     call_id: UUID
     request_id: UUID | None
+    user_id: UUID
     at: datetime
     role: str  # teach | quiz | eval_writer
     endpoint: str
