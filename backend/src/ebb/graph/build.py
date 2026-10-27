@@ -8,7 +8,7 @@ ask_question -> regrade -> ask_question (a disputed grade)
 """
 
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, cast
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -16,6 +16,7 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from ebb.clock import utc_now
 from ebb.graph.nodes import Node, make_nodes
 from ebb.graph.state import QuizState, fill_defaults
 from ebb.llm.tutor import Tutor
@@ -34,10 +35,6 @@ from ebb.store import Store
 from ebb.web import WebSearch
 
 _NEXT = ["ask_question", "generate_questions", "next_concept", "summarize"]
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 _LABELS = {
@@ -80,7 +77,7 @@ def build_graph(
     tutor: Tutor,
     store: Store,
     checkpointer: BaseCheckpointSaver,
-    now: Callable[[], datetime] = _utc_now,
+    now: Callable[[], datetime] = utc_now,
     web: WebSearch | None = None,
 ) -> CompiledStateGraph:
     graph = StateGraph(QuizState)

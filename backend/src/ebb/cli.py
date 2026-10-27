@@ -8,7 +8,7 @@ import atexit
 import time
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 from uuid import UUID, uuid4
@@ -18,6 +18,7 @@ import typer
 from rich.console import Console
 from rich.markup import escape
 
+from ebb.clock import utc_now
 from ebb.config import ConfigError, Settings, resolve_timezone
 from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
@@ -35,6 +36,7 @@ from ebb.subjects import (
     ensure_name_free,
     ensure_room,
     find_note_concepts,
+    find_subject,
     room_copy,
     subject_from_topic,
     too_many_copy,
@@ -112,7 +114,7 @@ def _capped(tutor: Tutor, settings: Settings, store: PgStore) -> Tutor:
         settings.ebb_dev_user_id,
         settings.ebb_daily_ai_calls,
         _timezone(settings),
-        lambda: datetime.now(UTC),
+        utc_now,
     )
 
 
@@ -126,9 +128,8 @@ def _subject(store: PgStore, user_id: UUID, name: str | None) -> Subject:
         _fail('No subjects yet. Create one with: ebb new "Computer Networks"')
     if name is None:
         return subjects[0]
-    for subject in subjects:
-        if subject.name.lower() == name.strip().lower():  # as the unique index compares names
-            return subject
+    if subject := find_subject(subjects, name):
+        return subject
     _fail(f"No subject called {name!r}. You have: " + ", ".join(s.name for s in subjects))
 
 
@@ -410,7 +411,7 @@ def study(
     store.set_timezone(user_id, tz.key)
     saver = _checkpointer(store)
     graph = build_graph(tutor, store, saver, web=web_search(settings))
-    sessions = StudySessions(store, graph, saver, lambda: datetime.now(UTC))
+    sessions = StudySessions(store, graph, saver, utc_now)
     sessions.housekeeping(user_id)
 
     chosen = _subject(store, user_id, subject)
@@ -454,7 +455,7 @@ def status(
     chosen = _subject(store, settings.ebb_dev_user_id, subject)
     concepts = store.list_concepts(settings.ebb_dev_user_id, chosen.id)
     console.print(f"[bold]{escape(chosen.name)}[/bold]")
-    console.print(status_table(concepts, datetime.now(UTC), tz))
+    console.print(status_table(concepts, utc_now(), tz))
     documents = store.list_documents(settings.ebb_dev_user_id, chosen.id)
     console.print("\n[bold]Sources[/bold]")
     if documents:

@@ -40,13 +40,18 @@ def room_copy(error: DocumentRefused, name: str, filename: str) -> str:
     return full_copy(name) if error.reason == "full" else duplicate_copy(name, filename)
 
 
+def find_subject(subjects: Sequence[Subject], name: str) -> Subject | None:
+    """The subject called `name`, if any. Names are compared stripped and with lower(), as the
+    unique index on lower(name) compares them."""
+    wanted = name.strip().lower()
+    return next((s for s in subjects if s.name.lower() == wanted), None)
+
+
 def ensure_name_free(store: Store, user_id: UUID, name: str) -> str:
-    """The stripped name; raises SubjectExists (naming the existing subject) if it is taken.
-    Names are compared with lower(), as the unique index on lower(name) compares them."""
+    """The stripped name; raises SubjectExists (naming the existing subject) if it is taken."""
     name = name.strip()
-    for existing in store.list_subjects(user_id):
-        if existing.name.lower() == name.lower():
-            raise SubjectExists(existing.name)
+    if existing := find_subject(store.list_subjects(user_id), name):
+        raise SubjectExists(existing.name)
     return name
 
 

@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 
 from ebb.store import MAX_DOCUMENTS, DocumentRefused, SubjectExists
-from ebb.subjects import add_notes, ensure_name_free, find_note_concepts, subject_from_topic
+from ebb.subjects import add_notes, ensure_name_free, find_note_concepts, find_subject, subject_from_topic
 from tests.fakes import FakeTutor, MemoryStore, make_subject, new_document
 
 
@@ -86,3 +86,14 @@ def test_ensure_name_free_compares_names_as_the_unique_index_does():
     assert ensure_name_free(store, user, "STRASSE") == "STRASSE"  # lower() keeps ß
     with pytest.raises(SubjectExists):
         ensure_name_free(store, user, "STRAßE")
+
+
+def test_find_subject_strips_and_compares_with_lower():
+    store, user = MemoryStore(), uuid4()
+    networks = make_subject(store, user, name="Networks")
+    make_subject(store, user, name="Straße")
+    subjects = store.list_subjects(user)
+    found = find_subject(subjects, "  nETWORKS ")
+    assert found is not None and found.id == networks
+    assert find_subject(subjects, "STRASSE") is None  # lower() keeps ß
+    assert find_subject(subjects, "Physics") is None

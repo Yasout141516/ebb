@@ -3,7 +3,7 @@
 import atexit
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 
 from ebb.api.drafts import Drafts
+from ebb.clock import utc_now
 from ebb.config import ConfigError, Settings, resolve_timezone
 from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
@@ -74,10 +75,6 @@ class NoTutor:
         return refuse
 
 
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
 def build_services(settings: Settings) -> Services:
     from ebb.db.saver import postgres_saver
     from ebb.graph.build import build_graph
@@ -108,14 +105,14 @@ def build_services(settings: Settings) -> Services:
             user_id,
             settings.ebb_daily_ai_calls,
             tz,
-            _utc_now,
+            utc_now,
         )
     except ConfigError as error:
         tutor, config_error = None, str(error)
     web = web_search(settings)
     saver = postgres_saver(store)
     graph = build_graph(tutor or NoTutor(config_error or ""), store, saver, web=web)
-    sessions = StudySessions(store, graph, saver, _utc_now)
+    sessions = StudySessions(store, graph, saver, utc_now)
     services = Services(
         settings=settings,
         store=store,
@@ -123,10 +120,10 @@ def build_services(settings: Settings) -> Services:
         config_error=config_error,
         web=web,
         sessions=sessions,
-        drafts=Drafts(lambda: services.require_tutor(), _utc_now),
+        drafts=Drafts(lambda: services.require_tutor(), utc_now),
         user_id=user_id,
         tz=tz,
-        now=_utc_now,
+        now=utc_now,
         timezone_error=timezone_error,
     )
     return services
