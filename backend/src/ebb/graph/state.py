@@ -129,11 +129,15 @@ def fill_defaults(values: Mapping[str, Any]) -> dict[str, Any]:
     # The summary is read from the store at the end, so a saved tally and start are of no use.
     for old in ("start", "tally"):
         filled.pop(old, None)
-    # A lesson was a string, with its citations beside it.
-    citations = filled.pop("lesson_citations", None)
-    if isinstance(filled.get("lesson"), str):
-        filled["lesson"] = {"text": filled["lesson"], "citations": citations or []}
+    _lesson_as_dict(filled)
     return filled
+
+
+def _lesson_as_dict(values: dict[str, Any]) -> None:
+    """A lesson was a string, with its citations beside it: make it {text, citations}."""
+    citations = values.pop("lesson_citations", None)
+    if isinstance(values.get("lesson"), str):
+        values["lesson"] = {"text": values["lesson"], "citations": citations or []}
 
 
 def fill_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -141,9 +145,7 @@ def fill_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     shape: milestone 3 saved the lesson as a string with its citations beside it, and
     citations without name, heading or title."""
     filled = deepcopy(dict(payload))
-    citations = filled.pop("lesson_citations", None)
-    if isinstance(filled.get("lesson"), str):
-        filled["lesson"] = {"text": filled["lesson"], "citations": citations or []}
+    _lesson_as_dict(filled)
     for key in ("feedback", "grade", "lesson", "dispute_result"):
         part = filled.get(key)
         if part and "citations" in part:
