@@ -3,7 +3,7 @@
 Minor items found while building and reviewing milestone 4 that were deliberately left for later,
 grouped. Earlier items: [m1-followups.md](m1-followups.md), [m2-followups.md](m2-followups.md),
 [m3-followups.md](m3-followups.md). The decisions taken on the owner's behalf during milestone 4
-are in the SDD ledger (rulings R1–R39).
+are in the SDD ledger (rulings R1–R42).
 
 ## Worth a look with the owner
 
@@ -33,6 +33,12 @@ are in the SDD ledger (rulings R1–R39).
   the drain renews a closed tab's lease, so another tab sees "busy" for up to 90 s after a
   mid-turn close.
 - A malformed dispute id reaching `_applied` raises `ValueError` (the route validates it first).
+- `_is_refusal`'s `additional_kwargs["refusal"]` check is a no-op for `langchain_groq`, which
+  never sets it.
+- A refused grade re-queues the same question for the rest of the session (the spec's
+  behaviour); the only way out is End session.
+- `citations.from_dict` raises `KeyError` on a partial dict that has `name` but no `heading` or
+  `title`.
 - `CappedTutor.take_ai_call` has no threaded atomicity test.
 - `ebb study` Ctrl+C during startup housekeeping or `get_state` still prints a traceback (from
   [m2-followups.md](m2-followups.md)).
@@ -44,6 +50,9 @@ are in the SDD ledger (rulings R1–R39).
 - `LookupError` catch-all turns an accidental `KeyError`/`IndexError` in a route into a 404.
 - `POST /subjects` answering 503 (no tutor) is untested; no test for newest-first subject order.
 - `list_subjects` runs `list_concepts` per subject (N+1; fine at this scale).
+- Removing a ready file from a draft drops the concepts it added, even one a later file of the
+  same draft only matched (that file lists it as matched, not fresh), so the subject is saved
+  without it (`api/drafts.py`, `remove_file`).
 - Concurrent uploads to one draft are untested; open upload streams hold threadpool workers
   (pool of 40); a bad file sent to an expired draft gets the file refusal before the 410.
 - Oversized uploads without a `Content-Length` header are still spooled before refusal (R21).
@@ -84,7 +93,11 @@ are in the SDD ledger (rulings R1–R39).
 - Not covered: `CappedTutor`'s `.astimezone(tz)` in a non-UTC zone; exit 2 for a bad
   `EBB_TIMEZONE` in `new` / `add` (R13); a Dhaka-zone end-to-end check.
 - Frontend: Retry on the add page; the "5 of 5" announcement; the progress page (skeleton, 404,
-  Retry, abort); silent reconnect on 404/409; unmount abort; keys ignored on buttons and popover.
+  Retry, abort); silent reconnect on 404; unmount abort; keys ignored on buttons and popover.
 - `FakeTutor.regrades` is still `(str, bool)` tuples; `summary_tally` is defined after first use
   in `test_graph.py`; the e2e browser test runs one session against the fake tutor only (no
   uploads, disputes or dark mode).
+- The study-route disconnect test hangs, rather than failing, if a change stops the events being
+  closed.
+- The e2e test's `waiting` locator could hit Playwright's strict mode if the UI changes; CI
+  doesn't cache the Playwright browsers.

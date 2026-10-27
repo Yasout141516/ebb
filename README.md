@@ -29,6 +29,13 @@ docker compose up -d db
 docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre003 template ebb"
 ```
 
+To go back to that copy later, stop the app first (`docker compose stop api web`, and close any
+`ebb` terminal), then:
+
+```bash
+docker exec ebb-db-1 psql -U ebb -d postgres -c "drop database ebb" -c "create database ebb template ebb_pre003"
+```
+
 Then:
 
 ```bash
@@ -36,7 +43,8 @@ cp .env.example .env              # then put your key in GROQ_API_KEY
 docker compose up                 # starts Postgres, the API (port 8000) and the website
 ```
 
-Open http://localhost:3000. The first start builds the images, which takes a few minutes.
+Open http://localhost:3000. The first start builds the images, which takes a few minutes. The
+website, the API and the database are reachable from this computer only: Ebb has no sign-in yet.
 
 The terminal app still works, next to the website and on the same data:
 
@@ -51,11 +59,13 @@ Settings in `.env`:
 - `EBB_TIMEZONE`: your IANA time zone, for example `Asia/Dhaka`. Docker defaults to UTC, which
   can name the wrong day near midnight. The website shows dates in the browser's time zone, so
   set this to match it: lines the server writes ("Next review: Thursday") and "due today" use it.
-  Outside Docker, Ebb uses the computer's time zone, or UTC if it can't tell.
+  Outside Docker, Ebb uses the computer's time zone, or UTC if it can't tell. A name Ebb doesn't
+  know stops the terminal app; the website says so in place of its pages (the API uses UTC).
 - `EBB_DAILY_AI_CALLS`: the most AI calls (questions, grades, lessons) one user may make per day,
   counted in that time zone. Default 300; the website and the terminal show a clear message when
   it is reached.
-- `EBB_WEB_ORIGIN`: the website's address, which the API allows (default `http://localhost:3000`).
+- `EBB_WEB_ORIGIN`: the website's address, which the API allows; several separated by commas
+  (default `http://localhost:3000,http://127.0.0.1:3000`).
 
 Ebb grades and writes with Groq (`openai/gpt-oss-120b`). Optional keys in `.env`:
 `MISTRAL_API_KEY` (free plan at https://console.mistral.ai) adds Mistral as a fallback when
@@ -114,7 +124,7 @@ the set needs `MISTRAL_API_KEY`.
 For development, with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-docker compose up -d
+docker compose up -d db           # only the database: the API runs from uv below
 cd backend
 uv sync
 uv run pytest                     # database tests need the compose db

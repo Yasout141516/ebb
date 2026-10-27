@@ -89,8 +89,8 @@ Key documents, newest first:
 - `cli.py` (Typer: `new [--notes FILE]`, `add`, `study`, `status`, `serve`, `eval build|run`),
   `ui.py` (Rich).
 - `study.py` (`StudySessions`: the one service the CLI and the API both drive the graph through:
-  start, resume, reply, discard, heartbeat, driver leases) and `subjects.py` (creating subjects
-  from a topic or notes, adding notes, shared checks and refusal copy).
+  start, resume, reply, discard, heartbeat, release, driver leases) and `subjects.py` (creating
+  subjects from a topic or notes, adding notes, shared checks and refusal copy).
 - `api/` (FastAPI: `app.py` factory and `/health`, `routes_subjects.py`, `routes_notes.py` with
   drafts and SSE uploads, `routes_study.py` SSE sessions, `routes_progress.py`, `schemas.py`,
   `services.py`, `drafts.py`, `errors.py`); `progress.py` (streak, average tide, chart data).
@@ -127,8 +127,8 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run e2e   # e2e: npx
     Mistral account is inactive, or every Groq failure also waits on a Mistral 429).
   - `TAVILY_API_KEY` (optional: web questions when Ebb repeats itself).
   - Optional: `EBB_TIMEZONE` (e.g. `Asia/Dhaka`; Docker defaults to UTC), `EBB_DAILY_AI_CALLS`
-    (default 300), `EBB_WEB_ORIGIN` (default `http://localhost:3000`), `EBB_PRIMARY_MODEL`,
-    `EBB_FALLBACK_MODEL`.
+    (default 300), `EBB_WEB_ORIGIN` (comma-separated; default
+    `http://localhost:3000,http://127.0.0.1:3000`), `EBB_PRIMARY_MODEL`, `EBB_FALLBACK_MODEL`.
 - Default models: `openai/gpt-oss-120b` on Groq (primary), `mistral-medium-latest` (fallback).
   Providers retire models; if one disappears, Ebb exits with
   `Model '…' was not found — set EBB_PRIMARY_MODEL…`. Check current models before changing.

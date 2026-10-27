@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ebb
       POSTGRES_DB: ebb
     ports:
-      - "${EBB_DB_PORT:-5432}:5432"
+      - "127.0.0.1:${EBB_DB_PORT:-5432}:5432"
     volumes:
       # Postgres 18 images keep data under /var/lib/postgresql/<major>/; mount the parent.
       - ebb-pgdata:/var/lib/postgresql
@@ -39,8 +39,9 @@ services:
   api:
     build: ./backend
     command: ["serve"]
+    # Every port is published on this PC only: there is no sign-in yet (milestone 6).
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -54,7 +55,7 @@ services:
   web:
     build: ./frontend
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - api
 
