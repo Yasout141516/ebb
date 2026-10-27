@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
 import Header, { ThemeToggle } from "@/components/Header";
 import HealthGate from "@/components/HealthGate";
@@ -14,6 +13,7 @@ import SubjectPicker from "@/components/progress/SubjectPicker";
 import TideChart from "@/components/progress/TideChart";
 import { getJson } from "@/lib/api";
 import type { Progress, SubjectSummary } from "@/lib/types";
+import { useLoad } from "@/lib/useLoad";
 import styles from "./page.module.css";
 
 type Loaded = { subjects: SubjectSummary[]; progress: Progress };
@@ -26,22 +26,16 @@ function nextReview(progress: Progress): string | null {
 
 /** Everything under the title, once the subject's numbers are in (tpl-Dashboard; tpl-DashboardMobile at 375 px). */
 function Dashboard({ subjectId }: { subjectId: string }) {
-  const [loaded, setLoaded] = useState<Loaded | "missing" | "failed" | null>(null);
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    Promise.all([
-      getJson<SubjectSummary[]>("/subjects", controller.signal),
-      getJson<Progress>(`/subjects/${subjectId}/progress`, controller.signal),
-    ])
-      .then(([subjects, progress]) => setLoaded({ subjects, progress }))
-      .catch((error) => {
-        if (error?.name === "AbortError") return;
-        setLoaded(error?.status === 404 || error?.status === 422 ? "missing" : "failed");
-      });
-    return () => controller.abort();
-  }, [subjectId, attempt]);
+  const { loaded, retry } = useLoad<Loaded>(
+    async (signal) => {
+      const [subjects, progress] = await Promise.all([
+        getJson<SubjectSummary[]>("/subjects", signal),
+        getJson<Progress>(`/subjects/${subjectId}/progress`, signal),
+      ]);
+      return { subjects, progress };
+    },
+    subjectId,
+  );
 
   if (loaded === null || loaded === "missing" || loaded === "failed") {
     return (
@@ -62,13 +56,7 @@ function Dashboard({ subjectId }: { subjectId: string }) {
           {loaded === "failed" && (
             <ErrorCard
               title="Couldn't load your progress."
-              action={{
-                label: "Retry",
-                onClick: () => {
-                  setLoaded(null);
-                  setAttempt((n) => n + 1);
-                },
-              }}
+              action={{ label: "Retry", onClick: retry }}
             />
           )}
         </div>

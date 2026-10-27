@@ -1,37 +1,26 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
 import OnboardingShell from "@/components/onboarding/OnboardingShell";
 import UploadPanel from "@/components/onboarding/UploadPanel";
 import { getJson } from "@/lib/api";
 import type { Source, SubjectSummary } from "@/lib/types";
+import { useLoad } from "@/lib/useLoad";
 
 type Loaded = { subjects: SubjectSummary[]; subject: SubjectSummary; sources: Source[] };
 
 /** Add source: the onboarding upload screen in "add to {subject}" mode, as `ebb add`. */
 export default function AddSource() {
   const { id } = useParams<{ id: string }>();
-  const [loaded, setLoaded] = useState<Loaded | "missing" | "failed" | null>(null);
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    Promise.all([
-      getJson<SubjectSummary[]>("/subjects", controller.signal),
-      getJson<Source[]>(`/subjects/${id}/sources`, controller.signal),
-    ])
-      .then(([subjects, sources]) => {
-        const subject = subjects.find((s) => s.id === id);
-        setLoaded(subject ? { subjects, subject, sources } : "missing");
-      })
-      .catch((error) => {
-        if (error?.name === "AbortError") return;
-        setLoaded(error?.status === 404 || error?.status === 422 ? "missing" : "failed");
-      });
-    return () => controller.abort();
-  }, [id, attempt]);
+  const { loaded, retry } = useLoad<Loaded>(async (signal) => {
+    const [subjects, sources] = await Promise.all([
+      getJson<SubjectSummary[]>("/subjects", signal),
+      getJson<Source[]>(`/subjects/${id}/sources`, signal),
+    ]);
+    const subject = subjects.find((s) => s.id === id);
+    return subject ? { subjects, subject, sources } : "missing";
+  }, id);
 
   if (loaded === null || loaded === "missing" || loaded === "failed") {
     return (
@@ -40,13 +29,7 @@ export default function AddSource() {
         {loaded === "failed" && (
           <ErrorCard
             title="Couldn't load this subject's sources."
-            action={{
-              label: "Retry",
-              onClick: () => {
-                setLoaded(null);
-                setAttempt((n) => n + 1);
-              },
-            }}
+            action={{ label: "Retry", onClick: retry }}
           />
         )}
       </OnboardingShell>
