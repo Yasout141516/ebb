@@ -90,10 +90,16 @@ def _read(events: queue.SimpleQueue[Event | None]) -> Iterator[Event]:
         yield event
 
 
+def _chain(turn: threading.Event, done: threading.Event) -> None:
+    turn.wait()
+    done.set()
+
+
 @dataclass(frozen=True)
 class _File:
     id: str
     document: NewDocument
+    matched: list[str]  # names of concepts an earlier file of the draft added
     fresh: list[tuple[str, str]]  # the concepts this file added to the draft
 
 
@@ -141,17 +147,28 @@ class Drafts:
             try:
                 self._process(draft, filename, data, turn, say)
             finally:
-                done.set()
+                if turn.is_set():
+                    done.set()
+                else:  # refused while reading: done once the files before it are, but its
+                    # own events end now
+                    threading.Thread(target=_chain, args=(turn, done), daemon=True).start()
 
         return run_detached(work)
 
     def remove_file(self, draft_id: str, file_id: str, user_id: UUID) -> None:
-        """Drop a ready file and the concepts it added. Raises LookupError if it isn't there."""
+        """Drop a ready file and the concepts it added; one a later file matched moves to the
+        earliest such file instead. Raises LookupError if the file isn't there."""
         with self._lock:
             draft = self._find(draft_id, user_id)
         with draft.lock:
-            if draft.files.pop(file_id, None) is None:
+            removed = draft.files.pop(file_id, None)
+            if removed is None:
                 raise LookupError(f"file {file_id} not in draft")
+            for name, description in removed.fresh:
+                heir = next((f for f in draft.files.values() if name in f.matched), None)
+                if heir is not None:
+                    heir.matched.remove(name)
+                    heir.fresh.append((name, description))
 
     def commit(self, draft_id: str, store: Store, user_id: UUID) -> UUID:
         """Save the subject with every ready file and their concepts in one transaction.
@@ -213,11 +230,20 @@ class Drafts:
         except (TutorUnavailable, ConfigError) as error:
             say(tutor_refusal(error))
             return
-        ready = _File(str(uuid4()), document, report.fresh)
         with draft.lock:
             if draft.closed:
                 say(refused(EXPIRED))
                 return
+            # A matched concept whose file was removed during the call becomes this file's own.
+            kept = {name for f in draft.files.values() for name, _ in f.fresh}
+            descriptions = dict(known)
+            ready = _File(
+                str(uuid4()),
+                document,
+                [name for name in report.matched if name in kept],
+                report.fresh
+                + [(name, descriptions[name]) for name in report.matched if name not in kept],
+            )
             draft.files[ready.id] = ready
         say(
             {
@@ -227,7 +253,7 @@ class Drafts:
                 "page_count": document.page_count,
                 "passages": len(document.chunks),
                 "concepts": report.matched + [name for name, _ in report.fresh],
-                "new": [name for name, _ in report.fresh],
+                "new": [name for name, _ in ready.fresh],
             }
         )
 

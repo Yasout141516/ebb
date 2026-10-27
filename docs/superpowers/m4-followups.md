@@ -50,9 +50,6 @@ are in the SDD ledger (rulings R1–R42).
 - `LookupError` catch-all turns an accidental `KeyError`/`IndexError` in a route into a 404.
 - `POST /subjects` answering 503 (no tutor) is untested; no test for newest-first subject order.
 - `list_subjects` runs `list_concepts` per subject (N+1; fine at this scale).
-- Removing a ready file from a draft drops the concepts it added, even one a later file of the
-  same draft only matched (that file lists it as matched, not fresh), so the subject is saved
-  without it (`api/drafts.py`, `remove_file`).
 - Concurrent uploads to one draft are untested; open upload streams hold threadpool workers
   (pool of 40); a bad file sent to an expired draft gets the file refusal before the 410.
 - Oversized uploads without a `Content-Length` header are still spooled before refusal (R21).

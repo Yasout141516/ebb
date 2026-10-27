@@ -1,5 +1,6 @@
 """Onboarding drafts: files read and checked one at a time, nothing saved until commit."""
 
+import threading
 from datetime import timedelta
 from uuid import UUID
 
@@ -261,3 +262,90 @@ def test_commit_saves_subject_files_concepts_in_one_transaction(pg_pool, monkeyp
     assert [s.name for s in store.list_subjects(USER)] == ["Biology"]
     assert [d.filename for d in store.list_documents(USER, subject_id)] == ["a.txt", "b.txt"]
     assert [c.name for c in store.list_concepts(USER, subject_id)] == ["Cells", "Genes"]
+
+
+class _GatedTutor(FakeTutor):
+    """Concept call number `gated` (0-based) waits until `release` is set."""
+
+    def __init__(self, gated: int, **kwargs):
+        super().__init__(**kwargs)
+        self.gated = gated
+        self.release = threading.Event()
+
+    def concepts_from_notes(self, subject, existing, digest):
+        if len(self.concepts_calls) == self.gated:
+            assert self.release.wait(5)
+        return super().concepts_from_notes(subject, existing, digest)
+
+
+def test_a_file_refused_on_reading_still_waits_for_the_files_before_it():
+    tutor = _GatedTutor(0, note_concepts=[[("Cells", None)], [("Genes", None)]])
+    drafts = _drafts(tutor)
+    draft = drafts.create("Biology", USER)
+    first = drafts.add_file(draft, "a.txt", _text("Cells"), USER)
+    assert [next(first), next(first)] == [{"status": "reading"}, {"status": "finding"}]
+
+    unreadable = list(drafts.add_file(draft, "b.exe", b"binary", USER))
+    seen: list = []
+    copy = threading.Thread(
+        target=lambda: seen.extend(drafts.add_file(draft, "copy.txt", _text("Cells"), USER))
+    )
+    copy.start()
+    copy.join(0.3)  # the copy must not be checked while a.txt is still finding concepts
+    tutor.release.set()
+    copy.join(5)
+
+    assert unreadable[-1]["status"] == "refused"
+    assert list(first)[-1]["status"] == "ready"
+    assert seen[-1] == {
+        "status": "refused",
+        "message": "copy.txt is already in Biology.",
+        "retry": False,
+    }
+    assert len(tutor.concepts_calls) == 1
+    store = _store()
+    subject_id = drafts.commit(draft, store, USER)
+    assert [d.filename for d in store.list_documents(USER, subject_id)] == ["a.txt"]
+
+
+def test_removing_a_file_keeps_concepts_a_later_file_matched():
+    tutor = FakeTutor(
+        note_concepts=[
+            [("Cells", None), ("Genes", None)],
+            [("Cells", "Cells"), ("Proteins", None)],
+            [("Cells", "Cells")],
+        ]
+    )
+    drafts = _drafts(tutor)
+    draft = drafts.create("Biology", USER)
+    first = list(drafts.add_file(draft, "a.txt", _text("Cells"), USER))[-1]
+    second = list(drafts.add_file(draft, "b.txt", _text("Proteins"), USER))[-1]
+    list(drafts.add_file(draft, "c.txt", _text("Membranes"), USER))
+
+    drafts.remove_file(draft, first["file_id"], USER)  # Cells moves to b.txt; Genes goes
+    drafts.remove_file(draft, second["file_id"], USER)  # Cells moves on to c.txt
+
+    store = _store()
+    subject_id = drafts.commit(draft, store, USER)
+    assert [d.filename for d in store.list_documents(USER, subject_id)] == ["c.txt"]
+    concepts = store.list_concepts(USER, subject_id)
+    assert [(c.name, c.description) for c in concepts] == [("Cells", "About Cells.")]
+
+
+def test_a_file_still_finding_keeps_a_concept_whose_file_was_removed_meanwhile():
+    tutor = _GatedTutor(1, note_concepts=[[("Cells", None)], [("Cells", "Cells")]])
+    drafts = _drafts(tutor)
+    draft = drafts.create("Biology", USER)
+    first = list(drafts.add_file(draft, "a.txt", _text("Cells"), USER))[-1]
+    second = drafts.add_file(draft, "b.txt", _text("Membranes"), USER)
+    assert [next(second), next(second)] == [{"status": "reading"}, {"status": "finding"}]
+
+    drafts.remove_file(draft, first["file_id"], USER)
+    tutor.release.set()
+
+    ready = list(second)[-1]
+    assert ready["concepts"] == ["Cells"]
+    assert ready["new"] == ["Cells"]  # its file is gone, so this one adds it
+    store = _store()
+    subject_id = drafts.commit(draft, store, USER)
+    assert [c.name for c in store.list_concepts(USER, subject_id)] == ["Cells"]
