@@ -136,6 +136,21 @@ def fill_defaults(values: Mapping[str, Any]) -> dict[str, Any]:
     return filled
 
 
+def fill_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """A copy of a waiting question's payload (or a session's final turn) in the current
+    shape: milestone 3 saved the lesson as a string with its citations beside it, and
+    citations without name, heading or title."""
+    filled = deepcopy(dict(payload))
+    citations = filled.pop("lesson_citations", None)
+    if isinstance(filled.get("lesson"), str):
+        filled["lesson"] = {"text": filled["lesson"], "citations": citations or []}
+    for key in ("feedback", "grade", "lesson", "dispute_result"):
+        part = filled.get(key)
+        if part and "citations" in part:
+            part["citations"] = [citation_to_dict(c) for c in _citations(part["citations"])]
+    return filled
+
+
 def _dt(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 

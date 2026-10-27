@@ -29,9 +29,7 @@ are in the SDD ledger (rulings R1–R42).
 - `"new"` (stage 0) is counted inline in `cli.py`; a `mastery.new_concepts` helper would keep it
   in one place.
 - `study.py` is past R14's length guideline (323 lines).
-- Offer, discard and hold lock probes can make a concurrent real reply hit `SessionBusy` briefly;
-  the drain renews a closed tab's lease, so another tab sees "busy" for up to 90 s after a
-  mid-turn close.
+- Offer, discard and hold lock probes can make a concurrent real reply hit `SessionBusy` briefly.
 - A malformed dispute id reaching `_applied` raises `ValueError` (the route validates it first).
 - `_is_refusal`'s `additional_kwargs["refusal"]` check is a no-op for `langchain_groq`, which
   never sets it.

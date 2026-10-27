@@ -16,7 +16,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
 
-from ebb.graph.state import fill_defaults
+from ebb.graph.state import fill_defaults, fill_payload
 from ebb.mastery import reviews_due
 from ebb.store import Store
 from ebb.ui import greeting
@@ -174,8 +174,7 @@ class StudySessions:
             return None
         if reply is not None and self._applied(user_id, saved.values, reply):
             return None
-        payload: dict[str, Any] = saved.interrupts[0].value
-        return payload
+        return fill_payload(saved.interrupts[0].value)
 
     def discard(self, user_id: UUID, thread_id: str, driver: str) -> None:
         """Start fresh: end the session, unless another tab or terminal is driving it or a
@@ -295,11 +294,13 @@ class StudySessions:
                     values = chunk
         except GeneratorExit:
             # The reader went away mid-turn (a tab closed or refreshed). Finish the turn,
-            # still under the lock, so the answer counts and the next question is waiting.
+            # still under the lock, so the answer counts and the next question is waiting;
+            # the lease is left as it is, so a tab that released it doesn't seem busy.
             for mode, chunk in stream:
                 if mode == "values":
                     values = chunk
-            self._stopped(user_id, thread_id, driver, values)
+            if "__interrupt__" in values:
+                self.store.touch_session(user_id, thread_id, self.now())
             raise
         return self._stopped(user_id, thread_id, driver, values)
 
@@ -320,7 +321,7 @@ class StudySessions:
         if thread_id not in self._held:
             # Names the driver of a new session; renews the lease of a running one.
             self.store.claim_session(user_id, thread_id, driver, now, LEASE)
-        return Pending(payload)
+        return Pending(fill_payload(payload))
 
     def _finished(self, user_id: UUID, values: Mapping[str, Any]) -> Finished:
         filled = fill_defaults(values)
@@ -328,11 +329,13 @@ class StudySessions:
         return Finished(
             subject_id=subject_id,
             results=filled.get("results", []),
-            final={
-                "grade": filled.get("grade"),
-                "lesson": filled.get("lesson"),
-                "notices": filled.get("notices", []),
-            },
+            final=fill_payload(
+                {
+                    "grade": filled.get("grade"),
+                    "lesson": filled.get("lesson"),
+                    "notices": filled.get("notices", []),
+                }
+            ),
             caught_up=bool(filled.get("caught_up")),
             next_review_at=self.store.next_review_at(user_id, subject_id),
         )

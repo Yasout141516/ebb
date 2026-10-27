@@ -1,5 +1,6 @@
 """The study-session service the CLI and the API share (MemoryStore + InMemorySaver)."""
 
+import io
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -9,7 +10,8 @@ from uuid import UUID, uuid4
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Command
+from langgraph.types import Command, Interrupt
+from rich.console import Console
 
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
@@ -23,6 +25,7 @@ from ebb.study import (
     Step,
     StudySessions,
 )
+from ebb.ui import render_turn
 from tests.fakes import FakeTutor, MemoryStore, make_subject
 
 USER = UUID("00000000-0000-0000-0000-0000000000aa")
@@ -434,6 +437,68 @@ def test_a_call_refused_by_the_lock_claims_nothing(s):
 
     assert session(s, thread_id)["driver"] is None
     assert s.another_process().offer(USER, s.subject_id, "cli:2").busy is False  # the CLI exited
+
+
+def test_a_tab_closed_mid_turn_leaves_the_session_free_for_another_tab(s):
+    thread_id, first = started(s, "tab-a")
+    events = s.sessions.reply(USER, thread_id, "tab-a", right(first))
+    assert next(events) == Step("Grading…")
+
+    s.sessions.release(USER, thread_id, "tab-a")  # pagehide, while the turn still runs
+    events.close()  # the server notices the tab is gone and finishes the turn
+
+    assert session(s, thread_id)["driver"] is None
+    assert s.sessions.offer(USER, s.subject_id, "tab-b").busy is False
+    [question] = s.sessions.resume(USER, thread_id, "tab-b")
+    assert isinstance(question, Pending) and question.payload["number"] == 2
+
+
+OLD_CITATION = {"kind": "chunk", "ref": "r1", "label": "a.pdf · p. 3", "page": 3, "quote": "Q."}
+CITATION = OLD_CITATION | {"name": "a.pdf", "heading": None, "title": None}
+
+
+class _Milestone3Payload:
+    """The graph, with the waiting question as milestone 3 saved it: the lesson a string
+    with its citations beside it, and citations without name, heading or title."""
+
+    def __init__(self, graph: CompiledStateGraph) -> None:
+        self._graph = graph
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._graph, name)
+
+    def get_state(self, config: Any) -> Any:
+        saved = self._graph.get_state(config)
+        if not saved.interrupts:
+            return saved
+        [waiting] = saved.interrupts
+        old = {k: v for k, v in waiting.value.items()} | {
+            "feedback": {
+                "value": "incorrect",
+                "explanation": "No.",
+                "misconception": None,
+                "citations": [OLD_CITATION],
+                "general_knowledge": False,
+            },
+            "lesson": "An old lesson.",
+            "lesson_citations": [OLD_CITATION],
+        }
+        return saved._replace(interrupts=(Interrupt(value=old, id=waiting.id),))
+
+
+def test_a_question_saved_by_milestone_3_is_handed_out_in_the_current_shape(s):
+    thread_id, _ = started(s, "tab-a")
+    old = StudySessions(s.store, _Milestone3Payload(s.graph), s.saver, s.clock)
+
+    [resumed] = old.resume(USER, thread_id, "tab-a")
+    waiting = old.pending(USER, thread_id)
+
+    assert isinstance(resumed, Pending)
+    for payload in (resumed.payload, waiting):
+        assert payload["lesson"] == {"text": "An old lesson.", "citations": [CITATION]}
+        assert "lesson_citations" not in payload
+        assert payload["feedback"]["citations"] == [CITATION]
+    render_turn(Console(file=io.StringIO()), resumed.payload)  # the CLI shows it
 
 
 def test_pending_question_touches_the_session(s):
