@@ -16,6 +16,7 @@ from rich.console import Console
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
 from ebb.study import (
+    LEASE,
     Event,
     Finished,
     Offer,
@@ -546,18 +547,14 @@ def test_housekeeping_skips_a_session_whose_lock_is_held(pg_pool):
     assert store.get_session(USER, "t-1") is None
 
 
-def test_a_turn_claims_the_lease_once(s, monkeypatch):
+def test_a_long_turn_renews_its_lease_when_it_ends(s):
     thread_id, first = started(s)
-    claims = []
-    claim = s.store.claim_session
+    events = s.sessions.reply(USER, thread_id, "tab-a", right(first))
+    next(events)  # the run has begun, the lease was claimed at the start
+    s.clock.advance(seconds=LEASE.total_seconds() - 30 + 1)  # the turn runs long
+    last = list(events)[-1]
 
-    def counted(*args, **kwargs):
-        claims.append(args)
-        return claim(*args, **kwargs)
-
-    monkeypatch.setattr(s.store, "claim_session", counted)
-
-    list(s.sessions.reply(USER, thread_id, "tab-a", right(first)))  # a run, then the next question
-    assert len(claims) == 1
-    list(s.sessions.resume(USER, thread_id, "tab-a"))  # the question shown again
-    assert len(claims) == 2
+    assert isinstance(last, Pending)
+    assert s.store.session_driver(USER, thread_id, s.clock(), LEASE) == "tab-a"
+    s.clock.advance(seconds=45)  # past the start's lease, inside the renewed one
+    assert s.store.session_driver(USER, thread_id, s.clock(), LEASE) == "tab-a"
