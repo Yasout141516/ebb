@@ -115,6 +115,15 @@ describe("UploadPanel, a new subject", () => {
     expect(chooseButton()).toBeDisabled();
   });
 
+  it("compares names as the API does: Straße and STRASSE are two subjects", async () => {
+    const user = userEvent.setup();
+    const subjects = [{ id: "s0", name: "Straße", concept_count: 8, due_count: 0 }];
+    render(<UploadPanel mode="draft" subjects={subjects} />);
+    await user.type(screen.getByLabelText("Subject name"), "STRASSE");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(chooseButton()).toBeEnabled();
+  });
+
   it("shows the API's exists copy on a 409 and uploads nothing", async () => {
     vi.mocked(postJson).mockRejectedValue(new ApiError(409, EXISTS));
     const user = await named("Computer Networks");

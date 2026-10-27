@@ -31,6 +31,7 @@ from ebb.domain import (
 from ebb.graph.build import build_graph
 from ebb.progress import replay
 from ebb.store import DocumentRefused, SubjectExists
+from ebb.subjects import ensure_name_free
 from tests.fakes import FakeTutor, MemoryStore, new_document
 
 pytestmark = pytest.mark.db
@@ -97,6 +98,21 @@ def test_create_subject_refuses_a_name_differing_only_in_case(store):
         store.create_subject_with_notes(ALICE, "NETWORKS", [], [])
     store.create_subject(BOB, "networks", [])  # another user's name is no clash
     assert [s.name for s in store.list_subjects(ALICE)] == ["Networks"]
+
+
+def test_names_compare_as_postgres_lower_does(store):
+    # lower() keeps ß, so "Straße" and "STRASSE" are two names (casefold would make them one).
+    for subjects in (store, MemoryStore()):
+        subjects.ensure_profile(ALICE)
+        subjects.create_subject(ALICE, "Straße", [])
+
+        name = ensure_name_free(subjects, ALICE, "STRASSE")
+        subjects.create_subject(ALICE, name, [])
+
+        with pytest.raises(SubjectExists):
+            ensure_name_free(subjects, ALICE, "STRAßE")
+        with pytest.raises(SubjectExists):
+            subjects.create_subject(ALICE, "STRAßE", [])
 
 
 def test_memory_store_refuses_a_name_differing_only_in_case():

@@ -41,10 +41,11 @@ def room_copy(error: DocumentRefused, name: str, filename: str) -> str:
 
 
 def ensure_name_free(store: Store, user_id: UUID, name: str) -> str:
-    """The stripped name; raises SubjectExists (naming the existing subject) if it is taken."""
+    """The stripped name; raises SubjectExists (naming the existing subject) if it is taken.
+    Names are compared with lower(), as the unique index on lower(name) compares them."""
     name = name.strip()
     for existing in store.list_subjects(user_id):
-        if existing.name.casefold() == name.casefold():
+        if existing.name.lower() == name.lower():
             raise SubjectExists(existing.name)
     return name
 

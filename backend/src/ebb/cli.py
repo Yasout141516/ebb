@@ -127,7 +127,7 @@ def _subject(store: PgStore, user_id: UUID, name: str | None) -> Subject:
     if name is None:
         return subjects[0]
     for subject in subjects:
-        if subject.name.casefold() == name.strip().casefold():
+        if subject.name.lower() == name.strip().lower():  # as the unique index compares names
             return subject
     _fail(f"No subject called {name!r}. You have: " + ", ".join(s.name for s in subjects))
 

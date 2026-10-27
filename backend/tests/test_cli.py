@@ -13,7 +13,14 @@ from ebb.config import ConfigError, Settings
 from ebb.domain import ChunkDraft
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.ui import format_day
-from tests.fakes import FakeTutor, FakeWebSearch, MemoryStore, new_document, seed_concept
+from tests.fakes import (
+    FakeTutor,
+    FakeWebSearch,
+    MemoryStore,
+    make_subject,
+    new_document,
+    seed_concept,
+)
 
 runner = CliRunner()
 # Captured at import time, before any test patches cli._tutor or cli._ask.
@@ -117,6 +124,18 @@ def test_unknown_subject_lists_the_real_ones(fakes):
     result = runner.invoke(cli.app, ["status", "Biology"])
     assert result.exit_code == 1
     assert "You have: Networks" in result.output
+
+
+def test_a_subject_is_found_by_its_name_as_the_unique_index_compares_it(fakes):
+    store, _ = fakes
+    user = next(iter(store.profiles))
+    make_subject(store, user, name="STRASSE")
+    make_subject(store, user, name="Straße")  # another subject: lower() keeps ß; listed first
+
+    result = runner.invoke(cli.app, ["status", "strasse"])
+
+    assert result.exit_code == 0, result.output
+    assert "STRASSE" in result.output and "Straße" not in result.output
 
 
 def test_missing_api_key_exits_2(fakes, monkeypatch):

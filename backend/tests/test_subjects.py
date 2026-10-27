@@ -78,3 +78,11 @@ def test_ensure_name_free_strips_and_names_the_existing_subject():
     with pytest.raises(SubjectExists) as err:
         ensure_name_free(store, user, " networks ")
     assert err.value.name == "Networks"
+
+
+def test_ensure_name_free_compares_names_as_the_unique_index_does():
+    store, user = MemoryStore(), uuid4()
+    make_subject(store, user, name="Straße")
+    assert ensure_name_free(store, user, "STRASSE") == "STRASSE"  # lower() keeps ß
+    with pytest.raises(SubjectExists):
+        ensure_name_free(store, user, "STRAßE")
