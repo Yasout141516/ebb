@@ -122,9 +122,9 @@ describe("MemoryPanel", () => {
   });
 
   it("the sheet lists due concepts and every concept, and links to the dashboard", () => {
-    render(<MemorySheetBody concepts={data} now={NOW} />);
+    render(<MemorySheetBody concepts={data} now={NOW} subjectId="s1" />);
     expect(screen.getByRole("heading", { name: "Due for review · 2" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open full progress" })).toHaveAttribute("href", "/progress");
+    expect(screen.getByRole("link", { name: "Open full progress" })).toHaveAttribute("href", "/progress/s1");
     const http = screen.getAllByRole("listitem").find((r) => r.textContent?.includes("HTTP vs HTTPS"))!;
     // The parts are flex items, read as separate words; textContent just runs them together.
     expect(http).toHaveTextContent("HTTP vs HTTPSTide 71% ebbing, about 58% in 3 days without review");
@@ -133,10 +133,10 @@ describe("MemoryPanel", () => {
   });
 
   it("the sheet says it's loading, or that loading failed, with Retry", async () => {
-    const { rerender } = render(<MemorySheetBody concepts={null} now={NOW} />);
+    const { rerender } = render(<MemorySheetBody concepts={null} now={NOW} subjectId="s1" />);
     expect(screen.getByText("Loading memory levels…")).toBeInTheDocument();
     const retry = vi.fn();
-    rerender(<MemorySheetBody concepts={null} failed onRetry={retry} now={NOW} />);
+    rerender(<MemorySheetBody concepts={null} failed onRetry={retry} now={NOW} subjectId="s1" />);
     expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load your memory levels.");
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(retry).toHaveBeenCalled();

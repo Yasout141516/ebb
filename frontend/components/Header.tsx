@@ -65,12 +65,14 @@ export function ThemeToggle({ plain = false }: { plain?: boolean }) {
  */
 export default function Header({ backup = false, minimal = false }: { backup?: boolean; minimal?: boolean }) {
   const pathname = usePathname();
+  // The subject on screen: Study and Progress open its pages.
+  const subject = /^\/(?:study|progress|subjects)\/([^/]+)/.exec(pathname)?.[1];
 
-  const link = (href: string, label: string) => {
-    const current = pathname === href || pathname.startsWith(`${href}/`);
+  const link = (base: string, label: string) => {
+    const current = pathname === base || pathname.startsWith(`${base}/`);
     return (
       <Link
-        href={href}
+        href={subject ? `${base}/${subject}` : base}
         aria-current={current ? "page" : undefined}
         className={`${styles.link} ${current ? styles.current : "hov"}`}
       >

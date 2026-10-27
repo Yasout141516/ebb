@@ -1,6 +1,6 @@
-import Header from "@/components/Header";
+import HomeRedirect from "@/components/HomeRedirect";
 
-// Placeholder so links resolve; the progress dashboard replaces it.
+// /progress with no subject chosen: the newest subject's dashboard (or onboarding).
 export default function Progress() {
-  return <Header backup={false} />;
+  return <HomeRedirect to="/progress" />;
 }

@@ -1,0 +1,181 @@
+/* tpl-Dashboard's root. */
+.page {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  display: flex;
+  flex-direction: column;
+}
+
+.bar {
+  display: none;
+}
+
+.main {
+  flex: 1;
+  padding: clamp(24px, 3.5vw, 48px) clamp(16px, 4vw, 48px);
+  display: flex;
+  justify-content: center;
+}
+
+.inner {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: clamp(32px, 3.2vw, 44px);
+  letter-spacing: -0.015em;
+}
+
+.start {
+  height: 48px;
+  padding: 0 20px;
+  border-radius: 10px;
+  background: var(--primary-bg);
+  color: var(--primary-ink);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.start:hover {
+  color: var(--primary-ink);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.narrow {
+  display: none;
+}
+
+/* Loading */
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.skelTitle {
+  width: 260px;
+  height: 64px;
+}
+
+.skelCard {
+  height: 200px;
+  border-radius: 16px;
+}
+
+.skelChart {
+  height: 420px;
+  border-radius: 16px;
+}
+
+/* 375 px (tpl-DashboardMobile, D6): the bar replaces the header; one column of tiles and lists. */
+@media (max-width: 640px) {
+  .page > header {
+    display: none;
+  }
+
+  .bar {
+    height: 56px;
+    padding: 0 8px 0 16px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .back {
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    text-decoration: none;
+  }
+
+  .main {
+    flex: none;
+    padding: 20px 16px 32px;
+    display: block;
+  }
+
+  .inner {
+    gap: 18px;
+  }
+
+  .titles {
+    gap: 4px;
+  }
+
+  .eyebrow {
+    font-size: 13px;
+  }
+
+  .title {
+    font-size: 32px;
+    letter-spacing: normal;
+  }
+
+  .start,
+  .wide {
+    display: none;
+  }
+
+  .narrow {
+    display: block;
+  }
+
+  .tiles.narrow {
+    display: grid;
+  }
+}
+
+.backIcon {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

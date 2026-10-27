@@ -266,8 +266,14 @@ export function MemoryPeek({ concepts }: { concepts: Concepts | null }) {
   );
 }
 
-/** The bottom sheet's body (375 px), as tpl-WorkspaceMobile lays it out. */
-export function MemorySheetBody({ concepts, failed = false, onRetry, now = new Date() }: Props) {
+/** The bottom sheet's body (375 px), as tpl-WorkspaceMobile lays it out; it links to `subjectId`'s dashboard. */
+export function MemorySheetBody({
+  concepts,
+  subjectId,
+  failed = false,
+  onRetry,
+  now = new Date(),
+}: Props & { subjectId: string }) {
   if (concepts === null) {
     return failed ? (
       <ErrorCard title={LOAD_FAILED} action={onRetry && { label: "Retry", onClick: onRetry }} />
@@ -309,7 +315,7 @@ export function MemorySheetBody({ concepts, failed = false, onRetry, now = new D
           </li>
         ))}
       </ul>
-      <Link href="/progress" className={styles.sheetLink}>
+      <Link href={`/progress/${subjectId}`} className={styles.sheetLink}>
         Open full progress
       </Link>
     </>

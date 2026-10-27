@@ -68,7 +68,7 @@ export default function Workspace({ subjectId, onBackup }: Props) {
         <MemoryPanel concepts={memory.concepts} failed={memory.failed} onRetry={memory.retry} />
       </aside>
       <BottomSheet title="Memory" peek={<MemoryPeek concepts={memory.concepts} />}>
-        <MemorySheetBody concepts={memory.concepts} failed={memory.failed} onRetry={memory.retry} />
+        <MemorySheetBody concepts={memory.concepts} subjectId={subjectId} failed={memory.failed} onRetry={memory.retry} />
       </BottomSheet>
       {disputing && context && (
         <DisputeDialog

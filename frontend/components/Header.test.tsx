@@ -19,6 +19,14 @@ describe("Header", () => {
     expect(screen.getByText("Tutor ready")).toBeInTheDocument();
   });
 
+  it("links to the current subject's study and progress pages", () => {
+    render(<Header backup={false} />);
+    expect(screen.getByRole("link", { name: "Study" })).toHaveAttribute("href", "/study/1");
+    expect(screen.getByRole("link", { name: "Study" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Progress" })).toHaveAttribute("href", "/progress/1");
+    expect(screen.getByRole("link", { name: "Progress" })).not.toHaveAttribute("aria-current");
+  });
+
   it("names the backup model", () => {
     render(<Header backup />);
     expect(screen.getByText("Tutor ready · backup model")).toBeInTheDocument();

@@ -1,0 +1,60 @@
+.level {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.gauge {
+  position: relative;
+  width: 30px;
+  height: 72px;
+  border: 2px solid var(--ink-3);
+  border-radius: 8px;
+}
+
+.fill {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 3px;
+  height: calc((100% - 6px) * var(--tide));
+  border-radius: 4px;
+  background: var(--accent);
+}
+
+.numbers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.change {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* The prototype shows only a rise, in green; a fall takes the due colour, no change stays quiet. */
+.up {
+  color: var(--correct);
+}
+
+.down {
+  color: var(--partial);
+}
+
+.flat {
+  color: var(--ink-2);
+}
+
+.footnote {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.shortChange {
+  font-size: 12px;
+  font-weight: 500;
+}

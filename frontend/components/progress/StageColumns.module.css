@@ -1,0 +1,156 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 26px;
+}
+
+.lede {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.column {
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 180px;
+}
+
+.columnHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.columnTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.columnSub {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.item {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.itemText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.itemName {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.next {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.due {
+  font-size: 12px;
+  color: var(--partial);
+  font-weight: 600;
+}
+
+.empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+
+/* 375 px (tpl-DashboardMobile): a row per stage, its concepts as chips. */
+.compactTitle {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 22px;
+}
+
+.section:has(.rows) {
+  gap: 10px;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.rowHead {
+  width: 86px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.rowTitle {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.rowSub {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.chips {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 13px;
+}

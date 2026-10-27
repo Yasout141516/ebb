@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clockTime, day, formatAgo, stageDots, tidePercent, weekday } from "./format";
+import { clockTime, day, dayMonth, formatAgo, stageDots, tidePercent, weekday } from "./format";
 
 describe("format", () => {
   it("tidePercent", () => {
@@ -25,6 +25,13 @@ describe("format", () => {
   it("day is the CLI's short date, in the given zone", () => {
     expect(day("2026-10-29T09:00:00Z", "UTC")).toBe("Thu 29 Oct");
     expect(day("2026-10-29T23:30:00Z", "Asia/Tokyo")).toBe("Fri 30 Oct");
+  });
+
+  it("dayMonth: a calendar date as it is, an instant in the given zone", () => {
+    expect(dayMonth("2026-09-23")).toBe("23 Sep");
+    expect(dayMonth("2026-01-01")).toBe("1 Jan");
+    expect(dayMonth("2026-09-30T23:30:00Z", "UTC")).toBe("30 Sep");
+    expect(dayMonth("2026-09-30T23:30:00Z", "Asia/Tokyo")).toBe("1 Oct");
   });
 
   it("clockTime", () => {

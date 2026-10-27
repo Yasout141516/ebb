@@ -47,6 +47,22 @@ export function formatAgo(iso: string, now: Date): string {
   return hours === 1 ? "1 hour ago" : `${hours} hours ago`;
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * A day and month as the dashboard writes them ("23 Sep"; Intl's en-GB says "Sept"). A
+ * calendar date ("2026-09-23") is shown as it is; an instant in `tz` (the browser's zone by default).
+ */
+export function dayMonth(iso: string, tz?: string): string {
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (date) return `${Number(date[3])} ${MONTHS[Number(date[2]) - 1]}`;
+  const parts = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "numeric", timeZone: tz }).formatToParts(
+    new Date(iso),
+  );
+  const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return `${part("day")} ${MONTHS[part("month") - 1]}`;
+}
+
 /** A file size in megabytes with one decimal, as the API writes it ("26.4 MB"). */
 export function megabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
