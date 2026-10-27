@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
@@ -217,3 +218,28 @@ class Dispute:
     regrade_explanation: str
     citations: tuple[Citation, ...]
     model_used: str
+
+
+@dataclass(frozen=True)
+class LlmCall:
+    """One attempt the LLM gateway made. A request that retries or falls back writes several,
+    sharing a call_id."""
+
+    id: UUID
+    call_id: UUID
+    request_id: UUID | None
+    at: datetime
+    role: str  # teach | quiz | eval_writer
+    endpoint: str
+    provider: str
+    model: str
+    attempt: int
+    outcome: str  # ok | invalid | error | refused
+    input_tokens: int | None
+    output_tokens: int | None
+    reasoning_tokens: int | None
+    ttft_ms: int | None
+    total_ms: int
+    cost_usd: Decimal | None
+    error_kind: str | None
+    backup: bool = False  # served by the role's backup model

@@ -18,6 +18,7 @@ from ebb.domain import (
     DisputeOutcome,
     Document,
     GradeValue,
+    LlmCall,
     NewDocument,
     Question,
     ResumableSession,
@@ -264,6 +265,17 @@ class Store(Protocol):
     def take_ai_call(self, user_id: UUID, day: date, limit: int) -> bool:
         """Count one AI call for `day` and return True while fewer than `limit` have been made;
         otherwise return False and change nothing."""
+        ...
+
+    def record_llm_call(self, user_id: UUID, call: LlmCall) -> None:
+        """Keep one gateway attempt."""
+        ...
+
+    def llm_calls(
+        self, user_id: UUID, since: datetime, until: datetime, all_tenants: bool = False
+    ) -> list[LlmCall]:
+        """The user's attempts with `since <= at < until`, oldest first. `all_tenants` drops the
+        user filter; only the dev-only costs page asks for that."""
         ...
 
     def resumable_session(

@@ -3,6 +3,7 @@
 import threading
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
@@ -24,6 +25,7 @@ from ebb.domain import (
     DisputeOutcome,
     DisputeReason,
     GradeValue,
+    LlmCall,
     NewDocument,
     Option,
     Question,
@@ -67,6 +69,7 @@ def test_migrations_apply_once(pg_pool):
         "002_spaced_review.sql",
         "003_notes_citations_disputes.sql",
         "004_web_app.sql",
+        "005_gateway_learn.sql",
     ]
 
 
@@ -1076,6 +1079,72 @@ def test_take_ai_call_counts_per_day_in_the_users_zone(usage_store):
     assert usage_store.take_ai_call(ALICE, before_midnight, 1) is True
     assert usage_store.take_ai_call(ALICE, before_midnight, 1) is False
     assert usage_store.take_ai_call(ALICE, after_midnight, 1) is True
+
+
+# --- per-attempt LLM call records -------------------------------------------------------
+
+
+def llm_call(at: datetime, **fields) -> LlmCall:
+    base = dict(
+        id=uuid4(),
+        call_id=uuid4(),
+        request_id=None,
+        at=at,
+        role="teach",
+        endpoint="lesson",
+        provider="openrouter",
+        model="m",
+        attempt=1,
+        outcome="error",
+        input_tokens=None,
+        output_tokens=None,
+        reasoning_tokens=None,
+        ttft_ms=None,
+        total_ms=120,
+        cost_usd=None,
+        error_kind="timeout",
+        backup=False,
+    )
+    return LlmCall(**{**base, **fields})
+
+
+def test_record_and_list_llm_calls_round_trip(usage_store):
+    t = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    failed = llm_call(t)
+    ok = llm_call(
+        t + timedelta(seconds=1),
+        request_id=uuid4(),
+        attempt=2,
+        outcome="ok",
+        input_tokens=100,
+        output_tokens=50,
+        reasoning_tokens=7,
+        ttft_ms=300,
+        cost_usd=Decimal("0.00012345"),
+        error_kind=None,
+        backup=True,
+    )
+    usage_store.record_llm_call(ALICE, ok)
+    usage_store.record_llm_call(ALICE, failed)
+
+    got = usage_store.llm_calls(ALICE, t - timedelta(hours=1), t + timedelta(hours=1))
+
+    assert got == [failed, ok]  # ordered by time; nullable fields stay None
+
+
+def test_llm_calls_filters_by_user_and_range(usage_store):
+    t = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+    early, inside, late = (llm_call(t + timedelta(hours=h)) for h in (-2, 0, 2))
+    theirs = llm_call(t)
+    for call in (early, inside, late):
+        usage_store.record_llm_call(ALICE, call)
+    usage_store.record_llm_call(BOB, theirs)
+    since, until = t - timedelta(hours=1), t + timedelta(hours=1)
+
+    assert usage_store.llm_calls(ALICE, since, until) == [inside]
+    assert usage_store.llm_calls(BOB, since, until) == [theirs]
+    everyone = usage_store.llm_calls(ALICE, since, until, all_tenants=True)
+    assert {c.id for c in everyone} == {inside.id, theirs.id}
 
 
 # --- who drives a session, in either store ------------------------------------------------

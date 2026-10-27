@@ -229,7 +229,7 @@ def test_004_renames_a_duplicate_subject_and_keeps_its_data(pg_empty_pool):
             (ALICE, newer),
         )
         conn.execute("update subjects set created_at = %s where id = %s", (T, ids["subject"]))
-        assert migrate(conn) == ["004_web_app.sql"]
+        assert migrate(conn, until="004_web_app.sql") == ["004_web_app.sql"]
         names = {r["id"]: r["name"] for r in conn.execute("select id, name from subjects")}
         kept = conn.execute(
             "select count(*) as n from concepts where subject_id = %s", (newer,)
@@ -271,6 +271,42 @@ def test_004_adds_driver_columns_and_llm_usage(pg_pool):
         }
     assert row["calls"] == 0
     assert {"driver", "driver_seen_at"} <= cols
+
+
+def test_migration_005_applies_on_004(pg_empty_pool):
+    with pg_empty_pool.connection() as conn:
+        migrate(conn, until="004_web_app.sql")
+        ids = seed_milestone_1(conn)
+        assert migrate(conn) == ["005_gateway_learn.sql"]
+        conn.execute(
+            "insert into llm_calls (call_id, user_id, at, role, endpoint, provider, model,"
+            " attempt, outcome, total_ms) values (%s, %s, %s, 'teach', 'lesson', 'p', 'm',"
+            " 1, 'ok', 5)",
+            (uuid4(), ALICE, T),
+        )
+        row = conn.execute("select backup, cost_usd, request_id from llm_calls").fetchone()
+        conn.execute(
+            "insert into concept_lessons (user_id, concept_id, markdown, model, written_at)"
+            " values (%s, %s, '# x', 'm', %s)",
+            (ALICE, ids["c1"], T),
+        )
+        lesson = conn.execute("select citations, learned_at from concept_lessons").fetchone()
+        insert_exchange(conn, ids["c1"], 1)
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            insert_exchange(conn, ids["c1"], 1)
+        conn.execute("delete from concepts where id = %s", (ids["c1"],))
+        left = conn.execute("select count(*) as n from concept_lessons").fetchone()["n"]
+    assert row == {"backup": False, "cost_usd": None, "request_id": None}
+    assert lesson == {"citations": [], "learned_at": None}
+    assert left == 0
+
+
+def insert_exchange(conn, concept_id, position) -> None:
+    conn.execute(
+        "insert into lesson_exchanges (user_id, concept_id, position, kind, question, answer,"
+        " asked_at) values (%s, %s, %s, 'typed', 'q', 'a', %s)",
+        (ALICE, concept_id, position, T),
+    )
 
 
 def test_new_tables_reject_cross_user_rows(pg_pool):

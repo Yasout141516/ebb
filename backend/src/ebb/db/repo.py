@@ -25,6 +25,7 @@ from ebb.domain import (
     DisputeReason,
     Document,
     GradeValue,
+    LlmCall,
     NewDocument,
     Question,
     ResumableSession,
@@ -626,6 +627,26 @@ class PgStore:
                 (user_id, day, limit),
             ).fetchone()
         return row is not None
+
+    def record_llm_call(self, user_id: UUID, call: LlmCall) -> None:
+        columns = list(asdict(call))
+        with self.pool.connection() as conn:
+            conn.execute(
+                f"insert into llm_calls (user_id, {', '.join(columns)})"
+                f" values (%s{', %s' * len(columns)})",
+                (user_id, *(getattr(call, c) for c in columns)),
+            )
+
+    def llm_calls(
+        self, user_id: UUID, since: datetime, until: datetime, all_tenants: bool = False
+    ) -> list[LlmCall]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select * from llm_calls where (user_id = %s or %s) and at >= %s and at < %s"
+                " order by at, id",
+                (user_id, all_tenants, since, until),
+            ).fetchall()
+        return [LlmCall(**{k: v for k, v in row.items() if k != "user_id"}) for row in rows]
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime
