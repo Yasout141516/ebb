@@ -3,7 +3,7 @@
 Minor items found while building and reviewing milestone 4 that were deliberately left for later,
 grouped. Earlier items: [m1-followups.md](m1-followups.md), [m2-followups.md](m2-followups.md),
 [m3-followups.md](m3-followups.md). The decisions taken on the owner's behalf during milestone 4
-are in the SDD ledger (rulings R1–R42).
+are in the SDD ledger (rulings R1–R46).
 
 ## Worth a look with the owner
 
@@ -28,7 +28,7 @@ are in the SDD ledger (rulings R1–R42).
   labels in the merged prompts.
 - `"new"` (stage 0) is counted inline in `cli.py`; a `mastery.new_concepts` helper would keep it
   in one place.
-- `study.py` is past R14's length guideline (323 lines).
+- `study.py` is past R14's length guideline (341 lines).
 - Offer, discard and hold lock probes can make a concurrent real reply hit `SessionBusy` briefly.
 - A malformed dispute id reaching `_applied` raises `ValueError` (the route validates it first).
 - `_is_refusal`'s `additional_kwargs["refusal"]` check is a no-op for `langchain_groq`, which
@@ -47,11 +47,13 @@ are in the SDD ledger (rulings R1–R42).
 
 - `LookupError` catch-all turns an accidental `KeyError`/`IndexError` in a route into a 404.
 - `POST /subjects` answering 503 (no tutor) is untested; no test for newest-first subject order.
-- `list_subjects` runs `list_concepts` per subject (N+1; fine at this scale).
+- `list_subjects` runs `list_concepts` per subject, so `GET /subjects` is N+1, and the workspace
+  refetches the sources after every turn (fine for one user; R46).
 - Concurrent uploads to one draft are untested; open upload streams hold threadpool workers
   (pool of 40); a bad file sent to an expired draft gets the file refusal before the 410.
 - Oversized uploads without a `Content-Length` header are still spooled before refusal (R21).
-- `build_progress` filters answers per concept (O(concepts x answers)); no store-level test that
+- `build_progress` filters answers per concept (O(concepts x answers)) and `answer_times` loads
+  the whole answer history (fine for one user; R46); no store-level test that
   voided answers are excluded from the streak and `enough_days`; API tests run in UTC only.
 - The tide replay trusts the caller to pass one concept's answers; `average_tide` has chained
   ifs; `tide_line` grid edges and `start >= now` are untested.
@@ -75,6 +77,8 @@ are in the SDD ledger (rulings R1–R42).
 - A `TypeError` is reported as "Can't reach the API."; reducers run in `setState` updaters
   without an error boundary.
 - Onboarding: Start over during an in-flight `createDraft` is unhandled.
+- A duplicated browser tab copies `sessionStorage`, so the two tabs share one driver id and both
+  can drive the same session (R46).
 - Dark-mode dashboard screenshots are from round 1 of Task 25.
 - `npm audit` reports a high advisory in `eslint-config-next`'s transitive `braces` (dev only).
 
