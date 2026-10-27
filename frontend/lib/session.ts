@@ -109,10 +109,15 @@ export function forgetThread(subjectId: string): void {
 
 // The thread's cards, changed only through these.
 
+/** The latest question or summary: where the thread stands. */
+const lastTurn = (cards: Card[]) => cards.findLast((c) => c.kind === "question" || c.kind === "summary");
+
+const waitingIn = (last: Card | undefined): QuestionCard | null =>
+  last?.kind === "question" && last.answer === null ? last : null;
+
 /** The question waiting for an answer, if one is. */
 export function waitingQuestion(cards: Card[]): QuestionCard | null {
-  const last = cards.findLast((c) => c.kind === "question" || c.kind === "summary");
-  return last?.kind === "question" && last.answer === null ? last : null;
+  return waitingIn(lastTurn(cards));
 }
 
 const closeDisputes = (cards: Card[]): Card[] =>
@@ -152,18 +157,17 @@ const questionCard = (payload: TurnPayload): QuestionCard => ({
  * turn the session is waiting on, fetched again rather than sent in reply to an answer.
  */
 export function applyTurn(cards: Card[], payload: TurnPayload, reconnected = false): Card[] {
+  const last = lastTurn(cards);
+  const waiting = waitingIn(last);
   const checking = cards.findLast((c) => c.kind === "grade" && c.dispute === "checking");
   if (payload.dispute_result && checking) {
     // The re-check's result goes on the disputed card; the question is shown again.
-    const waiting = waitingQuestion(cards);
     const kept = cards
       .filter((c) => c !== waiting)
       .map((c) => (c === checking ? { ...c, dispute: payload.dispute_result } : c));
     return [...kept, ...feedbackCards(null, null, payload.notices, false), questionCard(payload)];
   }
-  const waiting = waitingQuestion(cards);
   if (waiting && sameQuestion(waiting, payload)) return cards; // a reconnect: already shown
-  const last = cards.findLast((c) => c.kind === "question" || c.kind === "summary");
   if (reconnected && last?.kind === "question" && last.result === null && sameQuestion(last, payload)) {
     // The answer sent to it never counted (lost on the way): it is still the question waiting.
     return cards.map((c) => (c === last ? { ...c, answer: null } : c));
