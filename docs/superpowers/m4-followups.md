@@ -125,3 +125,48 @@ Judged too large or too risky for a no-behaviour-change pass:
 - `CitationChips`' popover using `useFocusReturn`: the popover stays mounted when another chip is
   opened, so the hook would return focus to the first chip, and a remount hands the hook the
   wrong opener. It keeps its own focus-return for now.
+
+## Found in use (2026-10-27)
+
+- **Correct option is almost always option 1.** Options are stored in the order the LLM writes
+  them (`llm/tutor.py` builds `Option`s straight from the draft; nothing shuffles), so the model's
+  position bias reaches the learner. Fix in code, not the prompt: shuffle the four options after
+  validation, before the question is saved. Selecting by number in `grading.py` keeps working
+  because it reads the stored order.
+- **Ebb is sometimes slow.** Suspected: free-tier Groq latency and rate limits (the primary model
+  is `openai/gpt-oss-120b`), with the fallback model taking over on errors. Not measured yet:
+  time one question and one grade per provider before changing anything.
+- **Switch models when the main one lags.** Today the fallback (Mistral) only triggers on errors
+  such as rate limits; a slow but successful Groq call waits up to `REQUEST_TIMEOUT_SECONDS`
+  (60, `llm/tutor.py`) before anything changes. Options: lower the timeout so a slow call falls
+  back sooner; or track recent latency per provider and prefer the faster one for a while (code
+  decides, per the project's design rule). OpenRouter is a candidate extra provider: one key,
+  many models, OpenAI-compatible API.
+- **Log tokens and time per LLM call** (provider, model, method, input/output tokens, seconds,
+  whether it fell back or retried). Do this first: it turns "slow" and "uses many tokens" into
+  numbers. Then, in this order, by likely effect: lower the reasoning effort on
+  `gpt-oss-120b` (grading and teaching rarely need much); trim `generate_questions` output
+  (fewer questions per call, shorter "why" lines, generate when due); cap the "avoid" list so
+  the prompt stays flat; reduce validation retries (each of the 3 attempts is a full call);
+  try a smaller model for concept extraction and short-answer grading, checked against the
+  grading eval (baseline 70%).
+
+## Feature idea: learn phase before quizzing (brainstorm in progress, 2026-10-27)
+
+Not designed or approved yet; what the owner has said so far:
+
+- Today a new concept starts with a question, and a lesson only follows a wrong answer
+  (`routing.after_mastery`). Owner wants teaching first, in more detail, with quizzing as its own
+  separate route after it.
+- Journey: open the app, upload subject materials, then a **learn phase** per concept: a LangChain
+  graph does a web search and combines it with the notes, and writes the lesson in the owner's
+  `/teach-me` format (`~/.claude/skills/teach-me/SKILL.md`: title, TL;DR, built from fundamentals,
+  analogy, worked example, depth and traps, 2 to 4 check-yourself questions), scaled to the
+  topic's depth.
+- The check-yourself questions are not answered by default, but Ebb answers them when asked.
+  Ebb also suggests follow-up questions, which it answers too; the owner can ask their own.
+- Then the learner moves on to the quiz route (MCQs first).
+- Conflicts with current code: the teach prompt is capped at 120 words of plain text, and the web
+  app renders no markdown. Open guesses: sources shown as links and citations; a "ready, quiz me"
+  button; learn-phase Q&A never changes mastery or the review schedule; relation to the "Chat"
+  study mode in the design PDF (not built yet).
