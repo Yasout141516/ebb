@@ -349,3 +349,27 @@ def test_a_file_still_finding_keeps_a_concept_whose_file_was_removed_meanwhile()
     store = _store()
     subject_id = drafts.commit(draft, store, USER)
     assert [c.name for c in store.list_concepts(USER, subject_id)] == ["Cells"]
+
+
+def test_each_uploaded_file_has_its_own_request_id():
+    from ebb.llm import request
+
+    seen: list[tuple[UUID | None, UUID | None]] = []
+    tutor = FakeTutor(note_concepts=[[("Cells", None)], [("Genes", None)]])
+    original = tutor.concepts_from_notes
+
+    def recording(*args, **kwargs):
+        seen.append(request.current())
+        return original(*args, **kwargs)
+
+    tutor.concepts_from_notes = recording
+    drafts = _drafts(tutor)
+    draft = drafts.create("Biology", USER)
+
+    list(drafts.add_file(draft, "a.txt", _text("Cells"), USER))
+    list(drafts.add_file(draft, "b.txt", _text("Genes"), USER))
+
+    [(first_id, first_user), (second_id, second_user)] = seen
+    assert first_id is not None and second_id is not None and first_id != second_id
+    assert first_user == second_user == USER
+    assert request.current() == (None, None)

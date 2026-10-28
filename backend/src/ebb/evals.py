@@ -7,6 +7,7 @@ writer was asked to aim for, not a person's verdict), then frozen in a JSON Line
 import json
 import time
 from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -16,6 +17,7 @@ from ebb.chunking import chunk_notes
 from ebb.citations import note_sources, source_from_dict, source_to_dict, verify
 from ebb.domain import Chunk, Grade, GradeValue, Question, Source
 from ebb.grading import GRADE_RANK
+from ebb.llm.request import request_scope
 from ebb.llm.tutor import Tutor, TutorRefused, TutorUnavailable
 from ebb.notes import read_notes
 
@@ -125,12 +127,18 @@ def _note_chunks(notes_path: Path) -> list[Chunk]:
     ]
 
 
+def _own_request(user_id: UUID | None) -> AbstractContextManager[object]:
+    """One eval case is one request of `user_id`; with no user (nothing recorded), no scope."""
+    return nullcontext() if user_id is None else request_scope(user_id)
+
+
 def build_cases(
     writer: Tutor,
     topics: Sequence[str],
     notes_path: Path,
     grounded: int = GROUNDED_CASES,
     sleep: Callable[[float], None] = time.sleep,
+    user_id: UUID | None = None,
 ) -> list[EvalCase]:
     """One case per topic, then `grounded` cases on passages of the notes.
 
@@ -147,7 +155,8 @@ def build_cases(
     for number, (topic, chunk) in enumerate(jobs, start=1):
         target = _TARGETS[(number - 1) % len(_TARGETS)]
         try:
-            made = writer.write_eval_case(topic, target, chunk.content if chunk else None)
+            with _own_request(user_id):
+                made = writer.write_eval_case(topic, target, chunk.content if chunk else None)
         except TutorUnavailable:
             sleep(PACE_SECONDS)
             continue
@@ -243,12 +252,15 @@ def run_cases(
     cases: Sequence[EvalCase],
     sleep: Callable[[float], None] = time.sleep,
     progress: Callable[[int, int], None] = lambda number, total: None,
+    user_id: UUID | None = None,
 ) -> list[Grade | None]:
-    """Grade every case; None where every attempt failed."""
+    """Grade every case; None where every attempt failed. Each case, retries included, is
+    one request of `user_id`."""
     grades: list[Grade | None] = []
     for number, case in enumerate(cases, start=1):
         progress(number, len(cases))
-        grades.append(_grade_case(grader, case, sleep))
+        with _own_request(user_id):
+            grades.append(_grade_case(grader, case, sleep))
         sleep(PACE_SECONDS)
     return grades
 

@@ -17,6 +17,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command, StateSnapshot
 
 from ebb.graph.state import fill_defaults, fill_payload
+from ebb.llm.request import request_scope
 from ebb.mastery import reviews_due
 from ebb.store import Store
 from ebb.ui import greeting
@@ -283,8 +284,9 @@ class StudySessions:
 
     def _stream(self, user_id: UUID, thread_id: str, driver: str, graph_input: Any) -> _Run:
         """The graph's run on `graph_input`, as steps, ending in the turn it stopped at."""
-        stream = self.graph.stream(
-            graph_input, _config(thread_id), stream_mode=["custom", "values"]
+        stream = self._in_request(
+            user_id,
+            self.graph.stream(graph_input, _config(thread_id), stream_mode=["custom", "values"]),
         )
         values: dict[str, Any] = {}
         try:
@@ -307,6 +309,21 @@ class StudySessions:
             payload = values["__interrupt__"][0].value
             return self._pending(user_id, thread_id, driver, payload)
         return self._finished(user_id, values)
+
+    @staticmethod
+    def _in_request[T](user_id: UUID, stream: Iterator[T]) -> Iterator[T]:
+        """`stream` with every model call it makes tagged with one request id for the turn.
+        The API advances a turn's generator one next() at a time, each on a worker thread
+        with its own copy of the context, so the scope is entered afresh around each advance
+        of the graph rather than held across the yields."""
+        request_id = uuid4()
+        while True:
+            with request_scope(user_id, request_id):
+                try:
+                    item = next(stream)
+                except StopIteration:
+                    return
+            yield item
 
     def _pending(
         self, user_id: UUID, thread_id: str, driver: str, payload: dict[str, Any]

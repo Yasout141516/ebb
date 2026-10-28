@@ -21,6 +21,7 @@ from ebb.api.notices import SOMETHING_WRONG
 from ebb.config import ConfigError
 from ebb.db.pool import DATABASE_DOWN
 from ebb.domain import NewDocument
+from ebb.llm.request import request_scope
 from ebb.llm.tutor import AllProvidersExhausted, Tutor, TutorRefused, TutorUnavailable
 from ebb.notes import NotesError, prepare_bytes
 from ebb.store import MAX_DOCUMENTS, Store
@@ -144,7 +145,8 @@ class Drafts:
 
         def work(say: Say) -> None:
             try:
-                self._process(draft, filename, data, turn, say)
+                with request_scope(user_id):  # this file's own request, on its own thread
+                    self._process(draft, filename, data, turn, say)
             finally:
                 if turn.is_set():
                     done.set()

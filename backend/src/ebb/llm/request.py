@@ -9,14 +9,17 @@ _current: ContextVar[tuple[UUID, UUID] | None] = ContextVar("ebb_request", defau
 
 
 @contextmanager
-def request_scope(user_id: UUID) -> Iterator[UUID]:
-    """Every model call inside is tagged with one fresh request id and this user. A nested
-    scope keeps the outer request (and its user)."""
+def request_scope(user_id: UUID, request_id: UUID | None = None) -> Iterator[UUID]:
+    """Every model call inside is tagged with one request id (fresh unless given) and this
+    user. A nested scope keeps the outer request (and its user).
+
+    Pass `request_id` to re-enter one request from a context that doesn't carry it: a lazy
+    generator advanced step by step on different threads loses a contextvar between steps."""
     outer = _current.get()
     if outer is not None:
         yield outer[0]
         return
-    request_id = uuid4()
+    request_id = request_id or uuid4()
     token = _current.set((request_id, user_id))
     try:
         yield request_id

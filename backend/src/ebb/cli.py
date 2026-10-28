@@ -25,6 +25,7 @@ from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
 from ebb.domain import NewDocument, Subject
+from ebb.llm.request import request_scope
 from ebb.store import (
     MAX_DOCUMENTS,
     DocumentRefused,
@@ -293,7 +294,8 @@ def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[
     known: list[tuple[str, str]] = []
     reports: list[tuple[NewDocument, NotesReport]] = []
     for document in documents:
-        report = _finding_concepts(partial(find_note_concepts, tutor, topic, known, document))
+        with request_scope(settings.ebb_dev_user_id):  # one request per file
+            report = _finding_concepts(partial(find_note_concepts, tutor, topic, known, document))
         known += report.fresh
         reports.append((document, report))
     try:
@@ -522,7 +524,14 @@ def eval_build(
     expected = len(EVAL_TOPICS) + GROUNDED_CASES
     console.print(f"Writing {expected} cases; this takes a few minutes.")
     try:
-        cases = build_cases(writer, EVAL_TOPICS, notes, GROUNDED_CASES, sleep=_pace)
+        cases = build_cases(
+            writer,
+            EVAL_TOPICS,
+            notes,
+            GROUNDED_CASES,
+            sleep=_pace,
+            user_id=settings.ebb_dev_user_id,
+        )
     except NotesError as error:
         _fail(str(error))
     save_cases(cases, dataset)
@@ -556,7 +565,15 @@ def eval_run(
     def progress(number: int, total: int) -> None:
         console.print(f"Grading {number}/{total}…")
 
-    grades = _configured(lambda: run_cases(grader, cases, sleep=_pace, progress=progress))
+    grades = _configured(
+        lambda: run_cases(
+            grader,
+            cases,
+            sleep=_pace,
+            progress=progress,
+            user_id=settings.ebb_dev_user_id,
+        )
+    )
     result = score(cases, grades)
     writer = cases[0].writer_model if cases else "the writer model"
     text = report_markdown(result, model, _today(), _dispute_counts(settings, store), writer)

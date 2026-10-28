@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from ebb.chunking import digest
 from ebb.domain import Concept, NewDocument, Subject
+from ebb.llm.request import request_scope
 from ebb.store import MAX_DOCUMENTS, DocumentRefused, Store, SubjectExists, merge_note_concepts
 
 if TYPE_CHECKING:
@@ -73,7 +74,8 @@ def subject_from_topic(
     """Create a subject from a topic alone. Raises SubjectExists, before any AI call when
     the name is already taken."""
     topic = ensure_name_free(store, user_id, topic)
-    generated = tutor.extract_concepts(topic)
+    with request_scope(user_id):
+        generated = tutor.extract_concepts(topic)
     concepts = [(c.name, c.description) for c in generated.value]
     return store.create_subject(user_id, topic, concepts), concepts
 
@@ -98,6 +100,7 @@ def add_notes(
     subject is full or already has the file."""
     ensure_room(store, user_id, subject, document)
     known = [(c.name, c.description) for c in store.list_concepts(user_id, subject.id)]
-    report = find_note_concepts(tutor, subject.name, known, document)
+    with request_scope(user_id):
+        report = find_note_concepts(tutor, subject.name, known, document)
     store.add_document(user_id, subject.id, document, report.fresh)
     return report

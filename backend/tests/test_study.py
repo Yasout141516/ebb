@@ -2,6 +2,8 @@
 
 import io
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,6 +17,7 @@ from rich.console import Console
 
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
+from ebb.llm import request
 from ebb.study import (
     LEASE,
     Event,
@@ -558,3 +561,59 @@ def test_a_long_turn_renews_its_lease_when_it_ends(s):
     assert s.store.session_driver(USER, thread_id, s.clock(), LEASE) == "tab-a"
     s.clock.advance(seconds=45)  # past the start's lease, inside the renewed one
     assert s.store.session_driver(USER, thread_id, s.clock(), LEASE) == "tab-a"
+
+
+def _advance_in_workers(events: Iterator[Event]) -> list[Event]:
+    """Every next() on its own worker thread with a copy of the caller's context, as the
+    API's run_in_threadpool does."""
+    got: list[Event] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        while True:
+            try:
+                got.append(pool.submit(copy_context().run, next, events).result())
+            except StopIteration:
+                return got
+
+
+def _record_requests(tutor: FakeTutor, seen: list[tuple[str, UUID | None, UUID | None]]) -> None:
+    for name in ("grade", "teach", "generate_questions"):
+        original = getattr(tutor, name)
+
+        def wrapped(*args, _name=name, _original=original, **kwargs):
+            request_id, user_id = request.current()
+            seen.append((_name, request_id, user_id))
+            return _original(*args, **kwargs)
+
+        setattr(tutor, name, wrapped)
+
+
+def _wrong(pending: Event) -> str:
+    assert isinstance(pending, Pending)
+    return "2" if pending.payload["question"]["options"] else "wrong"
+
+
+def test_one_quiz_turn_shares_one_request_id(s):
+    seen: list[tuple[str, UUID | None, UUID | None]] = []
+    _record_requests(s.tutor, seen)
+    events = s.sessions.start(USER, s.subject_id, "tab-a")[2]
+    thread_id = "unset"
+    first = _advance_in_workers(events)[-1]
+    assert isinstance(first, Pending)
+    thread_id = [row for row in s.store.sessions.values()][0]["thread_id"]
+    seen.clear()
+
+    miss = {**right(first), "answer": _wrong(first)}
+    second = _advance_in_workers(s.sessions.reply(USER, thread_id, "tab-a", miss))[-1]
+    first_turn = list(seen)
+    seen.clear()
+    assert isinstance(second, Pending)
+    again = {**right(second), "answer": _wrong(second)}
+    _advance_in_workers(s.sessions.reply(USER, thread_id, "tab-a", again))
+
+    assert {name for name, _, _ in first_turn} >= {"grade", "teach"}
+    assert len({request_id for _, request_id, _ in first_turn}) == 1
+    assert None not in {request_id for _, request_id, _ in first_turn}
+    assert {user for _, _, user in first_turn} == {USER}
+    next_turn = {request_id for _, request_id, _ in seen}
+    assert len(next_turn) == 1 and None not in next_turn
+    assert next_turn != {first_turn[0][1]}
