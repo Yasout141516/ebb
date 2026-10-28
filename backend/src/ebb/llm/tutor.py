@@ -27,7 +27,7 @@ from ebb.grading import cap_for_misconception
 from ebb.llm.gateway import EXHAUSTED_NOTICE as EXHAUSTED_NOTICE
 from ebb.llm.gateway import REFUSED_NOTICE as REFUSED_NOTICE
 from ebb.llm.gateway import AllProvidersExhausted as AllProvidersExhausted
-from ebb.llm.gateway import Gateway, Generated, NullRecorder, Recorder
+from ebb.llm.gateway import Endpoint, Gateway, Generated, NullRecorder, Recorder
 from ebb.llm.gateway import TutorRefused as TutorRefused
 from ebb.llm.gateway import TutorUnavailable as TutorUnavailable
 from ebb.llm.providers import Provider, Role, chat_models
@@ -307,7 +307,7 @@ class LangChainTutor:
     def _run[T](
         self,
         role: Role,
-        endpoint: str,
+        endpoint: Endpoint,
         schema: type[BaseModel] | None,
         prompt: str,
         creative: bool,
@@ -374,6 +374,7 @@ class LangChainTutor:
             return questions
 
         schema: type[BaseModel]
+        endpoint: Endpoint
         values = {"name": _line(concept.name), "description": _line(concept.description)}
         if rewrite:
             template, endpoint = "rewrite_questions", "rewrite_questions"

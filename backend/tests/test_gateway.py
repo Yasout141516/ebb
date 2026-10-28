@@ -76,7 +76,10 @@ class Streamed(BaseChatModel):
         self.calls += 1
         if isinstance(reply, BaseException):
             raise reply
-        for seconds, chunk in reply:
+        for item in reply:
+            if isinstance(item, BaseException):  # the stream breaks off here
+                raise item
+            seconds, chunk = item
             self.clock.advance(seconds)
             yield ChatGenerationChunk(message=chunk)
 
@@ -132,17 +135,21 @@ def test_prices(monkeypatch):
     price = Price(
         Decimal("0.15"), Decimal("0.60"), "https://example.test/pricing", NOW.date(), True
     )
-    monkeypatch.setattr(prices, "PRICES", {"main": price, "backup": price})
+    table = {("groq", "main"): price, ("groq", "backup"): price, ("mistral", "backup"): price}
+    monkeypatch.setattr(prices, "PRICES", table)
 
 
 def gateway(
-    clock: Clock, *chain: Provider, recorder: Any = None, attempts: int = 3
+    clock: Clock,
+    *chain: Provider,
+    recorder: Any = None,
+    attempts: int = 3,
+    sleep: Any = lambda seconds: None,
 ) -> tuple[Gateway, Recording]:
     recording = recorder or Recording()
+    chains = {"quiz": list(chain), "teach": list(chain)}
     return (
-        Gateway(
-            {"quiz": list(chain), "teach": list(chain)}, recording, attempts, clock, lambda: NOW
-        ),
+        Gateway(chains, recording, attempts, clock, lambda: NOW, sleep, jitter=lambda: 0.5),
         recording,
     )
 
@@ -418,14 +425,113 @@ def test_request_scope_tags_rows():
 
 
 def test_cost_is_tokens_times_the_price_per_million():
-    assert prices.cost("main", 1200, 300) == COST
-    assert prices.cost("main", None, 300) is None
-    assert prices.cost("main", 1200, None) is None
-    assert prices.cost("nobody/knows", 1200, 300) is None
+    assert prices.cost("groq", "main", 1200, 300) == COST
+    assert prices.cost("groq", "main", None, 300) is None
+    assert prices.cost("groq", "main", 1200, None) is None
+    assert prices.cost("groq", "nobody/knows", 1200, 300) is None
+
+
+def test_a_price_belongs_to_one_provider(monkeypatch):
+    monkeypatch.setattr(prices, "PRICES", REAL_PRICES)
+    model = "openai/gpt-oss-120b"
+    assert prices.cost("groq", model, 1_000_000, 1_000_000) == Decimal("0.75")
+    assert prices.cost("openrouter", model, 1_000_000, 1_000_000) is None
+
+
+def test_the_same_model_on_another_provider_records_no_cost():
+    clock = Clock()
+    model = Streamed(replies=[tool_reply(VALID)], clock=clock, streaming=True)
+    gw, recording = gateway(clock, provider("main", model, "openrouter"))
+
+    gw.call("quiz", "grade", Pick, "prompt", creative=False, parse=lambda p: p)
+
+    [row] = recording.calls
+    assert (row.provider, row.input_tokens, row.cost_usd) == ("openrouter", 1200, None)
 
 
 def test_price_table_names_its_sources():
-    for model, price in REAL_PRICES.items():
-        assert price.source.startswith("https://"), model
-        assert price.as_of == date(2026, 10, 28)
+    for key, price in REAL_PRICES.items():
+        assert price.source.startswith("https://"), key
+        assert price.as_of <= date.today()
         assert price.input_per_m > 0 and price.output_per_m > 0
+
+
+def test_retries_wait_with_exponential_backoff_on_the_same_provider_only():
+    clock, waits = Clock(), []
+    main = Streamed(replies=[tool_reply(INVALID)] * 3, clock=clock, streaming=True)
+    backup = Streamed(replies=[tool_reply(INVALID), tool_reply(VALID)], clock=clock, streaming=True)
+    gw, recording = gateway(
+        clock, provider("main", main), provider("backup", backup), sleep=waits.append
+    )
+
+    gw.call("quiz", "grade", Pick, "prompt", creative=False, parse=lambda p: p)
+
+    # 1 s then 2 s, each plus the jitter (0.5 here); none before switching to the backup.
+    assert waits == [1.5, 2.5, 1.5]
+    assert len(recording.calls) == 5
+
+
+def test_backoff_jitter_stays_within_a_second(monkeypatch):
+    clock, waits = Clock(), []
+    main = Streamed(replies=[tool_reply(INVALID)] * 3, clock=clock, streaming=True)
+    gw = Gateway({"quiz": [provider("main", main)]}, Recording(), 3, clock, sleep=waits.append)
+
+    with pytest.raises(AllProvidersExhausted):
+        gw.call("quiz", "grade", Pick, "prompt", creative=False, parse=lambda p: p)
+
+    first, second = waits
+    assert 1 <= first < 2 and 2 <= second < 3
+
+
+def test_text_already_streamed_is_not_retried_or_fallen_back():
+    clock = Clock()
+    broken = text_reply("Caching", " saves")[:2] + [httpx.ReadTimeout("stalled")]
+    main = Streamed(replies=[broken, text_reply("Again.")], clock=clock, streaming=True)
+    backup = Streamed(replies=[text_reply("Backup.")], clock=clock, streaming=True)
+    gw, recording = gateway(clock, provider("main", main), provider("backup", backup))
+    pieces: list[str] = []
+
+    with pytest.raises(AllProvidersExhausted):
+        gw.call("teach", "reteach", None, "p", creative=True, parse=str, on_text=pieces.append)
+
+    assert pieces == ["Caching", " saves"]  # the learner never sees a second reply spliced on
+    assert [(r.outcome, r.error_kind) for r in recording.calls] == [("error", "ReadTimeout")]
+    assert (main.calls, backup.calls) == (1, 0)
+
+
+def test_failure_before_any_text_retries_and_falls_back_as_usual():
+    clock = Clock()
+    error = httpx.ReadTimeout("slow")
+    main = Streamed(replies=[[error], [error]], clock=clock, streaming=True)
+    backup = Streamed(replies=[text_reply("Backup", " lesson.")], clock=clock, streaming=True)
+    gw, recording = gateway(clock, provider("main", main), provider("backup", backup), attempts=2)
+    pieces: list[str] = []
+
+    out = gw.call(
+        "teach", "reteach", None, "p", creative=True, parse=lambda m: m.text, on_text=pieces.append
+    )
+
+    assert (out.value, out.fell_back) == ("Backup lesson.", True)
+    assert pieces == ["Backup", " lesson."]
+    assert [r.outcome for r in recording.calls] == ["error", "error", "ok"]
+
+
+class Exploding(Recording):
+    def record(self, call: LlmCall) -> None:
+        raise RuntimeError("recorder bug")
+
+
+def test_a_failing_recorder_never_replaces_the_result_or_the_error(caplog):
+    clock = Clock()
+    ok = Streamed(replies=[tool_reply(VALID)], clock=clock, streaming=True)
+    down = Streamed(replies=[httpx.ConnectError("down")], clock=clock, streaming=True)
+
+    with caplog.at_level(logging.ERROR, logger="ebb.llm.gateway"):
+        gw, _ = gateway(clock, provider("main", ok), recorder=Exploding())
+        assert gw.call("quiz", "grade", Pick, "p", creative=False, parse=lambda p: p.name).value
+        gw, _ = gateway(clock, provider("main", down), recorder=Exploding(), attempts=1)
+        with pytest.raises(AllProvidersExhausted):
+            gw.call("quiz", "grade", Pick, "p", creative=False, parse=lambda p: p)
+
+    assert len(caplog.records) == 2
+    assert all(isinstance(r.exc_info[1], RuntimeError) for r in caplog.records)

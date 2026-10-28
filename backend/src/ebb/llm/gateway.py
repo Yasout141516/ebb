@@ -2,6 +2,7 @@
 record per attempt (tokens, time to first token, total time, estimated cost)."""
 
 import logging
+import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -65,6 +66,22 @@ PROVIDER_ERRORS: tuple[type[BaseException], ...] = (
 )
 
 Failure = Literal["retry", "bad_key", "no_model"]
+
+# The kind of work a call does, as the Costs page groups it.
+Endpoint = Literal[
+    "lesson",
+    "learn_answer",
+    "write_questions",
+    "write_web_questions",
+    "rewrite_questions",
+    "grade",
+    "regrade",
+    "reteach",
+    "extract_concepts",
+    "extend_concepts",
+    "concepts_from_notes",
+    "write_eval_case",
+]
 
 
 def _classify(error: BaseException) -> Failure:
@@ -189,11 +206,13 @@ class _Meter(BaseCallbackHandler):
         self.on_text = on_text
         self.first_chunk: float | None = None
         self.usage: dict[str, Any] | None = None
+        self.sent_text = False  # some of this reply has reached `on_text`
 
     def on_llm_new_token(self, token: str, *, chunk: Any = None, **kwargs: Any) -> None:
         if self.first_chunk is None:
             self.first_chunk = self.clock()
         if self.on_text is not None and chunk is not None and chunk.message.text:
+            self.sent_text = True
             self.on_text(chunk.message.text)
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
@@ -227,6 +246,12 @@ def _ms(seconds: float) -> int:
     return round(seconds * 1000)
 
 
+def _backoff(failed: int, jitter: float) -> float:
+    """Seconds to wait after a provider's `failed`-th failed attempt: 1 s, 2 s, 4 s... plus
+    the jitter (under a second), as LangChain's `with_retry` waited."""
+    return 2 ** (failed - 1) + jitter
+
+
 class Gateway:
     def __init__(
         self,
@@ -235,18 +260,23 @@ class Gateway:
         attempts: int = 3,
         clock: Callable[[], float] = time.monotonic,
         now: Callable[[], datetime] = utc_now,
+        sleep: Callable[[float], None] = time.sleep,
+        jitter: Callable[[], float] = random.random,
     ) -> None:
-        """Each role's providers, main first; each is tried `attempts` times."""
+        """Each role's providers, main first; each is tried `attempts` times, waiting longer
+        (`sleep`, plus `jitter()` in [0, 1)) between tries of the same provider."""
         self.chains = chains
         self.recorder = recorder
         self.attempts = attempts
         self.clock = clock
         self.now = now
+        self.sleep = sleep
+        self.jitter = jitter
 
     def call[T](
         self,
         role: Role,
-        endpoint: str,
+        endpoint: Endpoint,
         schema: type[BaseModel] | None,
         prompt: str,
         creative: bool,
@@ -255,13 +285,13 @@ class Gateway:
     ) -> Generated[T]:
         """Each provider in turn, retried; a refusal (TutorRefused) ends the call at once, and
         a rejected key or unknown model is a ConfigError. Every attempt is recorded under one
-        call id. `on_text` receives a plain reply's text as it streams."""
+        call id. `on_text` receives a plain reply's text as it streams; once some has reached
+        it, a failure ends the call, so no second reply is spliced onto the first."""
         call_id, attempt = uuid4(), 0
 
-        def attempt_once(provider: Provider, index: int) -> Any:
+        def attempt_once(provider: Provider, index: int, meter: _Meter) -> Any:
             """One attempt, recorded however it ends."""
             model = provider.creative if creative else provider.precise
-            meter = _Meter(self.clock, on_text if schema is None else None)
             at, start = self.now(), self.clock()
             error: BaseException | None = None
             try:
@@ -279,14 +309,19 @@ class Gateway:
 
         last_error: BaseException | None = None
         for index, provider in enumerate(self.chains[role]):
-            for _ in range(self.attempts):
+            for tried in range(1, self.attempts + 1):
                 attempt += 1
+                meter = _Meter(self.clock, on_text if schema is None else None)
                 try:
-                    output = attempt_once(provider, index)
+                    output = attempt_once(provider, index, meter)
                 except PROVIDER_ERRORS as error:
                     if not _retryable(error):
                         raise _config_error(error, provider, role, index) from error
+                    if meter.sent_text:
+                        raise AllProvidersExhausted(str(error)) from error
                     last_error = error
+                    if tried < self.attempts:
+                        self.sleep(_backoff(tried, self.jitter()))
                     continue
                 return Generated(parse(output), provider.name, fell_back=index > 0)
         raise AllProvidersExhausted(str(last_error)) from last_error
@@ -295,7 +330,7 @@ class Gateway:
         self,
         call_id: UUID,
         role: Role,
-        endpoint: str,
+        endpoint: Endpoint,
         provider: Provider,
         index: int,
         attempt: int,
@@ -305,29 +340,33 @@ class Gateway:
         end: float,
         error: BaseException | None,
     ) -> None:
+        """Records the attempt. Nothing from recording may replace the call's result or
+        error: a recorder that fails is logged, never raised."""
         request_id, user_id = request.current()
         usage = meter.usage or {}
         input_tokens, output_tokens = usage.get("input_tokens"), usage.get("output_tokens")
-        self.recorder.record(
-            LlmCall(
-                id=uuid4(),
-                call_id=call_id,
-                request_id=request_id,
-                user_id=user_id or self.recorder.user_id,
-                at=at,
-                role=role,
-                endpoint=endpoint,
-                provider=provider.provider,
-                model=provider.name,
-                attempt=attempt,
-                outcome=_outcome(error),
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                reasoning_tokens=(usage.get("output_token_details") or {}).get("reasoning"),
-                ttft_ms=None if meter.first_chunk is None else _ms(meter.first_chunk - start),
-                total_ms=_ms(end - start),
-                cost_usd=prices.cost(provider.name, input_tokens, output_tokens),
-                error_kind=None if error is None else type(error).__name__,
-                backup=index > 0,
-            )
+        call = LlmCall(
+            id=uuid4(),
+            call_id=call_id,
+            request_id=request_id,
+            user_id=user_id or self.recorder.user_id,
+            at=at,
+            role=role,
+            endpoint=endpoint,
+            provider=provider.provider,
+            model=provider.name,
+            attempt=attempt,
+            outcome=_outcome(error),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            reasoning_tokens=(usage.get("output_token_details") or {}).get("reasoning"),
+            ttft_ms=None if meter.first_chunk is None else _ms(meter.first_chunk - start),
+            total_ms=_ms(end - start),
+            cost_usd=prices.cost(provider.provider, provider.name, input_tokens, output_tokens),
+            error_kind=None if error is None else type(error).__name__,
+            backup=index > 0,
         )
+        try:
+            self.recorder.record(call)
+        except Exception:  # the recording boundary: see the docstring
+            log.exception("could not record the %s call (%s)", endpoint, provider.name)
