@@ -2,10 +2,13 @@
 Pure functions, like progress and mastery.
 
 A "call" is one call_id; it may hold several attempts (retries, then a backup model); it
-was retried if some provider needed a second attempt. Rates count calls. Cost and tokens add
+was retried if some provider was asked more than once (an attempt number above 1); one that
+failed on the main model and then succeeded on the backup fell back, and was not retried. Rates
+count calls. Cost and tokens add
 up every attempt, since a failed attempt that used tokens cost money too. Percentiles use ok
 attempts only and the nearest-rank method."""
 
+import math
 from bisect import bisect_left
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -46,6 +49,7 @@ ENDPOINTS: dict[str, tuple[str, str, str]] = {
     "concepts_from_notes": ("Concepts from notes", "concept-extraction call", "concepts"),
     "write_eval_case": ("Write eval case", "eval-writing call", "evals"),
 }
+OTHER = ("other", "Other")  # feature of an endpoint this table does not know yet
 FEATURES: dict[str, str] = {
     "lessons": "Lessons and re-teaching",
     "questions": "Question writing",
@@ -96,9 +100,9 @@ class Breakdown:
 @dataclass(frozen=True)
 class DayTokens:
     day: date  # local date
-    input_tokens: int
-    output_tokens: int
-    tokens: int  # input + output (reasoning is already inside output)
+    input_tokens: int | None  # None when no call that day reported any
+    output_tokens: int | None
+    tokens: int | None  # input + output (reasoning is already inside output)
     calls: int
 
 
@@ -241,21 +245,39 @@ def _grouped_rows(
     return sorted(rows, key=lambda r: -r.calls)  # stable: ties keep first-seen order
 
 
+def _endpoint_info(endpoint: str) -> tuple[str, str, str]:
+    """(label, noun, feature); an endpoint missing from the table still gets a row."""
+    return ENDPOINTS.get(endpoint, (endpoint, "call", OTHER[0]))
+
+
 def _feature_of(call: LlmCall) -> str:
-    return ENDPOINTS[call.endpoint][2]
+    return _endpoint_info(call.endpoint)[2]
 
 
 def _endpoint_label(endpoint: str) -> str:
-    return ENDPOINTS[endpoint][0]
+    return _endpoint_info(endpoint)[0]
+
+
+def _floor1(ratio: float) -> str:
+    """One decimal, rounded down, so a flagged call never reads as exactly the threshold."""
+    return f"{math.floor(ratio * 10) / 10:.1f}"
+
+
+def _merged(history: Sequence[LlmCall], calls: Sequence[LlmCall]) -> list[LlmCall]:
+    """History then range, each record once (the two may overlap)."""
+    return list({c.id: c for c in [*history, *calls]}.values())
 
 
 def by_feature(calls: Sequence[LlmCall]) -> list[Breakdown]:
-    return _grouped_rows(calls, _feature_of, FEATURES.__getitem__, order=list(FEATURES))
+    order = list(FEATURES)
+    if any(_feature_of(c) == OTHER[0] for c in calls):
+        order.append(OTHER[0])
+    return _grouped_rows(calls, _feature_of, lambda k: FEATURES.get(k, OTHER[1]), order=order)
 
 
 def by_endpoint(calls: Sequence[LlmCall]) -> list[Breakdown]:
     present = {c.endpoint for c in calls}
-    order = [e for e in ENDPOINTS if e in present]
+    order = [e for e in ENDPOINTS if e in present] + sorted(present - set(ENDPOINTS))
     return _grouped_rows(calls, lambda c: c.endpoint, _endpoint_label, order=order)
 
 
@@ -274,10 +296,12 @@ def per_day(calls: Sequence[LlmCall], tz: ZoneInfo) -> list[DayTokens]:
         days[c.at.astimezone(tz).date()].append(c)
     rows = []
     for day, rows_of_day in sorted(days.items()):
-        tokens_in = sum(c.input_tokens or 0 for c in rows_of_day)
-        tokens_out = sum(c.output_tokens or 0 for c in rows_of_day)
+        tokens_in = _sum_known(c.input_tokens for c in rows_of_day)
+        tokens_out = _sum_known(c.output_tokens for c in rows_of_day)
+        known = [t for t in (tokens_in, tokens_out) if t is not None]
+        total = sum(known) if known else None
         calls_in_day = len({c.call_id for c in rows_of_day})
-        rows.append(DayTokens(day, tokens_in, tokens_out, tokens_in + tokens_out, calls_in_day))
+        rows.append(DayTokens(day, tokens_in, tokens_out, total, calls_in_day))
     return rows
 
 
@@ -310,23 +334,17 @@ def failures(calls: Sequence[LlmCall]) -> list[LlmCall]:
     return sorted(failed, key=lambda c: c.at)
 
 
-def _tokens(call: LlmCall) -> int | None:
-    if call.input_tokens is None or call.output_tokens is None:
-        return None
-    return call.input_tokens + call.output_tokens
-
-
 def _call_anomalies(
     calls: Sequence[LlmCall], history: Sequence[LlmCall], tz: ZoneInfo
 ) -> list[Anomaly]:
     ok_by_endpoint: dict[str, list[LlmCall]] = defaultdict(list)
-    for c in sorted(_ok([*history, *calls]), key=lambda c: c.at):
+    for c in sorted(_ok(_merged(history, calls)), key=lambda c: c.at):
         ok_by_endpoint[c.endpoint].append(c)
     times = {e: [c.at for c in rows] for e, rows in ok_by_endpoint.items()}
     in_range = {c.id for c in calls}
     found = []
     for endpoint, rows in ok_by_endpoint.items():
-        label, noun, _ = ENDPOINTS[endpoint]
+        label, noun, _ = _endpoint_info(endpoint)
         for c in rows:
             if c.id not in in_range:
                 continue
@@ -336,10 +354,17 @@ def _call_anomalies(
             for kind, value, usual, floor, text in (
                 (
                     "tokens",
-                    _tokens(c),
-                    _tokens,
+                    c.input_tokens,
+                    lambda p: p.input_tokens,
                     0,
-                    f"used {{}} times the tokens a {noun} usually uses",
+                    f"used {{}} times the input tokens a {noun} usually uses",
+                ),
+                (
+                    "tokens",
+                    c.output_tokens,
+                    lambda p: p.output_tokens,
+                    0,
+                    f"used {{}} times the output tokens a {noun} usually uses",
                 ),
                 (
                     "ttft",
@@ -362,7 +387,7 @@ def _call_anomalies(
                 typical = median(known)
                 if typical > 0 and value > SPIKE_RATIO * typical and value > floor:
                     ratio = value / typical
-                    message = f"{when} {text.format(f'{ratio:.1f}')}"
+                    message = f"{when} {text.format(_floor1(ratio))}"
                     found.append(Anomaly(kind, c.call_id, None, endpoint, ratio, message))
     return found
 
@@ -370,9 +395,9 @@ def _call_anomalies(
 def _day_anomalies(
     calls: Sequence[LlmCall], history: Sequence[LlmCall], tz: ZoneInfo
 ) -> list[Anomaly]:
-    totals = {d.day: d.tokens for d in per_day([*history, *calls], tz)}
+    totals = {d.day: d.tokens for d in per_day(_merged(history, calls), tz) if d.tokens is not None}
     found = []
-    for day in sorted({c.at.astimezone(tz).date() for c in calls}):
+    for day in sorted({c.at.astimezone(tz).date() for c in calls} & totals.keys()):
         window = [
             totals[d] for k in range(1, DAY_WINDOW + 1) if (d := day - timedelta(days=k)) in totals
         ]
@@ -382,7 +407,7 @@ def _day_anomalies(
         if usual > 0 and totals[day] > DAY_RATIO * usual:
             ratio = totals[day] / usual
             message = (
-                f"Tokens on {day:%Y-%m-%d} were {ratio:.1f} times "
+                f"Tokens on {day:%Y-%m-%d} were {_floor1(ratio)} times "
                 "the daily average of the week before"
             )
             found.append(Anomaly("day", None, day, None, ratio, message))

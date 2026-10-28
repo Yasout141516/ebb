@@ -1,3 +1,4 @@
+import typing
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -8,6 +9,7 @@ import pytest
 
 from ebb import costs
 from ebb.domain import LlmCall
+from ebb.llm.gateway import Endpoint
 
 T0 = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 USER = uuid4()
@@ -111,19 +113,46 @@ def test_tokens_not_reported_stay_none():
 def test_token_anomaly_needs_ten_previous_calls():
     big = call(input_tokens=1000, output_tokens=500)
     assert costs.anomalies([big], series(9), UTC) == []
-    assert kinds(costs.anomalies([big], series(10), UTC)) == ["tokens"]
+    assert kinds(costs.anomalies([big], series(10), UTC)) == ["tokens", "tokens"]  # in and out
 
 
 def test_token_anomaly_over_three_times_median():
     history = series(10)  # 150 tokens each
     assert costs.anomalies([call(input_tokens=300, output_tokens=150)], history, UTC) == []
     found = costs.anomalies([call(input_tokens=300, output_tokens=151)], history, UTC)
-    assert kinds(found) == ["tokens"]
+    assert kinds(found) == ["tokens"]  # only the output count is over
     a = found[0]
-    assert a.endpoint == "grade" and a.ratio == pytest.approx(451 / 150)
-    assert (
-        a.message == "Grade answer at 12:00 used 3.0 times the tokens a grading call usually uses"
+    assert a.endpoint == "grade" and a.ratio == pytest.approx(151 / 50)
+    assert a.message == (
+        "Grade answer at 12:00 used 3.0 times the output tokens a grading call usually uses"
     )
+
+
+def test_token_anomaly_names_input_when_only_input_spikes():
+    found = costs.anomalies([call(input_tokens=410, output_tokens=50)], series(10), UTC)
+    assert kinds(found) == ["tokens"]
+    assert found[0].ratio == pytest.approx(4.1)
+    assert found[0].message == (
+        "Grade answer at 12:00 used 4.1 times the input tokens a grading call usually uses"
+    )
+
+
+def test_token_anomaly_checks_the_one_count_a_call_reported():
+    found = costs.anomalies([call(input_tokens=None, output_tokens=500)], series(10), UTC)
+    assert kinds(found) == ["tokens"] and "output tokens" in found[0].message
+    unknown_before = series(10, input_tokens=None)  # baseline for input has no known values
+    assert costs.anomalies([call(input_tokens=5000)], unknown_before, UTC) == []
+
+
+def test_ratio_in_messages_rounds_down():
+    found = costs.anomalies([call(total_ms=5990)], series(10, total_ms=1000), UTC)
+    assert "took 5.9 times" in found[0].message  # 5.99, never rounded up
+
+
+def test_baseline_is_built_once_when_history_and_range_overlap():
+    seen = series(5)
+    big = call(input_tokens=5000)
+    assert costs.anomalies([*seen, big], seen, UTC) == []  # five distinct calls, not ten
 
 
 def test_baseline_is_the_previous_fifty_ok_calls_of_that_endpoint():
@@ -224,6 +253,35 @@ def test_per_day_sums_input_plus_output_over_all_attempts():
         (date(2026, 10, 7), 107, 1),
         (date(2026, 10, 8), 200, 2),
     ]
+
+
+def test_per_day_with_no_reported_tokens_is_none_not_zero():
+    quiet = call(at=datetime(2026, 10, 7, 9, tzinfo=UTC), input_tokens=None, output_tokens=None)
+    half = call(at=datetime(2026, 10, 8, 9, tzinfo=UTC), input_tokens=None, output_tokens=7)
+    days = costs.per_day([quiet, half], UTC)
+    assert (days[0].input_tokens, days[0].output_tokens, days[0].tokens) == (None, None, None)
+    assert days[0].calls == 1
+    assert (days[1].input_tokens, days[1].output_tokens, days[1].tokens) == (None, 7, 7)
+
+
+def test_unknown_endpoint_is_listed_not_a_crash():
+    rows = [call(endpoint="brand_new", total_ms=9000), call(endpoint="grade")]
+    ends = costs.by_endpoint(rows)
+    assert [(b.key, b.label) for b in ends] == [
+        ("grade", "Grade answer"),
+        ("brand_new", "brand_new"),
+    ]
+    feats = costs.by_feature(rows)
+    assert [b.key for b in feats][-2:] == ["evals", "other"]
+    assert feats[-1].label == "Other" and feats[-1].calls == 1
+    assert [b.key for b in costs.by_feature([call()])][-1] == "evals"  # no Other row without need
+    history = series(10, endpoint="brand_new", total_ms=1000)
+    found = costs.anomalies([call(endpoint="brand_new", total_ms=9000)], history, UTC)
+    assert kinds(found) == ["total"] and "brand_new at 12:00" in found[0].message
+
+
+def test_endpoint_table_covers_every_gateway_endpoint():
+    assert set(typing.get_args(Endpoint)) == set(costs.ENDPOINTS)
 
 
 def test_failures_listed_not_anomalies():
