@@ -62,6 +62,7 @@ from ebb.ui import (
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
+    from ebb.llm.gateway import Recorder
     from ebb.llm.tutor import LangChainTutor, Tutor, TutorUnavailable
     from ebb.study import Event, Finished, Pending, StudySessions
 
@@ -100,10 +101,17 @@ def _open_store() -> tuple[Settings, PgStore]:
     return settings, store
 
 
-def _tutor(settings: Settings, fallback: bool = True) -> LangChainTutor:
+def _recorder(settings: Settings, store: PgStore) -> Recorder:
+    """Every model call is recorded under the dev user."""
+    from ebb.llm.gateway import StoreRecorder
+
+    return StoreRecorder(store, settings.ebb_dev_user_id)
+
+
+def _tutor(settings: Settings, recorder: Recorder, fallback: bool = True) -> LangChainTutor:
     from ebb.llm.tutor import LangChainTutor
 
-    return _configured(lambda: LangChainTutor.from_settings(settings, fallback))
+    return _configured(lambda: LangChainTutor.from_settings(settings, fallback, recorder))
 
 
 def _capped(tutor: Tutor, settings: Settings, store: PgStore) -> Tutor:
@@ -257,7 +265,7 @@ def new(
     if notes:
         _new_from_notes(settings, store, topic, notes)
         return
-    tutor = _capped(_tutor(settings), settings, store)
+    tutor = _capped(_tutor(settings, _recorder(settings, store)), settings, store)
     try:
         _, concepts = _ai(
             "Mapping the topic…", lambda: subject_from_topic(tutor, store, user_id, topic)
@@ -280,7 +288,7 @@ def _new_from_notes(settings: Settings, store: PgStore, topic: str, paths: list[
         if any(d.sha256 == document.sha256 for d in documents):
             _fail(duplicate_copy(topic, document.filename))
         documents.append(document)
-    tutor = _capped(_tutor(settings), settings, store)
+    tutor = _capped(_tutor(settings, _recorder(settings, store)), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
     known: list[tuple[str, str]] = []
     reports: list[tuple[NewDocument, NotesReport]] = []
@@ -316,7 +324,7 @@ def add(
         ensure_room(store, user_id, chosen, document)
     except DocumentRefused as error:
         _fail(room_copy(error, chosen.name, document.filename))
-    tutor = _capped(_tutor(settings), settings, store)
+    tutor = _capped(_tutor(settings, _recorder(settings, store)), settings, store)
     console.print(f"[dim]{escape(PRIVACY_LINE)}[/dim]")
     try:
         report = _finding_concepts(lambda: add_notes(tutor, store, user_id, chosen, document))
@@ -395,7 +403,7 @@ def study(
     settings, store = _open_store()
     user_id = settings.ebb_dev_user_id
     tz = _timezone(settings)
-    tutor = _capped(_tutor(settings), settings, store)
+    tutor = _capped(_tutor(settings, _recorder(settings, store)), settings, store)
 
     store.set_timezone(user_id, tz.key)
     saver = _checkpointer(store)
@@ -454,15 +462,30 @@ def status(
         console.print("  No sources yet. Add notes with: ebb add <file>")
 
 
-def _eval_writer(settings: Settings) -> LangChainTutor:
+def _eval_writer(settings: Settings, recorder: Recorder) -> LangChainTutor:
     from ebb.llm.tutor import LangChainTutor
 
-    return _configured(lambda: LangChainTutor.writer(settings))
+    return _configured(lambda: LangChainTutor.writer(settings, recorder))
 
 
-def _eval_grader(settings: Settings) -> LangChainTutor:
+def _eval_grader(settings: Settings, recorder: Recorder) -> LangChainTutor:
     """The primary model alone, so one run measures one model."""
-    return _tutor(settings, fallback=False)
+    return _tutor(settings, recorder, fallback=False)
+
+
+def _eval_store() -> PgStore | None:
+    """The store, to record an eval's model calls; None when the database is down, as an
+    eval runs without it."""
+    try:
+        return _open_store()[1]
+    except typer.Exit:
+        return None
+
+
+def _eval_recorder(settings: Settings, store: PgStore | None) -> Recorder:
+    from ebb.llm.gateway import NullRecorder
+
+    return NullRecorder() if store is None else _recorder(settings, store)
 
 
 def _pace(seconds: float) -> None:
@@ -473,13 +496,9 @@ def _today() -> date:
     return date.today()
 
 
-def _dispute_counts() -> dict[str, int] | None:
+def _dispute_counts(settings: Settings, store: PgStore | None) -> dict[str, int] | None:
     """Disputes raised, changed, voided and upheld; None when the database is down."""
-    try:
-        settings, store = _open_store()
-    except typer.Exit:
-        return None
-    return store.dispute_counts(settings.ebb_dev_user_id)
+    return None if store is None else store.dispute_counts(settings.ebb_dev_user_id)
 
 
 @eval_app.command("build")
@@ -498,7 +517,8 @@ def eval_build(
 
     if dataset.exists() and not force:
         _fail(f"{dataset} exists — pass --force to rebuild it.")
-    writer = _eval_writer(_configured(Settings))
+    settings = _configured(Settings)
+    writer = _eval_writer(settings, _eval_recorder(settings, _eval_store()))
     expected = len(EVAL_TOPICS) + GROUNDED_CASES
     console.print(f"Writing {expected} cases; this takes a few minutes.")
     try:
@@ -530,7 +550,8 @@ def eval_run(
     cases = load_cases(dataset)
     settings = _configured(Settings)
     model = _configured(settings.role_models)["quiz"][0].model
-    grader = _eval_grader(settings)
+    store = _eval_store()
+    grader = _eval_grader(settings, _eval_recorder(settings, store))
 
     def progress(number: int, total: int) -> None:
         console.print(f"Grading {number}/{total}…")
@@ -538,7 +559,7 @@ def eval_run(
     grades = _configured(lambda: run_cases(grader, cases, sleep=_pace, progress=progress))
     result = score(cases, grades)
     writer = cases[0].writer_model if cases else "the writer model"
-    text = report_markdown(result, model, _today(), _dispute_counts(), writer)
+    text = report_markdown(result, model, _today(), _dispute_counts(settings, store), writer)
     results.mkdir(parents=True, exist_ok=True)
     path = results / f"{_today().isoformat()}-{model.replace('/', '-')}.md"
     path.write_text(text, encoding="utf-8")

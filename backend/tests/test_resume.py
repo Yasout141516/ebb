@@ -115,7 +115,7 @@ def cli_on_postgres(store, monkeypatch) -> None:
     """`ebb study` on the real store and the real `_checkpointer`, with a fake tutor."""
     settings = Settings(_env_file=None, ebb_timezone="UTC", ebb_dev_user_id=ALICE)
     monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
-    monkeypatch.setattr(cli, "_tutor", lambda s: FakeTutor())
+    monkeypatch.setattr(cli, "_tutor", lambda s, r: FakeTutor())
 
 
 def ended_at(store: PgStore, session_id: UUID) -> datetime | None:
@@ -134,14 +134,14 @@ def test_crash_while_grading_resumes_and_grades_once(
         raise RuntimeError("killed while grading")
 
     monkeypatch.setattr(crashing, "grade", killed_while_grading)
-    monkeypatch.setattr(cli, "_tutor", lambda s: crashing)
+    monkeypatch.setattr(cli, "_tutor", lambda s, r: crashing)
     crashed = runner.invoke(cli.app, ["study"], input="right\n")  # Q1 is a short answer
     assert isinstance(crashed.exception, RuntimeError), crashed.output
     found = store.resumable_session(ALICE, subject_id, datetime.now(UTC))
     saved = new_process(store).get_state({"configurable": {"thread_id": found.thread_id}})
     assert not saved.interrupts and saved.next  # mid-step: the answer is in, not graded
 
-    monkeypatch.setattr(cli, "_tutor", lambda s: FakeTutor())
+    monkeypatch.setattr(cli, "_tutor", lambda s, r: FakeTutor())
     result = runner.invoke(cli.app, ["study"], input="y\nq\n")
 
     assert result.exit_code == 0, result.output

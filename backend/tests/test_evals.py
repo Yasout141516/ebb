@@ -23,6 +23,7 @@ from ebb.evals import (
     save_cases,
     score,
 )
+from ebb.llm.gateway import NullRecorder, StoreRecorder
 from tests.fakes import FakeTutor, MemoryStore
 
 runner = CliRunner()
@@ -274,8 +275,8 @@ def eval_cli(monkeypatch):
     monkeypatch.setattr(cli, "Settings", lambda: settings)
     monkeypatch.setattr(cli, "_open_store", lambda: (settings, MemoryStore()))
     writer = FakeTutor()
-    monkeypatch.setattr(cli, "_eval_writer", lambda s: writer)
-    monkeypatch.setattr(cli, "_eval_grader", lambda s: FakeTutor())
+    monkeypatch.setattr(cli, "_eval_writer", lambda s, r: writer)
+    monkeypatch.setattr(cli, "_eval_grader", lambda s, r: FakeTutor())
     monkeypatch.setattr(cli, "_pace", _no_sleep)
     monkeypatch.setattr(cli, "_today", lambda: date(2026, 10, 20))
     return writer
@@ -311,6 +312,7 @@ def test_eval_build_writes_the_dataset(eval_cli, tmp_path):
 def test_eval_build_without_mistral_exits_2(tmp_path, monkeypatch):
     settings = Settings(_env_file=None, mistral_api_key=None)
     monkeypatch.setattr(cli, "Settings", lambda: settings)
+    monkeypatch.setattr(cli, "_open_store", lambda: (settings, MemoryStore()))
 
     result = runner.invoke(
         cli.app,
@@ -346,7 +348,7 @@ def test_eval_run_with_a_bad_key_exits_2(eval_cli, tmp_path, monkeypatch):
         def grade(self, *args, **kwargs):
             raise ConfigError("Groq rejected GROQ_API_KEY — check the key in .env")
 
-    monkeypatch.setattr(cli, "_eval_grader", lambda s: BadKey())
+    monkeypatch.setattr(cli, "_eval_grader", lambda s, r: BadKey())
 
     result = runner.invoke(
         cli.app, ["eval", "run", "--dataset", str(dataset), "--results", str(tmp_path / "r")]
@@ -374,3 +376,28 @@ def test_eval_run_survives_an_unreachable_database(eval_cli, tmp_path, monkeypat
     assert result.exit_code == 0, result.output
     report = (tmp_path / "r" / "2026-10-20-a-b.md").read_text(encoding="utf-8")
     assert "Disputes: database not reachable" in report
+
+
+@pytest.mark.parametrize("database_up", [True, False])
+def test_eval_model_calls_are_recorded_when_the_database_is_up(
+    eval_cli, tmp_path, monkeypatch, database_up
+):
+    dataset = tmp_path / "grading.jsonl"
+    save_cases(build_cases(FakeTutor(), EVAL_TOPICS[:1], NOTES, 0, _no_sleep), dataset)
+    if not database_up:
+        monkeypatch.setattr(cli, "_open_store", lambda: cli._fail("down", code=2))
+    recorders = []
+
+    def grader(settings, recorder):
+        recorders.append(recorder)
+        return FakeTutor()
+
+    monkeypatch.setattr(cli, "_eval_grader", grader)
+
+    result = runner.invoke(
+        cli.app, ["eval", "run", "--dataset", str(dataset), "--results", str(tmp_path / "r")]
+    )
+
+    assert result.exit_code == 0, result.output
+    [recorder] = recorders
+    assert type(recorder) is (StoreRecorder if database_up else NullRecorder)

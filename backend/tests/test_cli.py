@@ -34,7 +34,7 @@ def fakes(monkeypatch):
     store, tutor = MemoryStore(), FakeTutor()
     store.ensure_profile(settings.ebb_dev_user_id)
     monkeypatch.setattr(cli, "_open_store", lambda: (settings, store))
-    monkeypatch.setattr(cli, "_tutor", lambda s: tutor)
+    monkeypatch.setattr(cli, "_tutor", lambda s, r: tutor)
     # One saver for every run in a test, as the Postgres one outlives a process.
     saver = InMemorySaver()
     monkeypatch.setattr(cli, "_checkpointer", lambda s: saver)

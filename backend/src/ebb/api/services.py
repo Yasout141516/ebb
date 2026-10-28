@@ -78,6 +78,7 @@ class NoTutor:
 def build_services(settings: Settings) -> Services:
     from ebb.db.saver import postgres_saver
     from ebb.graph.build import build_graph
+    from ebb.llm.gateway import StoreRecorder
     from ebb.llm.quota import CappedTutor
     from ebb.llm.tutor import LangChainTutor
     from ebb.web import web_search
@@ -100,7 +101,7 @@ def build_services(settings: Settings) -> Services:
     config_error: str | None = None
     try:
         tutor = CappedTutor(
-            LangChainTutor.from_settings(settings),
+            LangChainTutor.from_settings(settings, recorder=StoreRecorder(store, user_id)),
             store,
             user_id,
             settings.ebb_daily_ai_calls,

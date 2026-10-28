@@ -2,25 +2,12 @@
 
 import random
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from importlib.resources import files
 from string import Template
-from typing import Any, Literal, Protocol, get_args
+from typing import Any, Protocol, get_args
 from uuid import uuid4
 
-import groq
-import httpx
-import openai
-from langchain_core.exceptions import (
-    ModelAuthenticationError,
-    ModelNotFoundError,
-    ModelPermissionDeniedError,
-    OutputParserException,
-)
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage
-from langchain_core.runnables import Runnable, RunnableLambda
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from ebb.citations import MAX_CITATIONS, MAX_QUOTE
 from ebb.config import ConfigError, Settings
@@ -37,6 +24,12 @@ from ebb.domain import (
     Source,
 )
 from ebb.grading import cap_for_misconception
+from ebb.llm.gateway import EXHAUSTED_NOTICE as EXHAUSTED_NOTICE
+from ebb.llm.gateway import REFUSED_NOTICE as REFUSED_NOTICE
+from ebb.llm.gateway import AllProvidersExhausted as AllProvidersExhausted
+from ebb.llm.gateway import Gateway, Generated, NullRecorder, Recorder
+from ebb.llm.gateway import TutorRefused as TutorRefused
+from ebb.llm.gateway import TutorUnavailable as TutorUnavailable
 from ebb.llm.providers import Provider, Role, chat_models
 from ebb.llm.schemas import (
     CitationDraft,
@@ -53,117 +46,6 @@ from ebb.llm.schemas import (
     RewrittenQuestions,
     WebQuestionBatch,
 )
-
-# Errors a retry or a backup model cannot fix: the key or the model name is wrong.
-_AUTH_ERRORS: tuple[type[BaseException], ...] = (
-    ModelAuthenticationError,
-    ModelPermissionDeniedError,
-    groq.AuthenticationError,
-    groq.PermissionDeniedError,
-    openai.AuthenticationError,
-    openai.PermissionDeniedError,
-)
-_NOT_FOUND_ERRORS: tuple[type[BaseException], ...] = (
-    ModelNotFoundError,
-    groq.NotFoundError,
-    openai.NotFoundError,
-)
-
-# ChatMistralAI raises httpx.HTTPStatusError for any error response; transport errors
-# (timeouts, connection failures) subclass httpx.TransportError.
-PROVIDER_ERRORS: tuple[type[BaseException], ...] = (
-    groq.APIError,
-    openai.APIError,
-    httpx.HTTPStatusError,
-    httpx.TransportError,
-    OutputParserException,
-    ValidationError,
-    *_AUTH_ERRORS,
-    *_NOT_FOUND_ERRORS,
-)
-
-Failure = Literal["retry", "bad_key", "no_model"]
-
-
-def _classify(error: BaseException) -> Failure:
-    """What a provider error means: worth retrying, or a key/model the user must fix."""
-    if isinstance(error, _AUTH_ERRORS):
-        return "bad_key"
-    if isinstance(error, _NOT_FOUND_ERRORS):
-        return "no_model"
-    if isinstance(error, httpx.HTTPStatusError):
-        status = error.response.status_code
-        if status in (401, 403):
-            return "bad_key"
-        if status == 404:
-            return "no_model"
-    return "retry"
-
-
-def _retryable(error: BaseException) -> bool:
-    return isinstance(error, PROVIDER_ERRORS) and _classify(error) == "retry"
-
-
-EXHAUSTED_NOTICE = "The tutor couldn't respond — your progress is saved. Try again in a minute."
-REFUSED_NOTICE = "The tutor won't help with that topic."
-
-
-class TutorUnavailable(Exception):
-    """The tutor can't answer this call; `notice` is what the learner is told."""
-
-    notice: str = EXHAUSTED_NOTICE
-
-
-class AllProvidersExhausted(TutorUnavailable):
-    """Every provider failed or returned invalid output after retries."""
-
-
-class TutorRefused(TutorUnavailable):
-    """A provider refused the request for safety: not retried, and no other provider asked."""
-
-    notice = REFUSED_NOTICE
-
-
-def _is_refusal(raw: BaseMessage) -> bool:
-    """Groq's API ends a reply its content filters withheld with finish_reason
-    "content_filter"; OpenAI-style APIs put a model's refusal in `refusal`, which
-    langchain_groq doesn't copy into `additional_kwargs` today (checked for other providers
-    and later versions)."""
-    return (
-        bool(raw.additional_kwargs.get("refusal"))
-        or raw.response_metadata.get("finish_reason") == "content_filter"
-    )
-
-
-def _unless_refused(raw: BaseMessage) -> BaseMessage:
-    if _is_refusal(raw):
-        raise TutorRefused()
-    return raw
-
-
-def _parsed(output: dict[str, Any]) -> Any:
-    """The structured value from an `include_raw=True` reply. A refusal raises TutorRefused;
-    a reply that didn't parse raises as it would without `include_raw`, so it is retried."""
-    _unless_refused(output["raw"])
-    if output["parsing_error"] is not None:
-        raise output["parsing_error"]
-    if output["parsed"] is None:
-        raise OutputParserException("the reply had no structured output")
-    return output["parsed"]
-
-
-def _chain(model: BaseChatModel, schema: type[BaseModel] | None) -> Runnable:
-    """The model, structured as `schema` when given (plain text otherwise)."""
-    if schema is None:
-        return model | RunnableLambda(_unless_refused)
-    return model.with_structured_output(schema, include_raw=True) | RunnableLambda(_parsed)
-
-
-@dataclass(frozen=True)
-class Generated[T]:
-    value: T
-    model: str
-    fell_back: bool = False
 
 
 class Tutor(Protocol):
@@ -384,18 +266,23 @@ class LangChainTutor:
         chains: dict[Role, list[Provider]] | list[Provider],
         attempts: int = 3,
         rng: random.Random | None = None,
+        *,
+        recorder: Recorder | None = None,
     ) -> None:
-        """Each role's providers, main first; a plain list serves every role."""
+        """Each role's providers, main first; a plain list serves every role. Every attempt
+        goes to `recorder` (by default, nowhere)."""
         if isinstance(chains, list):
             chains = {role: chains for role in get_args(Role)}
         if not chains or not all(chains.values()):
             raise ValueError("at least one provider is required")
         self.chains = chains
-        self.attempts = attempts
+        self.gateway = Gateway(chains, recorder or NullRecorder(), attempts)
         self.rng = rng or random.Random()
 
     @classmethod
-    def from_settings(cls, settings: Settings, fallback: bool = True) -> LangChainTutor:
+    def from_settings(
+        cls, settings: Settings, fallback: bool = True, recorder: Recorder | None = None
+    ) -> LangChainTutor:
         """The teach and quiz models, each with its backup when `fallback` allows."""
         models = settings.role_models()
         chains: dict[Role, list[Provider]] = {}
@@ -405,55 +292,33 @@ class LangChainTutor:
             if fallback and backup:
                 chain.append(chat_models(backup, settings, f"{setting}_BACKUP"))
             chains[role] = chain
-        return cls(chains)
+        return cls(chains, recorder=recorder)
 
     @classmethod
-    def writer(cls, settings: Settings) -> LangChainTutor:
+    def writer(cls, settings: Settings, recorder: Recorder | None = None) -> LangChainTutor:
         """Only the model that writes eval cases, which must not be the one that grades."""
         models = settings.role_models()
         writer = models["eval_writer"][0]
         if writer == models["quiz"][0]:
             raise ConfigError("EBB_EVAL_WRITER_MODEL must differ from EBB_QUIZ_MODEL (the grader)")
-        return cls({"eval_writer": [chat_models(writer, settings, "EBB_EVAL_WRITER_MODEL")]})
+        chain = [chat_models(writer, settings, "EBB_EVAL_WRITER_MODEL")]
+        return cls({"eval_writer": chain}, recorder=recorder)
 
     def _run[T](
         self,
         role: Role,
+        endpoint: str,
         schema: type[BaseModel] | None,
         prompt: str,
         creative: bool,
         parse: Callable[[Any], T],
     ) -> Generated[T]:
-        """Each provider in turn, retried; a refusal (TutorRefused) ends the call at once."""
-        last_error: BaseException | None = None
-        for index, provider in enumerate(self.chains[role]):
-            model = provider.creative if creative else provider.precise
-            chain = _chain(model, schema).with_retry(
-                retry_if_exception_type=_retryable, stop_after_attempt=self.attempts
-            )
-            try:
-                output = chain.invoke(prompt)
-            except PROVIDER_ERRORS as error:
-                match _classify(error):
-                    case "bad_key":
-                        raise ConfigError(
-                            f"{provider.service} rejected {provider.key_name} — "
-                            "check the key in .env"
-                        ) from error
-                    case "no_model":
-                        setting = f"EBB_{role.upper()}_{'MODEL' if index == 0 else 'BACKUP'}"
-                        raise ConfigError(
-                            f"Model {provider.name!r} was not found on {provider.service} — "
-                            f"check {setting} in .env"
-                        ) from error
-                last_error = error
-                continue
-            return Generated(parse(output), provider.name, fell_back=index > 0)
-        raise AllProvidersExhausted(str(last_error)) from last_error
+        return self.gateway.call(role, endpoint, schema, prompt, creative, parse)
 
     def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]:
         return self._run(
             "quiz",
+            "extract_concepts",
             ConceptList,
             _prompt("extract_concepts", topic=_line(topic)),
             creative=True,
@@ -465,6 +330,7 @@ class LangChainTutor:
     ) -> Generated[list[ConceptDraft]]:
         return self._run(
             "quiz",
+            "extend_concepts",
             ConceptExtension,
             _prompt(
                 "extend_concepts",
@@ -510,17 +376,20 @@ class LangChainTutor:
         schema: type[BaseModel]
         values = {"name": _line(concept.name), "description": _line(concept.description)}
         if rewrite:
-            template, schema = "rewrite_questions", RewrittenQuestions
+            template, endpoint = "rewrite_questions", "rewrite_questions"
+            schema = RewrittenQuestions
             values |= {"count": str(len(rewrite)), "questions": _questions_text(rewrite)}
         elif web_count is None:
-            template, schema = "generate_questions", QuestionBatch
+            template, endpoint = "generate_questions", "write_questions"
+            schema = QuestionBatch
         else:
-            template, schema = "generate_web_questions", WebQuestionBatch
+            template, endpoint = "generate_web_questions", "write_web_questions"
+            schema = WebQuestionBatch
             values |= {"count": str(web_count)}
         prompt = _with_sources(
             _prompt(template, **values, avoid=avoid_text), sources, failures, _CITE_QUESTIONS
         )
-        return self._run("quiz", schema, prompt, creative=True, parse=to_questions)
+        return self._run("quiz", endpoint, schema, prompt, creative=True, parse=to_questions)
 
     def grade(
         self,
@@ -542,7 +411,7 @@ class LangChainTutor:
             _CITE_GRADE,
             _previous_grade(previous),
         )
-        return self._run("quiz", GradeResult, prompt, creative=False, parse=_grade_from)
+        return self._run("quiz", "grade", GradeResult, prompt, creative=False, parse=_grade_from)
 
     def teach(
         self,
@@ -568,10 +437,16 @@ class LangChainTutor:
         )
         if not sources:
             return self._run(
-                "teach", None, prompt, creative=True, parse=lambda out: Lesson(out.text.strip())
+                "teach",
+                "reteach",
+                None,
+                prompt,
+                creative=True,
+                parse=lambda out: Lesson(out.text.strip()),
             )
         return self._run(
             "teach",
+            "reteach",
             LessonResult,
             prompt,
             creative=True,
@@ -583,6 +458,7 @@ class LangChainTutor:
     ) -> Generated[list[NoteConcept]]:
         return self._run(
             "quiz",
+            "concepts_from_notes",
             NoteConceptList,
             _prompt(
                 "concepts_from_notes",
@@ -623,6 +499,7 @@ class LangChainTutor:
         )
         return self._run(
             "quiz",
+            "regrade",
             RegradeResult,
             prompt,
             creative=False,
@@ -641,6 +518,7 @@ class LangChainTutor:
             )
         return self._run(
             "eval_writer",
+            "write_eval_case",
             EvalCaseDraft,
             _prompt("write_eval_case", topic=topic, target=target.value, notes_section=section),
             creative=True,

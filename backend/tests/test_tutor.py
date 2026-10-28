@@ -715,42 +715,76 @@ def test_openrouter_config_errors_surface_without_retry_or_fallback(cls, message
     assert (bad.calls, backup.calls) == (1, 0)
 
 
-def test_each_method_uses_its_roles_provider(monkeypatch):
+class AnyReply(Structured):
+    """A canned value for structured calls and a short message for plain ones."""
+
+    def __or__(self, other: Any) -> Any:
+        return RunnableLambda(lambda prompt: AIMessage(content="x")) | other
+
+
+class Recording:
+    def __init__(self) -> None:
+        self.user_id = uuid4()
+        self.calls: list = []
+
+    def record(self, call) -> None:
+        self.calls.append(call)
+
+
+# Each tutor method, its role and its endpoint (the plan's Global Constraints table).
+ENDPOINTS = [
+    (lambda t: t.teach(QUESTION, "a", GRADE), "teach", "reteach"),
+    (lambda t: t.teach(QUESTION, "a", GRADE, sources=[NOTE]), "teach", "reteach"),
+    (lambda t: t.generate_questions(CONCEPT, []), "quiz", "write_questions"),
+    (lambda t: t.generate_questions(CONCEPT, [], web_count=2), "quiz", "write_web_questions"),
+    (lambda t: t.generate_questions(CONCEPT, [], rewrite=[QUESTION]), "quiz", "rewrite_questions"),
+    (lambda t: t.grade(QUESTION, "a"), "quiz", "grade"),
+    (lambda t: t.regrade(QUESTION, "a", GRADE, DisputeReason.CORRECT, "e"), "quiz", "regrade"),
+    (lambda t: t.extract_concepts("DNS"), "quiz", "extract_concepts"),
+    (lambda t: t.extend_concepts("DNS", []), "quiz", "extend_concepts"),
+    (lambda t: t.concepts_from_notes("DNS", [], "d"), "quiz", "concepts_from_notes"),
+    (
+        lambda t: t.write_eval_case("DNS", GradeValue.PARTIAL, None),
+        "eval_writer",
+        "write_eval_case",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("method", "role", "endpoint"), ENDPOINTS, ids=[endpoint for _, _, endpoint in ENDPOINTS]
+)
+def test_each_tutor_method_uses_its_role_and_endpoint(monkeypatch, method, role, endpoint):
     def provider(name: str) -> Provider:
-        model = Structured("out")
+        model = AnyReply("out")
         return Provider(name, model, model)
 
+    recorder = Recording()
     tutor = LangChainTutor(
-        {"teach": [provider("A")], "quiz": [provider("B")], "eval_writer": [provider("C")]}
+        {"teach": [provider("A")], "quiz": [provider("B")], "eval_writer": [provider("C")]},
+        recorder=recorder,
     )
-    run = tutor._run
+    call = tutor.gateway.call
     monkeypatch.setattr(
-        tutor,
-        "_run",
-        lambda role, schema, prompt, creative, parse: run(
-            role, schema, prompt, creative, lambda out: out
+        tutor.gateway,
+        "call",
+        lambda role, endpoint, schema, prompt, creative, parse: call(
+            role, endpoint, schema, prompt, creative, lambda out: out
         ),
     )
-    used = {
-        "teach": tutor.teach(QUESTION, "a", GRADE, sources=[NOTE]).model,
-        "generate_questions": tutor.generate_questions(CONCEPT, []).model,
-        "grade": tutor.grade(QUESTION, "a").model,
-        "regrade": tutor.regrade(QUESTION, "a", GRADE, DisputeReason.CORRECT, "e").model,
-        "extract_concepts": tutor.extract_concepts("DNS").model,
-        "extend_concepts": tutor.extend_concepts("DNS", []).model,
-        "concepts_from_notes": tutor.concepts_from_notes("DNS", [], "d").model,
-        "write_eval_case": tutor.write_eval_case("DNS", GradeValue.PARTIAL, None).model,
-    }
-    assert used == {
-        "teach": "A",
-        "generate_questions": "B",
-        "grade": "B",
-        "regrade": "B",
-        "extract_concepts": "B",
-        "extend_concepts": "B",
-        "concepts_from_notes": "B",
-        "write_eval_case": "C",
-    }
+
+    out = method(tutor)
+
+    [row] = recorder.calls
+    assert (row.role, row.endpoint, row.outcome) == (role, endpoint, "ok")
+    assert out.model == row.model == {"teach": "A", "quiz": "B", "eval_writer": "C"}[role]
+
+
+def test_from_settings_and_writer_pass_the_recorder_on():
+    settings = Settings(_env_file=None, groq_api_key="q", mistral_api_key="m")
+    recorder = Recording()
+    assert LangChainTutor.from_settings(settings, recorder=recorder).gateway.recorder is recorder
+    assert LangChainTutor.writer(settings, recorder=recorder).gateway.recorder is recorder
 
 
 def test_groq_bad_request_stays_retryable():
