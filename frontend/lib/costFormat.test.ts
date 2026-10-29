@@ -9,6 +9,8 @@ describe("costFormat", () => {
     expect(money("0.0123")).toBe("$0.012");
     expect(money("12.5")).toBe("$12.50");
     expect(money("0")).toBe("$0.00");
+    expect(money("0.00000001")).toBe("$0.00000001");
+    expect(money("0.000000001")).toBe("<$0.00000001"); // non-zero, never $0.00
     expect(money(null)).toBe("price unknown");
   });
 

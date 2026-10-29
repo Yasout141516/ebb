@@ -18,6 +18,7 @@ from ebb.api.schemas import (
     CostRole,
     CostSummary,
     CostSummaryPage,
+    DailyCalls,
     ModelRef,
 )
 from ebb.api.services import Services, services_of
@@ -111,6 +112,12 @@ def cost_summary(services: Shown, f: Filtered) -> CostSummaryPage:
         by_tenant=[CostBreakdown(**asdict(b)) for b in costs.by_tenant(calls)],
         anomalies=[CostAnomaly(**asdict(a)) for a in costs.anomalies(calls, history, services.tz)],
         failures=[_row(c) for c in costs.failures(calls)],
+        daily_calls=DailyCalls(
+            used=services.store.ai_calls_used(
+                services.user_id, services.now().astimezone(services.tz).date()
+            ),
+            limit=services.settings.ebb_daily_ai_calls,
+        ),
     )
 
 

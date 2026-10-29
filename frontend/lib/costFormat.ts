@@ -4,6 +4,7 @@
 export function money(usd: string | null): string {
   if (usd === null) return "price unknown";
   const n = Number(usd);
+  if (n > 0 && n < 1e-8) return "<$0.00000001"; // too small for any digits, but not free
   if (n >= 1 || n === 0) return `$${n.toFixed(2)}`;
   // Two significant digits, so a tiny amount never shows as $0.00; trailing zeros go, cents stay.
   const decimals = Math.min(8, Math.ceil(-Math.log10(n)) + 1);

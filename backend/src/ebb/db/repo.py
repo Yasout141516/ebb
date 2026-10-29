@@ -628,6 +628,13 @@ class PgStore:
             ).fetchone()
         return row is not None
 
+    def ai_calls_used(self, user_id: UUID, day: date) -> int:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select calls from llm_usage where user_id = %s and day = %s", (user_id, day)
+            ).fetchone()
+        return row["calls"] if row else 0
+
     def record_llm_call(self, user_id: UUID, call: LlmCall) -> None:
         if call.user_id != user_id:
             raise ValueError("the call belongs to another user")

@@ -280,6 +280,11 @@ class CostCall(BaseModel):
     anomaly: str | None = None  # the message of the first anomaly for this call, if any
 
 
+class DailyCalls(BaseModel):
+    used: int
+    limit: int
+
+
 class CostSummaryPage(BaseModel):
     summary: CostSummary
     by_feature: list[CostBreakdown]
@@ -290,6 +295,7 @@ class CostSummaryPage(BaseModel):
     by_tenant: list[CostBreakdown]
     anomalies: list[CostAnomaly]
     failures: list[CostCall]
+    daily_calls: DailyCalls  # today's AI calls of the signed-in user, whatever the filters
 
 
 class CostPrice(BaseModel):

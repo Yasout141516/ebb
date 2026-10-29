@@ -380,6 +380,9 @@ class MemoryStore:
         self.ai_calls[(user_id, day)] = used + 1
         return True
 
+    def ai_calls_used(self, user_id: UUID, day: date) -> int:
+        return self.ai_calls.get((user_id, day), 0)
+
     def record_llm_call(self, user_id: UUID, call: LlmCall) -> None:
         if call.user_id != user_id:
             raise ValueError("the call belongs to another user")

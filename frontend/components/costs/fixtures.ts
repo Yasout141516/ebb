@@ -94,6 +94,7 @@ export const summaryPage: CostSummaryPage = {
     { kind: "day", call_id: null, day: "2026-10-28", endpoint: null, ratio: 3, message: "28 Oct used 3.0 times a usual day's tokens" },
   ],
   failures: [],
+  daily_calls: { used: 84, limit: 300 },
 };
 
 const call = (over: Partial<CostCall>): CostCall => ({
@@ -197,4 +198,5 @@ export const emptyPage: CostSummaryPage = {
   by_tenant: [],
   anomalies: [],
   failures: [],
+  daily_calls: { used: 0, limit: 300 },
 };

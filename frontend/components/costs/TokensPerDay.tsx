@@ -25,7 +25,7 @@ export default function TokensPerDay({ days, anomalies }: { days: CostDay[]; ano
             <span className={`${styles.value} ${flagged.has(d.day) ? styles.flag : ""}`}>{tokens(d.tokens)}</span>
             <div
               className={`${styles.bar} ${flagged.has(d.day) ? styles.barFlag : ""}`}
-              style={{ height: most === 0 ? 0 : Math.max(2, ((d.tokens ?? 0) / most) * HEIGHT) }}
+              style={{ height: d.tokens === null || most === 0 ? 0 : Math.max(2, (d.tokens / most) * HEIGHT) }}
             />
           </div>
         ))}

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useState } from "react";
+import { dayMonth } from "@/lib/format";
 import { duration, modelName, money, tokens } from "@/lib/costFormat";
 import type { CostCall } from "@/lib/types";
 import styles from "./RecentCalls.module.css";
@@ -10,11 +11,13 @@ const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-dig
 
 /** What the status column says about one attempt, in words. */
 function status(call: CostCall): string {
-  if (call.anomaly) return `Anomaly: ${call.anomaly}`;
-  if (call.outcome === "error") return `Failed: ${call.error_kind ?? "error"}`;
-  if (call.outcome === "refused") return "Refused";
-  if (call.outcome === "invalid") return "Invalid reply";
-  return call.backup ? "Fallback result used" : "OK";
+  const parts: string[] = [];
+  if (call.outcome === "error") parts.push(`Failed: ${call.error_kind ?? "error"}`);
+  else if (call.outcome === "refused") parts.push("Refused");
+  else if (call.outcome === "invalid") parts.push("Invalid reply");
+  else if (call.backup) parts.push("Fallback result used");
+  if (call.anomaly) parts.push(`Anomaly: ${call.anomaly}`);
+  return parts.length === 0 ? "OK" : parts.join(". ");
 }
 
 /** The attempts of each request together, newest request first (the API's order), oldest attempt first within one. */
@@ -23,6 +26,10 @@ function grouped(calls: CostCall[]): CostCall[][] {
   for (const call of calls) groups.set(call.call_id, [...(groups.get(call.call_id) ?? []), call]);
   return [...groups.values()].map((g) => g.sort((a, b) => a.attempt - b.attempt));
 }
+
+/** The time of day, with the date first when the range spans more than a day. */
+const when = (iso: string, showDate: boolean) =>
+  showDate ? `${dayMonth(iso)} ${clock.format(new Date(iso))}` : clock.format(new Date(iso));
 
 function Cells({ call, lead }: { call: CostCall; lead: React.ReactNode }) {
   return (
@@ -44,7 +51,7 @@ function Cells({ call, lead }: { call: CostCall; lead: React.ReactNode }) {
  * The last attempts, newest first. A request that retried or fell back shows its final attempt,
  * with a button that opens the earlier ones beneath it. Anomalies are shaded and named in the status.
  */
-export default function RecentCalls({ calls }: { calls: CostCall[] }) {
+export default function RecentCalls({ calls, showDate }: { calls: CostCall[]; showDate: boolean }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const toggle = (id: string) =>
     setOpen((was) => {
@@ -86,7 +93,7 @@ export default function RecentCalls({ calls }: { calls: CostCall[] }) {
                       call={last}
                       lead={
                         <>
-                          {clock.format(new Date(last.at))}
+                          {when(last.at, showDate)}
                           {earlier.length > 0 && (
                             <button
                               type="button"

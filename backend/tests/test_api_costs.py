@@ -96,6 +96,7 @@ def test_summary_shape_and_configured_roles_without_calls():
         "by_tenant",
         "anomalies",
         "failures",
+        "daily_calls",
     }
     assert body["summary"]["calls"] == 0
     assert body["summary"]["input_tokens"] is None
@@ -194,3 +195,17 @@ def test_prices_lists_known_models_with_exact_decimals():
     assert row["free_tier"] is True
     assert row["as_of"] == "2026-10-28"
     assert row["source"].startswith("https://")
+
+
+def test_summary_daily_calls_is_today_for_the_profile_user_whatever_the_filters():
+    services = make_services()
+    services.settings.ebb_daily_ai_calls = 300
+    for _ in range(3):
+        services.store.take_ai_call(USER, NOW.date(), 300)
+    services.store.take_ai_call(USER, NOW.date() - timedelta(days=1), 300)  # yesterday: not counted
+    services.store.take_ai_call(OTHER, NOW.date(), 300)  # another user: not counted
+    web = client(services)
+
+    assert web.get("/costs/summary").json()["daily_calls"] == {"used": 3, "limit": 300}
+    narrowed = web.get(f"/costs/summary?tenant={OTHER}&endpoint=grade&range=24h").json()
+    assert narrowed["daily_calls"] == {"used": 3, "limit": 300}

@@ -43,6 +43,13 @@ export default function CostsView() {
     return { page, calls };
   }, q);
 
+  // The option lists come from the range alone, so a chosen endpoint doesn't hide the others.
+  const { loaded: ranged } = useLoad<{ page: CostSummaryPage }>(
+    async (signal) => ({ page: await getJson<CostSummaryPage>(`/costs/summary?range=${filters.range}`, signal) }),
+    filters.range,
+  );
+  const options = ranged === null || ranged === "missing" || ranged === "failed" ? undefined : ranged.page;
+
   const data = loaded === null || loaded === "missing" || loaded === "failed" ? null : loaded;
   const page = data?.page;
   return (
@@ -59,9 +66,9 @@ export default function CostsView() {
 
         <Filters
           values={filters}
-          tenants={page?.by_tenant ?? []}
-          endpoints={page?.by_endpoint ?? []}
-          models={page?.by_model ?? []}
+          tenants={options?.by_tenant ?? []}
+          endpoints={options?.by_endpoint ?? []}
+          models={options?.by_model ?? []}
           onChange={setFilters}
         />
 
@@ -82,7 +89,7 @@ export default function CostsView() {
         {data && page && page.summary.calls > 0 && (
           <>
             <AnomalyBanner anomalies={page.anomalies} />
-            <SummaryCards summary={page.summary} />
+            <SummaryCards summary={page.summary} daily={page.daily_calls} />
             <div className={styles.pair}>
               <FeatureBars features={page.by_feature} />
               <TokensPerDay days={page.per_day} anomalies={page.anomalies} />
@@ -97,7 +104,7 @@ export default function CostsView() {
                 <TenantTable tenants={page.by_tenant} />
               </div>
             </div>
-            <RecentCalls calls={data.calls} />
+            <RecentCalls calls={data.calls} showDate={filters.range !== "24h"} />
             <PriceSources />
           </>
         )}

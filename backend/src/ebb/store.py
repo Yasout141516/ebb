@@ -267,6 +267,10 @@ class Store(Protocol):
         otherwise return False and change nothing."""
         ...
 
+    def ai_calls_used(self, user_id: UUID, day: date) -> int:
+        """How many AI calls `take_ai_call` has counted for `day`; 0 when none."""
+        ...
+
     def record_llm_call(self, user_id: UUID, call: LlmCall) -> None:
         """Keep one gateway attempt."""
         ...

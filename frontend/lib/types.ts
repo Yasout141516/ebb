@@ -302,6 +302,7 @@ export type CostSummaryPage = {
   by_tenant: CostBreakdown[];
   anomalies: CostAnomaly[];
   failures: CostCall[];
+  daily_calls: { used: number; limit: number };
 };
 
 export type CostPrice = {

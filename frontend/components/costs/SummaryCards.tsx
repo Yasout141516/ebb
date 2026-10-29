@@ -17,8 +17,15 @@ const side = (n: number | null, word: string, unit: string) =>
   n === null ? `${word} not reported` : `${tokens(n)} ${unit}`;
 
 /** The range's totals: cost, tokens, calls, first-token and total times, fallback and retry rates. */
-export default function SummaryCards({ summary: s }: { summary: CostSummary }) {
-  const known = s.input_tokens !== null || s.output_tokens !== null;
+export default function SummaryCards({
+  summary: s,
+  daily,
+}: {
+  summary: CostSummary;
+  daily: { used: number; limit: number };
+}) {
+  // A total only when both sides were reported: a missing side is not zero.
+  const known = s.input_tokens !== null && s.output_tokens !== null;
   const unpriced = s.unpriced_calls > 0 && !s.all_free_tier;
   return (
     <section aria-label="Summary" className={styles.grid}>
@@ -58,6 +65,11 @@ export default function SummaryCards({ summary: s }: { summary: CostSummary }) {
         label="Retried after a bad reply"
         value={percent(s.retry_rate)}
         note={`${s.retried} of ${tokens(s.calls)} calls`}
+      />
+      <Card
+        label="Daily call limit used"
+        value={`${daily.used} / ${daily.limit}`}
+        note="Resets at midnight, your time zone"
       />
     </section>
   );

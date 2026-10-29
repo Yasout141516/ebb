@@ -45,6 +45,10 @@ function Select({
   );
 }
 
+/** The first row of each value: two providers can serve the same model id, and the API filters on the id. */
+const unique = (rows: { value: string; label: string }[]) =>
+  rows.filter((r, i) => rows.findIndex((o) => o.value === r.value) === i);
+
 /** A model breakdown's key is "provider/model"; the API filters on the model alone. */
 const modelId = (key: string) => key.slice(key.indexOf("/") + 1);
 
@@ -57,7 +61,7 @@ export default function Filters({ values, tenants, endpoints, models, onChange }
   const options = (rows: { value: string; label: string }[], chosen: string, all: string) => (
     <>
       <option value="">{all}</option>
-      {withChosen(rows, chosen).map((r) => (
+      {withChosen(unique(rows), chosen).map((r) => (
         <option key={r.value} value={r.value}>
           {r.label}
         </option>

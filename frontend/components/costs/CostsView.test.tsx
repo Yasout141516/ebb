@@ -13,7 +13,11 @@ vi.mock("@/lib/api", async (importOriginal) => ({
 
 function serve(page: CostSummaryPage = summaryPage) {
   vi.mocked(getJson).mockImplementation(async (path: string) => {
-    if (path.startsWith("/costs/summary")) return page;
+    if (path.startsWith("/costs/summary")) {
+      // A narrowed query lists only what it narrowed to, as the API does.
+      const endpoint = new URLSearchParams(path.split("?")[1]).get("endpoint");
+      return endpoint ? { ...page, by_endpoint: page.by_endpoint.filter((e) => e.key === endpoint) } : page;
+    }
     if (path.startsWith("/costs/calls")) return page === emptyPage ? [] : calls;
     if (path.startsWith("/costs/prices")) return prices;
     throw new Error(`unexpected ${path}`);
@@ -60,6 +64,9 @@ describe("CostsView", () => {
     expect(summary.getByText("3.4 s / 14.8 s")).toBeInTheDocument();
     expect(summary.getByText("8.3%")).toBeInTheDocument();
     expect(summary.getByText("16.7%")).toBeInTheDocument();
+    expect(summary.getByText("Daily call limit used")).toBeInTheDocument();
+    expect(summary.getByText("84 / 300")).toBeInTheDocument();
+    expect(summary.getByText("Resets at midnight, your time zone")).toBeInTheDocument();
 
     const feature = within(screen.getByRole("region", { name: "Estimated cost by feature" }));
     expect(feature.getByText("Lessons and re-teaching")).toBeInTheDocument();
@@ -115,6 +122,36 @@ describe("CostsView", () => {
     expect(getJson).toHaveBeenCalledWith(`/costs/calls?${q}&limit=50`, expect.anything());
   });
 
+  it("lists every endpoint of the range while one is chosen, and switching refetches", async () => {
+    serve();
+    render(<CostsView />);
+    const endpoint = await screen.findByRole("combobox", { name: "Endpoint" });
+    await userEvent.selectOptions(endpoint, "grade");
+    await screen.findByRole("region", { name: "By endpoint" });
+    expect(within(endpoint).getByRole("option", { name: "Lesson" })).toBeInTheDocument();
+    await userEvent.selectOptions(endpoint, "lesson");
+    expect(getJson).toHaveBeenCalledWith("/costs/summary?range=7d&endpoint=lesson", expect.anything());
+    // The option lists load once per range: initial summary plus the range-only one.
+    expect(vi.mocked(getJson).mock.calls.filter(([p]) => p === "/costs/summary?range=7d")).toHaveLength(2);
+  });
+
+  it("shows each side of the tokens when one is not reported, and no total", async () => {
+    serve({ ...summaryPage, summary: { ...summaryPage.summary, output_tokens: null } });
+    render(<CostsView />);
+    const summary = within(await screen.findByRole("region", { name: "Summary" }));
+    expect(summary.getByText("1,310 in · output not reported")).toBeInTheDocument();
+    expect(summary.getByText("Tokens").nextElementSibling).toHaveTextContent("not reported");
+  });
+
+  it("shows the date as well as the time when the range is longer than a day", async () => {
+    serve();
+    render(<CostsView />);
+    const recent = within(await screen.findByRole("region", { name: "Recent calls" }));
+    expect(recent.getAllByText(/^\d{1,2} Oct \d\d:\d\d:\d\d$/).length).toBeGreaterThan(0);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Range" }), "24h");
+    expect(await recent.findAllByText(/^\d\d:\d\d:\d\d$/)).not.toHaveLength(0);
+  });
+
   it("groups a request's attempts behind an expand button and names anomalies in words", async () => {
     serve();
     render(<CostsView />);
@@ -128,6 +165,20 @@ describe("CostsView", () => {
     await userEvent.click(button);
     expect(recent.queryByText("Failed: timeout")).not.toBeInTheDocument();
     expect(recent.getByText(/Anomaly: Grade answer at 14:02 used 4.1 times/)).toBeInTheDocument();
+  });
+
+  it("names both the failure and the anomaly of one attempt", async () => {
+    serve();
+    vi.mocked(getJson).mockImplementation(async (path: string) => {
+      if (path.startsWith("/costs/summary")) return summaryPage;
+      if (path.startsWith("/costs/calls")) {
+        return [{ ...calls[2], anomaly: "Lesson took 7 times as long as usual" }];
+      }
+      return prices;
+    });
+    render(<CostsView />);
+    const recent = within(await screen.findByRole("region", { name: "Recent calls" }));
+    expect(recent.getByText("Failed: timeout. Anomaly: Lesson took 7 times as long as usual")).toBeInTheDocument();
   });
 
   it("offers Retry when the numbers can't be loaded", async () => {

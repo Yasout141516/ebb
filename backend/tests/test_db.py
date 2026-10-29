@@ -1063,6 +1063,19 @@ def test_take_ai_call_with_limit_zero_refuses_without_writing(usage_store):
     assert usage_store.take_ai_call(ALICE, date(2026, 10, 15), 1) is True  # nothing was counted
 
 
+def test_ai_calls_used_counts_per_user_and_day(usage_store):
+    day = date(2026, 10, 15)
+
+    assert usage_store.ai_calls_used(ALICE, day) == 0  # no row yet
+    usage_store.take_ai_call(ALICE, day, 5)
+    usage_store.take_ai_call(ALICE, day, 5)
+    usage_store.take_ai_call(BOB, day, 5)
+    usage_store.take_ai_call(ALICE, date(2026, 10, 16), 5)
+
+    assert usage_store.ai_calls_used(ALICE, day) == 2
+    assert usage_store.ai_calls_used(BOB, day) == 1
+
+
 def test_take_ai_call_leaves_no_row_when_the_limit_is_zero(store, pg_pool):
     store.take_ai_call(ALICE, date(2026, 10, 15), 0)
 
