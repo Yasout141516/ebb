@@ -20,13 +20,13 @@ from tests.conftest import DEFAULT_TEST_URL
 def test_health_ok():
     response = client(make_services()).get("/health")
     assert response.status_code == 200
-    assert response.json() == {"database": "ok", "tutor": "ok", "timezone": "ok"}
+    assert response.json() == {"database": "ok", "tutor": "ok", "timezone": "ok", "costs": True}
 
 
 def test_health_reports_missing_groq_key():
     text = "GROQ_API_KEY is not set — EBB_TEACH_MODEL uses Groq (get one free at console.groq.com)"
     response = client(make_services(tutor=None, config_error=text)).get("/health")
-    assert response.json() == {"database": "ok", "tutor": text, "timezone": "ok"}
+    assert response.json() == {"database": "ok", "tutor": text, "timezone": "ok", "costs": True}
 
 
 def test_a_bad_time_zone_falls_back_to_utc_and_shows_on_health(pg_pool):

@@ -1,6 +1,7 @@
 """Request and response bodies. Each route adds its own here."""
 
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -13,6 +14,7 @@ class Health(BaseModel):
     database: str
     tutor: str
     timezone: str
+    costs: bool  # the dev Costs page is on (EBB_SHOW_COSTS)
 
 
 class SubjectSummary(BaseModel):
@@ -185,3 +187,116 @@ class Progress(BaseModel):
     average: Average
     chart: Chart
     stages: list[Stage]
+
+
+# The Costs page. Decimals serialise as strings, so money keeps its exact digits; None stays null.
+class CostSummary(BaseModel):
+    cost_usd: Decimal | None
+    unpriced_calls: int
+    input_tokens: int | None
+    output_tokens: int | None
+    calls: int
+    retried: int
+    fell_back: int
+    ttft_p50_ms: int | None
+    ttft_p95_ms: int | None
+    total_p50_ms: int | None
+    total_p95_ms: int | None
+    fallback_rate: float | None
+    retry_rate: float | None
+    all_free_tier: bool
+
+
+class CostBreakdown(BaseModel):
+    key: str
+    label: str
+    calls: int
+    cost_usd: Decimal | None
+    unpriced_calls: int
+    input_tokens: int | None
+    output_tokens: int | None
+    ttft_p50_ms: int | None
+    ttft_p95_ms: int | None
+    total_p50_ms: int | None
+    total_p95_ms: int | None
+    output_tokens_per_second: float | None
+    fallbacks: int
+
+
+class CostDay(BaseModel):
+    day: date
+    input_tokens: int | None
+    output_tokens: int | None
+    tokens: int | None
+    calls: int
+
+
+class ModelRef(BaseModel):
+    provider: str
+    model: str
+
+
+class CostRole(BaseModel):
+    role: str
+    main: ModelRef
+    backup: ModelRef | None
+    attempts: int
+    failed_share: float | None
+    p95_total_ms: int | None
+
+
+class CostAnomaly(BaseModel):
+    kind: Literal["tokens", "ttft", "total", "day"]
+    call_id: UUID | None
+    day: date | None
+    endpoint: str | None
+    ratio: float
+    message: str
+
+
+class CostCall(BaseModel):
+    """One model-call attempt."""
+
+    id: UUID
+    call_id: UUID
+    request_id: UUID | None
+    user_id: UUID
+    at: datetime
+    role: str
+    endpoint: str
+    endpoint_label: str
+    provider: str
+    model: str
+    attempt: int
+    outcome: str
+    input_tokens: int | None
+    output_tokens: int | None
+    reasoning_tokens: int | None
+    ttft_ms: int | None
+    total_ms: int
+    cost_usd: Decimal | None
+    backup: bool
+    error_kind: str | None
+    anomaly: str | None = None  # the message of the first anomaly for this call, if any
+
+
+class CostSummaryPage(BaseModel):
+    summary: CostSummary
+    by_feature: list[CostBreakdown]
+    per_day: list[CostDay]
+    roles: list[CostRole]
+    by_model: list[CostBreakdown]
+    by_endpoint: list[CostBreakdown]
+    by_tenant: list[CostBreakdown]
+    anomalies: list[CostAnomaly]
+    failures: list[CostCall]
+
+
+class CostPrice(BaseModel):
+    provider: str
+    model: str
+    input_per_m: Decimal
+    output_per_m: Decimal
+    source: str
+    as_of: date
+    free_tier: bool
