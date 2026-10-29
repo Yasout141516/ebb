@@ -10,11 +10,13 @@ from ebb.domain import (
     Answer,
     Citation,
     Claim,
+    Concept,
     Dispute,
     DisputeOutcome,
     DisputeReason,
     GradeValue,
     Question,
+    Source,
 )
 from ebb.llm.tutor import AllProvidersExhausted
 from ebb.store import DocumentRefused, merge_note_concepts
@@ -150,6 +152,57 @@ def test_fake_tutor_can_fail_to_extend():
     with pytest.raises(AllProvidersExhausted):
         tutor.extend_concepts("Networks", [])
     assert len(tutor.extend_calls) == 1
+
+
+DNS = Concept(uuid4(), uuid4(), "DNS", "Names to addresses.")
+NOTE = Source("N1", "chunk", "c1", "dns.pdf", "Resolvers cache answers for the TTL.")
+
+
+def test_fake_tutor_streams_a_lesson_in_three_pieces_citing_the_first_source():
+    tutor, pieces = FakeTutor(), []
+
+    lesson = tutor.write_lesson(DNS, "Networks", [NOTE], on_text=pieces.append).value
+
+    assert len(pieces) == 3 and "".join(pieces) == lesson.markdown
+    assert lesson.markdown.startswith("# DNS\n") and lesson.markdown.count("|---|") == 1
+    assert (len(lesson.checks), len(lesson.suggestions)) == (3, 2)
+    assert lesson.claims == (Claim("N1", "Resolvers cache answers for the TTL."),)
+    assert tutor.write_lesson(DNS, "Networks", []).value.claims == ()
+    assert [c["sources"] for c in tutor.lesson_calls] == [[NOTE], []]
+
+
+def test_fake_tutor_answers_in_three_pieces_without_checks():
+    tutor, pieces = FakeTutor(), []
+
+    answer = tutor.answer(DNS, "# DNS", [("Q", "A")], "Why?", [NOTE], on_text=pieces.append).value
+
+    assert len(pieces) == 3 and "".join(pieces) == answer.markdown
+    assert "Why?" in answer.markdown and "#" not in answer.markdown
+    assert (answer.checks, len(answer.suggestions)) == ((), 2)
+    assert tutor.answer_calls[0]["question"] == "Why?"
+
+
+def test_fake_tutor_citation_retry_keeps_the_text_and_takes_scripted_claims():
+    tutor, pieces = FakeTutor(learn_cites=[[("N9", "bad")], [("N1", "Resolvers cache")]]), []
+    first = tutor.write_lesson(DNS, "Networks", [NOTE]).value
+    assert first.claims == (Claim("N9", "bad"),)
+
+    again = tutor.write_lesson(DNS, "Networks", [NOTE], pieces.append, ["N9: bad"], first).value
+
+    assert again == replace(first, claims=(Claim("N1", "Resolvers cache"),))
+    assert pieces == []
+
+
+def test_fake_tutor_learn_calls_can_fail_before_or_after_text():
+    tutor, pieces = FakeTutor(fail_learn_times=1, break_learn_times=1), []
+
+    with pytest.raises(AllProvidersExhausted):
+        tutor.write_lesson(DNS, "Networks", [], on_text=pieces.append)
+    assert pieces == []
+    with pytest.raises(AllProvidersExhausted):
+        tutor.answer(DNS, "# DNS", [], "Why?", [], on_text=pieces.append)
+    assert len(pieces) == 1  # the stream broke after its first piece
+    assert tutor.write_lesson(DNS, "Networks", []).value.markdown.startswith("# DNS")
 
 
 SUBNET = "Subnet masks split a network into subnets; the broadcast address closes each subnet."

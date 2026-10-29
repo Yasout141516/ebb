@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from ebb.domain import Concept
 from ebb.llm.quota import CappedTutor, UserQuotaExceeded
 from ebb.llm.tutor import TutorUnavailable
 from tests.fakes import FakeTutor, MemoryStore
@@ -46,6 +47,22 @@ def test_capped_tutor_with_limit_zero_never_calls_inner_or_writes():
 
     assert inner.concepts_calls == []
     assert store.ai_calls == {}
+
+
+def test_capped_tutor_counts_learn_calls():
+    inner, store = FakeTutor(), MemoryStore()
+    tutor = capped(inner, store, 2)
+    concept = Concept(uuid4(), uuid4(), "DNS", "Names to addresses.")
+    pieces: list[str] = []
+
+    tutor.write_lesson(concept, "Networks", [], on_text=pieces.append)
+    tutor.answer(concept, "# DNS", [], "Why?", [], on_text=pieces.append)
+    with pytest.raises(UserQuotaExceeded):
+        tutor.answer(concept, "# DNS", [], "Why again?", [])
+
+    assert (len(inner.lesson_calls), len(inner.answer_calls)) == (1, 1)
+    assert len(pieces) == 6  # each streamed through, three pieces apiece
+    assert store.ai_calls == {TODAY: 2}
 
 
 def test_citation_retries_count_as_calls():

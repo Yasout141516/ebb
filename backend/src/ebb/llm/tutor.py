@@ -2,11 +2,13 @@
 
 import random
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from importlib.resources import files
 from string import Template
 from typing import Any, Protocol, get_args
 from uuid import uuid4
 
+from langchain_core.messages import BaseMessage
 from pydantic import BaseModel
 
 from ebb.citations import MAX_CITATIONS, MAX_QUOTE
@@ -17,6 +19,7 @@ from ebb.domain import (
     DisputeReason,
     Grade,
     GradeValue,
+    LearnText,
     Lesson,
     Option,
     Question,
@@ -24,6 +27,7 @@ from ebb.domain import (
     Source,
 )
 from ebb.grading import cap_for_misconception
+from ebb.llm import trailer
 from ebb.llm.gateway import EXHAUSTED_NOTICE as EXHAUSTED_NOTICE
 from ebb.llm.gateway import REFUSED_NOTICE as REFUSED_NOTICE
 from ebb.llm.gateway import AllProvidersExhausted as AllProvidersExhausted
@@ -38,6 +42,8 @@ from ebb.llm.schemas import (
     ConceptList,
     EvalCaseDraft,
     GradeResult,
+    LearnCitations,
+    LearnTrailer,
     LessonResult,
     NoteConcept,
     NoteConceptList,
@@ -87,6 +93,34 @@ class Tutor(Protocol):
         failures: Sequence[str] = (),
         previous: Lesson | None = None,
     ) -> Generated[Lesson]: ...
+
+    def write_lesson(
+        self,
+        concept: Concept,
+        subject: str,
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None = None,
+        failures: Sequence[str] = (),
+        previous: LearnText | None = None,
+    ) -> Generated[LearnText]:
+        """The concept's lesson, its markdown streamed to `on_text`. With `failures`, a
+        citation retry: `previous` keeps its text and gets new claims, nothing streamed."""
+        ...
+
+    def answer(
+        self,
+        concept: Concept,
+        lesson: str,
+        history: Sequence[tuple[str, str]],
+        question: str,
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None = None,
+        failures: Sequence[str] = (),
+        previous: LearnText | None = None,
+    ) -> Generated[LearnText]:
+        """An answer to the learner's question about the lesson, after the earlier
+        (question, answer) pairs in `history`; streamed and retried as `write_lesson`."""
+        ...
 
     def concepts_from_notes(
         self, subject: str, existing: Sequence[Concept], digest: str
@@ -204,6 +238,36 @@ def _previous_lesson(lesson: Lesson | None) -> str:
     return _previous_section("lesson", fields, "Keep the lesson; only fix its citations.")
 
 
+# The most suggested follow-ups and check-yourself questions a learn reply keeps.
+MAX_SUGGESTIONS = 3
+MAX_CHECKS = 4
+
+
+def _learn_sources(sources: Sequence[Source], item: str) -> str:
+    """A learn prompt's sources and how to cite them; without sources, general knowledge."""
+    if not sources:
+        return (
+            f"\nThere are no sources: write the {item} from general knowledge, and leave "
+            '"citations" empty.\n'
+        )
+    return (
+        _sources_section(sources)
+        + "\nUse the sources first, and general knowledge where they say nothing; where they "
+        f'disagree, follow the sources. Cite only in the trailer\'s "citations", never in the '
+        f"{item} itself: {_cite_item(item)}.\n"
+    )
+
+
+def _history_text(history: Sequence[tuple[str, str]]) -> str:
+    pairs = "\n\n".join(f"Learner: {question}\nEbb: {answer}" for question, answer in history)
+    return _neutralise(pairs) or "(none)"
+
+
+def _texts(items: Sequence[str], limit: int) -> tuple[str, ...]:
+    """Up to `limit` of the model's questions, blank ones dropped."""
+    return tuple(text for text in (item.strip() for item in items) if text)[:limit]
+
+
 def _questions_text(questions: Sequence[Question]) -> str:
     """The questions a citation retry rewrites, numbered as its failures name them."""
     entries = []
@@ -312,8 +376,9 @@ class LangChainTutor:
         prompt: str,
         creative: bool,
         parse: Callable[[Any], T],
+        on_text: Callable[[str], None] | None = None,
     ) -> Generated[T]:
-        return self.gateway.call(role, endpoint, schema, prompt, creative, parse)
+        return self.gateway.call(role, endpoint, schema, prompt, creative, parse, on_text=on_text)
 
     def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]:
         return self._run(
@@ -452,6 +517,101 @@ class LangChainTutor:
             prompt,
             creative=True,
             parse=lambda out: Lesson(out.text.strip(), _claims(out.citations)),
+        )
+
+    def write_lesson(
+        self,
+        concept: Concept,
+        subject: str,
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None = None,
+        failures: Sequence[str] = (),
+        previous: LearnText | None = None,
+    ) -> Generated[LearnText]:
+        if failures:
+            return self._recite("lesson", "lesson", sources, failures, previous)
+        prompt = _prompt(
+            "learn_lesson",
+            subject=_line(subject),
+            name=_line(concept.name),
+            description=_line(concept.description),
+            sources=_learn_sources(sources, "lesson"),
+        )
+        return self._learn("lesson", prompt, on_text)
+
+    def answer(
+        self,
+        concept: Concept,
+        lesson: str,
+        history: Sequence[tuple[str, str]],
+        question: str,
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None = None,
+        failures: Sequence[str] = (),
+        previous: LearnText | None = None,
+    ) -> Generated[LearnText]:
+        if failures:
+            return self._recite("learn_answer", "answer", sources, failures, previous)
+        prompt = _prompt(
+            "learn_answer",
+            name=_line(concept.name),
+            description=_line(concept.description),
+            lesson=_neutralise(lesson),
+            history=_history_text(history),
+            question=_neutralise(question),
+            sources=_learn_sources(sources, "answer"),
+        )
+        return self._learn("learn_answer", prompt, on_text)
+
+    def _learn(
+        self, endpoint: Endpoint, prompt: str, on_text: Callable[[str], None] | None
+    ) -> Generated[LearnText]:
+        """A lesson or answer: markdown, streamed to `on_text` without its trailer, then the
+        trailer read. A reply whose trailer won't parse is invalid, so it is retried, unless
+        some of its text has been shown (see Gateway.call)."""
+
+        def to_text(message: BaseMessage) -> LearnText:
+            markdown, data = trailer.split(message.text)
+            out = LearnTrailer.model_validate(data)
+            return LearnText(
+                markdown,
+                _claims(out.citations),
+                _texts(out.suggestions, MAX_SUGGESTIONS),
+                _texts(out.checks, MAX_CHECKS) if endpoint == "lesson" else (),
+            )
+
+        streamer = None if on_text is None else trailer.Streamer(on_text)
+        return self._run(
+            "teach", endpoint, None, prompt, creative=True, parse=to_text, on_text=streamer
+        )
+
+    def _recite(
+        self,
+        endpoint: Endpoint,
+        kind: str,
+        sources: Sequence[Source],
+        failures: Sequence[str],
+        previous: LearnText | None,
+    ) -> Generated[LearnText]:
+        """A citation retry: new claims for `previous`, whose text, suggestions and checks
+        stay as they are. Nothing is streamed: there is no new text to show."""
+        if previous is None:
+            raise ValueError("a citation retry needs the previous text")
+        fields = [("text", previous.markdown), ("citations", _claims_text(previous.claims))]
+        prompt = _with_sources(
+            _prompt("learn_cite", kind=kind),
+            sources,
+            failures,
+            _cite_item(kind).capitalize() + ", for facts taken from a source.",
+            _previous_section(kind, fields, f"Keep the {kind}; only fix its citations."),
+        )
+        return self._run(
+            "teach",
+            endpoint,
+            LearnCitations,
+            prompt,
+            creative=False,
+            parse=lambda out: replace(previous, claims=_claims(out.citations)),
         )
 
     def concepts_from_notes(

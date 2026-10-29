@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import httpx
 import psycopg
 import pytest
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessageChunk, message_chunk_to_message
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
@@ -514,6 +515,25 @@ def test_failure_before_any_text_retries_and_falls_back_as_usual():
     assert (out.value, out.fell_back) == ("Backup lesson.", True)
     assert pieces == ["Backup", " lesson."]
     assert [r.outcome for r in recording.calls] == ["error", "error", "ok"]
+
+
+def test_a_reply_that_parse_rejects_is_invalid_and_retried():
+    clock = Clock()
+    model = Streamed(replies=[text_reply("bad"), text_reply("good")], clock=clock, streaming=True)
+    gw, recording = gateway(clock, provider("main", model))
+
+    def parse(message: Any) -> str:
+        if message.text == "bad":
+            raise OutputParserException("no trailer")
+        return message.text
+
+    out = gw.call("teach", "lesson", None, "p", creative=True, parse=parse)
+
+    assert out.value == "good"
+    assert [(r.outcome, r.error_kind) for r in recording.calls] == [
+        ("invalid", "OutputParserException"),
+        ("ok", None),
+    ]
 
 
 class Exploding(Recording):

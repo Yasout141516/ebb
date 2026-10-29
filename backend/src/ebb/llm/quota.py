@@ -10,6 +10,7 @@ from ebb.domain import (
     DisputeReason,
     Grade,
     GradeValue,
+    LearnText,
     Lesson,
     Question,
     Regrade,
@@ -96,6 +97,34 @@ class CappedTutor:
     ) -> Generated[Lesson]:
         self._take()
         return self.inner.teach(question, answer, grade, sources, failures, previous)
+
+    def write_lesson(
+        self,
+        concept: Concept,
+        subject: str,
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None = None,
+        failures: Sequence[str] = (),
+        previous: LearnText | None = None,
+    ) -> Generated[LearnText]:
+        self._take()
+        return self.inner.write_lesson(concept, subject, sources, on_text, failures, previous)
+
+    def answer(
+        self,
+        concept: Concept,
+        lesson: str,
+        history: Sequence[tuple[str, str]],
+        question: str,
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None = None,
+        failures: Sequence[str] = (),
+        previous: LearnText | None = None,
+    ) -> Generated[LearnText]:
+        self._take()
+        return self.inner.answer(
+            concept, lesson, history, question, sources, on_text, failures, previous
+        )
 
     def concepts_from_notes(
         self, subject: str, existing: Sequence[Concept], digest: str

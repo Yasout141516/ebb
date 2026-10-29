@@ -284,12 +284,14 @@ class Gateway:
         on_text: Callable[[str], None] | None = None,
     ) -> Generated[T]:
         """Each provider in turn, retried; a refusal (TutorRefused) ends the call at once, and
-        a rejected key or unknown model is a ConfigError. Every attempt is recorded under one
-        call id. `on_text` receives a plain reply's text as it streams; once some has reached
-        it, a failure ends the call, so no second reply is spliced onto the first."""
+        a rejected key or unknown model is a ConfigError. A reply `parse` rejects with
+        OutputParserException or ValidationError is invalid, like one that failed `schema`.
+        Every attempt is recorded under one call id. `on_text` receives a plain reply's text
+        as it streams; once some has reached it, a failure ends the call, so no second reply
+        is spliced onto the first."""
         call_id, attempt = uuid4(), 0
 
-        def attempt_once(provider: Provider, index: int, meter: _Meter) -> Any:
+        def attempt_once(provider: Provider, index: int, meter: _Meter) -> T:
             """One attempt, recorded however it ends."""
             model = provider.creative if creative else provider.precise
             at, start = self.now(), self.clock()
@@ -297,7 +299,7 @@ class Gateway:
             try:
                 # The clients stream (built with streaming=True); invoking the chain keeps
                 # validation on the whole reply while the meter watches the chunks arrive.
-                return _chain(model, schema).invoke(prompt, config={"callbacks": [meter]})
+                return parse(_chain(model, schema).invoke(prompt, config={"callbacks": [meter]}))
             except Exception as caught:
                 error = caught
                 raise
@@ -313,7 +315,7 @@ class Gateway:
                 attempt += 1
                 meter = _Meter(self.clock, on_text if schema is None else None)
                 try:
-                    output = attempt_once(provider, index, meter)
+                    value = attempt_once(provider, index, meter)
                 except PROVIDER_ERRORS as error:
                     if not _retryable(error):
                         raise _config_error(error, provider, role, index) from error
@@ -323,7 +325,7 @@ class Gateway:
                     if tried < self.attempts:
                         self.sleep(_backoff(tried, self.jitter()))
                     continue
-                return Generated(parse(output), provider.name, fell_back=index > 0)
+                return Generated(value, provider.name, fell_back=index > 0)
         raise AllProvidersExhausted(str(last_error)) from last_error
 
     def _record(

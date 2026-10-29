@@ -121,6 +121,20 @@ class LessonResult(BaseModel):
     citations: list[CitationDraft] = []
 
 
+class LearnTrailer(BaseModel):
+    """What follows a learn-phase reply's markdown (see ebb.llm.trailer)."""
+
+    citations: list[CitationDraft] = []
+    suggestions: list[str] = []
+    checks: list[str] = []
+
+
+class LearnCitations(BaseModel):
+    """A citation retry of a lesson or learn answer: new citations for the same text."""
+
+    citations: list[CitationDraft] = []
+
+
 class NoteConcept(BaseModel):
     name: str
     description: str

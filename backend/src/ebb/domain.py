@@ -118,6 +118,17 @@ class Lesson:
 
 
 @dataclass(frozen=True)
+class LearnText:
+    """A learn-phase lesson or answer: its markdown, unverified citations, suggested
+    follow-up questions and (a lesson only) its unanswered check-yourself questions."""
+
+    markdown: str
+    claims: tuple[Claim, ...] = ()
+    suggestions: tuple[str, ...] = ()
+    checks: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Grade:
     value: GradeValue
     explanation: str

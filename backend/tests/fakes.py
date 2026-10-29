@@ -1,13 +1,15 @@
 """Test doubles: an in-memory Store and a scripted Tutor. No network, no database."""
 
 import random
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from uuid import UUID, uuid4
 
 from ebb import mastery
+from ebb.citations import MAX_QUOTE
 from ebb.domain import (
     Answer,
     Chunk,
@@ -21,6 +23,7 @@ from ebb.domain import (
     Document,
     Grade,
     GradeValue,
+    LearnText,
     Lesson,
     LlmCall,
     NewDocument,
@@ -520,6 +523,9 @@ class FakeTutor:
         fail_regrade: bool = False,
         fail_concepts: bool = False,
         fail_eval_on_calls: Sequence[int] = (),
+        learn_cites: list[list[tuple[str, str]]] | None = None,
+        fail_learn_times: int = 0,
+        break_learn_times: int = 0,
         refuse: set[str] | None = None,
         rng: random.Random | None = None,
     ) -> None:
@@ -562,6 +568,13 @@ class FakeTutor:
         self.regrade_calls: list[tuple[str, DisputeReason, str]] = []
         self.fail_eval_on_calls = fail_eval_on_calls  # 1-based write_eval_case call numbers
         self.eval_calls: list[tuple[str, GradeValue, str | None]] = []
+        # Lessons and learn answers share these. By default each cites its first source.
+        self.learn_cites = learn_cites  # claims per successful learn call, instead
+        self.fail_learn_times = fail_learn_times  # calls that fail before any text
+        self.break_learn_times = break_learn_times  # calls that fail after one piece of text
+        self.learn_attempts = 0
+        self.lesson_calls: list[dict[str, Any]] = []
+        self.answer_calls: list[dict[str, Any]] = []
 
     @staticmethod
     def _claims(scripted: list[list[tuple[str, str]]] | None, call: int) -> tuple[Claim, ...]:
@@ -700,6 +713,97 @@ class FakeTutor:
         claims = self._claims(self.teach_cites, self.teach_attempts)
         self.teach_attempts += 1
         return self._out(Lesson("Here is the idea, with an example.", claims))
+
+    def write_lesson(
+        self,
+        concept: Concept,
+        subject: str,
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None = None,
+        failures: Sequence[str] = (),
+        previous: LearnText | None = None,
+    ) -> Generated[LearnText]:
+        """A titled lesson with one table, streamed in three pieces."""
+        self.lesson_calls.append(
+            {
+                "concept": concept.name,
+                "subject": subject,
+                "sources": list(sources),
+                "failures": list(failures),
+                "previous": previous,
+            }
+        )
+        name, about = concept.name, concept.description
+        pieces = [
+            f"# {name}\n\n",
+            f"**In one sentence:** {about}\n\n",
+            f"| Part | What it does |\n|---|---|\n| {name} | {about} |",
+        ]
+        checks = (
+            f"Why does {name} matter?",
+            f"Where would you see {name} at work?",
+            f"What would break without {name}?",
+        )
+        return self._learn("write_lesson", pieces, checks, sources, on_text, failures, previous)
+
+    def answer(
+        self,
+        concept: Concept,
+        lesson: str,
+        history: Sequence[tuple[str, str]],
+        question: str,
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None = None,
+        failures: Sequence[str] = (),
+        previous: LearnText | None = None,
+    ) -> Generated[LearnText]:
+        """A plain answer that repeats the question, streamed in three pieces."""
+        self.answer_calls.append(
+            {
+                "concept": concept.name,
+                "lesson": lesson,
+                "history": list(history),
+                "question": question,
+                "sources": list(sources),
+                "failures": list(failures),
+                "previous": previous,
+            }
+        )
+        pieces = [f"You asked: {question} ", f"Here is how {concept.name} ", "answers it."]
+        return self._learn("answer", pieces, (), sources, on_text, failures, previous)
+
+    def _learn(
+        self,
+        method: str,
+        pieces: list[str],
+        checks: tuple[str, ...],
+        sources: Sequence[Source],
+        on_text: Callable[[str], None] | None,
+        failures: Sequence[str],
+        previous: LearnText | None,
+    ) -> Generated[LearnText]:
+        """Streams `pieces` to `on_text`; a citation retry keeps `previous` and streams
+        nothing. Fails as `fail_learn_times` and `break_learn_times` say."""
+        self._maybe_refuse(method)
+        if self.fail_learn_times > 0:
+            self.fail_learn_times -= 1
+            raise AllProvidersExhausted("learning down")
+        if not failures:
+            for n, piece in enumerate(pieces):
+                if n == 1 and self.break_learn_times > 0:
+                    self.break_learn_times -= 1
+                    raise AllProvidersExhausted("the stream broke")
+                if on_text is not None:
+                    on_text(piece)
+        if self.learn_cites is not None:
+            claims = self._claims(self.learn_cites, self.learn_attempts)
+        else:
+            claims = (Claim(sources[0].label, sources[0].text[:MAX_QUOTE]),) if sources else ()
+        self.learn_attempts += 1
+        if failures and previous is not None:
+            return self._out(replace(previous, claims=claims))
+        suggestions = ("How is this used in practice?", "What is it often confused with?")
+        return self._out(LearnText("".join(pieces), claims, suggestions, checks))
 
     def concepts_from_notes(
         self, subject: str, existing: Sequence[Concept], digest: str
