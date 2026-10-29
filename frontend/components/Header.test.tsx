@@ -1,12 +1,21 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getJson } from "@/lib/api";
 import Header, { ThemeToggle } from "./Header";
+
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  getJson: vi.fn(),
+}));
+
+const health = (costs: boolean) => ({ database: "ok", tutor: "ok", timezone: "ok", costs });
 
 vi.mock("next/navigation", () => ({ usePathname: () => "/study/1" }));
 
 describe("Header", () => {
   beforeEach(() => {
+    vi.mocked(getJson).mockResolvedValue(health(false));
     document.documentElement.removeAttribute("data-theme");
     window.localStorage.clear();
   });
@@ -25,6 +34,27 @@ describe("Header", () => {
     expect(screen.getByRole("link", { name: "Study" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Progress" })).toHaveAttribute("href", "/progress/1");
     expect(screen.getByRole("link", { name: "Progress" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("shows Costs with a dev-only tag when health.costs is true", async () => {
+    vi.mocked(getJson).mockResolvedValue(health(true));
+    render(<Header />);
+    const link = await screen.findByRole("link", { name: /Costs/ });
+    expect(link).toHaveAttribute("href", "/costs"); // no subject id, unlike Study and Progress
+    expect(link).toHaveTextContent("dev only");
+  });
+
+  it("hides Costs when health.costs is false", async () => {
+    render(<Header />);
+    await vi.waitFor(() => expect(getJson).toHaveBeenCalledWith("/health", expect.anything()));
+    expect(screen.queryByRole("link", { name: /Costs/ })).not.toBeInTheDocument();
+  });
+
+  it("hides Costs when /health can't be reached", async () => {
+    vi.mocked(getJson).mockRejectedValue(new TypeError("Failed to fetch"));
+    render(<Header />);
+    await vi.waitFor(() => expect(getJson).toHaveBeenCalled());
+    expect(screen.queryByRole("link", { name: /Costs/ })).not.toBeInTheDocument();
   });
 
   it("names the backup model", () => {

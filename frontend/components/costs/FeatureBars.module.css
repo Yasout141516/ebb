@@ -1,0 +1,32 @@
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 14px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.amount {
+  font: 500 13px var(--mono);
+}
+
+.track {
+  height: 12px;
+  background: var(--surface-2);
+  border-radius: 6px;
+}
+
+.fill {
+  height: 12px;
+  background: var(--accent);
+  border-radius: 6px;
+}

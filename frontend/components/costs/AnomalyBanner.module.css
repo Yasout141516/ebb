@@ -1,0 +1,30 @@
+.banner {
+  padding: 20px;
+  border-radius: 16px;
+  background: var(--partial-soft);
+  border: 1px solid var(--partial);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 24px;
+  color: var(--partial);
+}
+
+.line {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}

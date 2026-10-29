@@ -1,0 +1,105 @@
+.main {
+  flex: 1;
+  padding: clamp(24px, 3.5vw, 48px) clamp(16px, 4vw, 48px);
+  display: flex;
+  justify-content: center;
+}
+
+.inner {
+  width: 100%;
+  max-width: 1200px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 640px;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: clamp(32px, 3.2vw, 44px);
+  letter-spacing: -0.015em;
+}
+
+.intro {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.pair > * {
+  flex: 1 1 440px;
+  min-width: 0;
+}
+
+.pair > .wide {
+  flex: 2 1 560px;
+}
+
+.pair > .narrow {
+  flex: 1 1 300px;
+}
+
+.empty {
+  margin: 0;
+  padding: 48px 20px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  text-align: center;
+  font-size: 16px;
+  color: var(--ink-2);
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.skelCards {
+  height: 200px;
+  border-radius: 16px;
+}
+
+.skelTable {
+  height: 320px;
+  border-radius: 16px;
+}
+
+@media (max-width: 640px) {
+  .main {
+    padding: 20px 16px 32px;
+  }
+
+  .inner {
+    gap: 18px;
+  }
+
+  .title {
+    font-size: 32px;
+    letter-spacing: normal;
+  }
+}

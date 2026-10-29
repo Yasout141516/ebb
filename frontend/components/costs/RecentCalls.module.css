@@ -1,0 +1,33 @@
+.toggle {
+  margin-left: 10px;
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  font: 500 12px var(--sans);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.chevron,
+.up {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.up {
+  transform: rotate(180deg);
+}
+
+/* An earlier attempt of the request above it. */
+.earlier td:first-child {
+  padding-left: 28px;
+  color: var(--ink-2);
+}

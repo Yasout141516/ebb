@@ -1,6 +1,6 @@
 // Mirrors backend/src/ebb/api/schemas.py and the routes. Datetimes arrive as ISO strings.
 
-export type Health = { database: string; tutor: string; timezone: string };
+export type Health = { database: string; tutor: string; timezone: string; costs: boolean };
 
 export type SubjectSummary = {
   id: string;
@@ -204,4 +204,112 @@ export type Progress = {
   average: Average;
   chart: Chart;
   stages: Stage[];
+};
+
+// The dev Costs page (routes_costs.py). Decimals arrive as strings; null means unknown.
+export type CostSummary = {
+  cost_usd: string | null;
+  unpriced_calls: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  calls: number;
+  retried: number;
+  fell_back: number;
+  ttft_p50_ms: number | null;
+  ttft_p95_ms: number | null;
+  total_p50_ms: number | null;
+  total_p95_ms: number | null;
+  fallback_rate: number | null;
+  retry_rate: number | null;
+  all_free_tier: boolean;
+};
+
+export type CostBreakdown = {
+  key: string;
+  label: string;
+  calls: number;
+  cost_usd: string | null;
+  unpriced_calls: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  ttft_p50_ms: number | null;
+  ttft_p95_ms: number | null;
+  total_p50_ms: number | null;
+  total_p95_ms: number | null;
+  output_tokens_per_second: number | null;
+  fallbacks: number;
+};
+
+export type CostDay = {
+  day: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  tokens: number | null;
+  calls: number;
+};
+
+export type ModelRef = { provider: string; model: string };
+
+export type CostRole = {
+  role: string;
+  main: ModelRef;
+  backup: ModelRef | null;
+  attempts: number;
+  failed_share: number | null;
+  p95_total_ms: number | null;
+};
+
+export type CostAnomaly = {
+  kind: "tokens" | "ttft" | "total" | "day";
+  call_id: string | null;
+  day: string | null;
+  endpoint: string | null;
+  ratio: number;
+  message: string;
+};
+
+export type CostCall = {
+  id: string;
+  call_id: string;
+  request_id: string | null;
+  user_id: string;
+  at: string;
+  role: string;
+  endpoint: string;
+  endpoint_label: string;
+  provider: string;
+  model: string;
+  attempt: number;
+  outcome: string;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  reasoning_tokens: number | null;
+  ttft_ms: number | null;
+  total_ms: number;
+  cost_usd: string | null;
+  backup: boolean;
+  error_kind: string | null;
+  anomaly: string | null;
+};
+
+export type CostSummaryPage = {
+  summary: CostSummary;
+  by_feature: CostBreakdown[];
+  per_day: CostDay[];
+  roles: CostRole[];
+  by_model: CostBreakdown[];
+  by_endpoint: CostBreakdown[];
+  by_tenant: CostBreakdown[];
+  anomalies: CostAnomaly[];
+  failures: CostCall[];
+};
+
+export type CostPrice = {
+  provider: string;
+  model: string;
+  input_per_m: string;
+  output_per_m: string;
+  source: string;
+  as_of: string;
+  free_tier: boolean;
 };

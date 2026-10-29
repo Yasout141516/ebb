@@ -1,0 +1,87 @@
+/* What the Costs page's sections share: the card, its heading and the data tables. */
+.card {
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+
+.pad {
+  padding: clamp(16px, 2vw, 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.head {
+  padding: clamp(16px, 2vw, 24px) clamp(16px, 2vw, 24px) 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.heading {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 26px;
+}
+
+.sub {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-2);
+}
+
+.scroll {
+  overflow-x: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.table th {
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.table .n {
+  text-align: right;
+}
+
+.table td.n {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.table .flag td {
+  background: var(--partial-soft);
+}
+
+.note {
+  margin: 0;
+  padding: 14px clamp(16px, 2vw, 24px) 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
