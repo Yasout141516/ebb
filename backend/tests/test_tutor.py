@@ -315,7 +315,13 @@ def fenced(prompt: str, name: str) -> str:
         ("teach", {"prompt": "p", "reference": "r", "answer": "a", "explanation": "e"}),
         (
             "learn_lesson",
-            {"subject": "Networks", "name": "DNS", "description": "d", "sources": "S"},
+            {
+                "subject": "Networks",
+                "name": "DNS",
+                "description": "d",
+                "sources": "S",
+                "example": "E",
+            },
         ),
         (
             "learn_answer",
@@ -326,9 +332,10 @@ def fenced(prompt: str, name: str) -> str:
                 "history": "H",
                 "question": "Q",
                 "sources": "S",
+                "example": "E",
             },
         ),
-        ("learn_cite", {"kind": "lesson"}),
+        ("learn_cite", {"item": "an answer"}),
     ],
 )
 def test_every_prompt_fills_all_placeholders(name, values):
@@ -1281,6 +1288,23 @@ def test_lesson_without_sources_is_written_from_general_knowledge():
     assert "<<<SOURCES" not in prompt and "general knowledge" in prompt
 
 
+@pytest.mark.parametrize(
+    ("sources", "citations"),
+    [([], "[]"), ([WEB], '[{"source": "W1", "quote": "exact words"}]')],
+    ids=["no sources", "web only"],
+)
+def test_the_trailer_example_cites_only_a_source_there_is(sources, citations):
+    lesson, answer = chunks(LESSON_REPLY), chunks(LESSON_REPLY)
+    learn_tutor(lesson)[0].write_lesson(CONCEPT, "Networks", sources)
+    learn_tutor(answer)[0].answer(CONCEPT, "lesson", [], "Why?", sources)
+
+    for model, checks in ((lesson, '["..."]'), (answer, "[]")):
+        [prompt] = model.prompts
+        example = f'{{"citations": {citations}, "suggestions": ["..."], "checks": {checks}}}'
+        assert f"<<<EBB\n{example}\nEBB>>>" in prompt
+        assert '"N1"' not in prompt
+
+
 def test_answer_streams_prose_and_returns_suggestions_without_checks():
     trailer = (
         '<<<EBB\n{"citations": [], "suggestions": ["Who sets it?", "What if it is zero?", '
@@ -1324,13 +1348,17 @@ def test_answer_without_history_says_none():
 
 
 LEARN_CALLS = [
-    lambda t, **kw: t.write_lesson(CONCEPT, "Networks", [NOTE], **kw),
-    lambda t, **kw: t.answer(CONCEPT, "lesson", [], "Why?", [NOTE], **kw),
+    lambda t, sources=(NOTE,), **kw: t.write_lesson(CONCEPT, "Networks", sources, **kw),
+    lambda t, sources=(NOTE,), **kw: t.answer(CONCEPT, "lesson", [], "Why?", sources, **kw),
 ]
 
 
-@pytest.mark.parametrize("call", LEARN_CALLS, ids=["lesson", "answer"])
-def test_citation_retry_keeps_markdown(call):
+@pytest.mark.parametrize(
+    ("call", "opening"),
+    list(zip(LEARN_CALLS, ["You wrote a lesson ", "You wrote an answer "], strict=True)),
+    ids=["lesson", "answer"],
+)
+def test_citation_retry_keeps_markdown(call, opening):
     cited = LearnCitations.model_validate(
         {"citations": [{"source": "N1", "quote": "Resolvers cache answers"}]}
     )
@@ -1347,6 +1375,29 @@ def test_citation_retry_keeps_markdown(call):
     assert schema is LearnCitations
     assert fenced(prompt, "PREVIOUS").startswith("text: # DNS\n\nResolvers ››› cache.\n")
     assert f"- {FAILURE}" in prompt and "<<<SOURCES" in prompt
+    assert prompt.startswith(opening)
+
+
+@pytest.mark.parametrize("call", LEARN_CALLS, ids=["lesson", "answer"])
+def test_citation_retry_without_sources_returns_the_previous_text(call):
+    precise = Structured(None)
+    out = call(tutor_with(precise=precise), sources=(), failures=[FAILURE], previous=PREVIOUS)
+    assert out.value == PREVIOUS
+    assert precise.calls == []  # nothing to cite from, so no model is asked
+
+
+def test_a_trailer_that_fails_validation_is_retried():
+    bad = '# DNS\n\nText.\n<<<EBB\n{"citations": [{"source": "N1"}]}\nEBB>>>'
+    main = chunks([bad], LESSON_REPLY)
+    tutor, recorder = learn_tutor(main, attempts=2)
+
+    out = tutor.write_lesson(CONCEPT, "Networks", [NOTE])
+
+    assert out.value == LESSON
+    assert [(r.outcome, r.error_kind) for r in recorder.calls] == [
+        ("invalid", "ValidationError"),
+        ("ok", None),
+    ]
 
 
 def test_a_source_cannot_end_the_lesson_early():

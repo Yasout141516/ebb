@@ -1,5 +1,7 @@
 """The trailer after a learn-phase reply's markdown: streamed past, then parsed."""
 
+import json
+
 import pytest
 from langchain_core.exceptions import OutputParserException
 
@@ -66,6 +68,41 @@ def test_split_reads_the_last_block():
     markdown, data = trailer.split('A\n<<<EBB\n{"checks": ["early"]}\nEBB>>>\nB\n' + TRAILER)
     assert markdown == 'A\n<<<EBB\n{"checks": ["early"]}\nEBB>>>\nB'
     assert data["checks"] == ["Why cache at all?", "What goes stale?"]
+
+
+JSON = '{"citations": [], "suggestions": ["Next?"], "checks": []}'
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        f"# DNS\n\nText.\n<<<EBB\n{JSON}\nEBB>>>\n```",  # a fence line after the block
+        f"# DNS\n\nText.\n<<<EBB\n```json\n{JSON}\n```\nEBB>>>",  # a fence around the JSON
+        f"# DNS\n\nText.\n<<<EBB\n```\n{JSON}\n```\nEBB>>>",
+        f"# DNS\n\nText.\n```\n<<<EBB\n{JSON}\nEBB>>>\n```\n",  # the whole trailer fenced
+        f"# DNS\n\nText.\n```json\n<<<EBB\n{JSON}\nEBB>>>",  # a dangling fence before it
+    ],
+)
+def test_split_tolerates_code_fences_around_the_trailer(reply):
+    assert trailer.split(reply) == ("# DNS\n\nText.", json.loads(JSON))
+
+
+def test_split_keeps_a_code_block_that_ends_the_markdown():
+    markdown = "# DNS\n\n```\ndig example.com\n```"
+    assert trailer.split(f"{markdown}\n<<<EBB\n{JSON}\nEBB>>>")[0] == markdown
+
+
+def test_streamer_holds_back_a_fence_opened_just_before_the_marker():
+    pieces = streamed("# DNS\n\nText.\n``", "`json\n", "<<<EBB\n", JSON)
+    assert pieces == ["# DNS\n\nText.\n"]
+
+
+def test_streamer_shows_fences_of_real_code_blocks():
+    assert streamed("Run:\n```", "\ndig x\n```", "\n<<<EBB\n") == [
+        "Run:\n",
+        "```\ndig x\n```",
+        "\n",
+    ]
 
 
 @pytest.mark.parametrize(

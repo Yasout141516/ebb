@@ -193,6 +193,13 @@ def test_fake_tutor_citation_retry_keeps_the_text_and_takes_scripted_claims():
     assert pieces == []
 
 
+def test_fake_tutor_citation_retry_needs_the_previous_text():
+    with pytest.raises(ValueError):
+        FakeTutor().write_lesson(DNS, "Networks", [NOTE], failures=["N1: bad"])
+    with pytest.raises(ValueError):
+        FakeTutor().answer(DNS, "# DNS", [], "Why?", [NOTE], failures=["N1: bad"])
+
+
 def test_fake_tutor_learn_calls_can_fail_before_or_after_text():
     tutor, pieces = FakeTutor(fail_learn_times=1, break_learn_times=1), []
 

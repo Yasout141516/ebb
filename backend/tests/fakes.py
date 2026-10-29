@@ -784,6 +784,8 @@ class FakeTutor:
     ) -> Generated[LearnText]:
         """Streams `pieces` to `on_text`; a citation retry keeps `previous` and streams
         nothing. Fails as `fail_learn_times` and `break_learn_times` say."""
+        if failures and previous is None:
+            raise ValueError("a citation retry needs the previous text")  # as the real tutor
         self._maybe_refuse(method)
         if self.fail_learn_times > 0:
             self.fail_learn_times -= 1
@@ -800,7 +802,7 @@ class FakeTutor:
         else:
             claims = (Claim(sources[0].label, sources[0].text[:MAX_QUOTE]),) if sources else ()
         self.learn_attempts += 1
-        if failures and previous is not None:
+        if previous is not None and failures:
             return self._out(replace(previous, claims=claims))
         suggestions = ("How is this used in practice?", "What is it often confused with?")
         return self._out(LearnText("".join(pieces), claims, suggestions, checks))

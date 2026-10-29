@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from importlib.resources import files
 from string import Template
-from typing import Any, Protocol, get_args
+from typing import Any, Literal, Protocol, get_args
 from uuid import uuid4
 
 from langchain_core.messages import BaseMessage
@@ -256,6 +256,14 @@ def _learn_sources(sources: Sequence[Source], item: str) -> str:
         f'disagree, follow the sources. Cite only in the trailer\'s "citations", never in the '
         f"{item} itself: {_cite_item(item)}.\n"
     )
+
+
+def _trailer_example(sources: Sequence[Source], checks: bool) -> str:
+    """The prompt's example trailer object. It cites a real label, or nothing without
+    sources, so the model is not shown a source to invent."""
+    cite = f'[{{"source": "{sources[0].label}", "quote": "exact words"}}]' if sources else "[]"
+    asked = '["..."]' if checks else "[]"
+    return f'{{"citations": {cite}, "suggestions": ["..."], "checks": {asked}}}'
 
 
 def _history_text(history: Sequence[tuple[str, str]]) -> str:
@@ -536,6 +544,7 @@ class LangChainTutor:
             name=_line(concept.name),
             description=_line(concept.description),
             sources=_learn_sources(sources, "lesson"),
+            example=_trailer_example(sources, checks=True),
         )
         return self._learn("lesson", prompt, on_text)
 
@@ -560,6 +569,7 @@ class LangChainTutor:
             history=_history_text(history),
             question=_neutralise(question),
             sources=_learn_sources(sources, "answer"),
+            example=_trailer_example(sources, checks=False),
         )
         return self._learn("learn_answer", prompt, on_text)
 
@@ -588,18 +598,21 @@ class LangChainTutor:
     def _recite(
         self,
         endpoint: Endpoint,
-        kind: str,
+        kind: Literal["lesson", "answer"],
         sources: Sequence[Source],
         failures: Sequence[str],
         previous: LearnText | None,
     ) -> Generated[LearnText]:
         """A citation retry: new claims for `previous`, whose text, suggestions and checks
-        stay as they are. Nothing is streamed: there is no new text to show."""
+        stay as they are. Nothing is streamed: there is no new text to show. Without
+        sources there is nothing to cite from, so `previous` comes back as it is."""
         if previous is None:
             raise ValueError("a citation retry needs the previous text")
+        if not sources:
+            return Generated(previous, model="")  # no model was asked
         fields = [("text", previous.markdown), ("citations", _claims_text(previous.claims))]
         prompt = _with_sources(
-            _prompt("learn_cite", kind=kind),
+            _prompt("learn_cite", item={"lesson": "a lesson", "answer": "an answer"}[kind]),
             sources,
             failures,
             _cite_item(kind).capitalize() + ", for facts taken from a source.",

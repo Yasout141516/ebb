@@ -48,5 +48,5 @@ trailer's "suggestions".
 End your reply with the trailer: a line "<<<EBB", one JSON object, then a line "EBB>>>",
 with nothing after it. For example:
 <<<EBB
-{"citations": [{"source": "N1", "quote": "exact words"}], "suggestions": ["..."], "checks": ["..."]}
+$example
 EBB>>>
