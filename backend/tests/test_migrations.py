@@ -277,7 +277,7 @@ def test_migration_005_applies_on_004(pg_empty_pool):
     with pg_empty_pool.connection() as conn:
         migrate(conn, until="004_web_app.sql")
         ids = seed_milestone_1(conn)
-        assert migrate(conn) == ["005_gateway_learn.sql"]
+        assert migrate(conn, until="005_gateway_learn.sql") == ["005_gateway_learn.sql"]
         conn.execute(
             "insert into llm_calls (call_id, user_id, at, role, endpoint, provider, model,"
             " attempt, outcome, total_ms) values (%s, %s, %s, 'teach', 'lesson', 'p', 'm',"

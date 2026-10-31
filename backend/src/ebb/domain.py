@@ -129,6 +129,37 @@ class LearnText:
 
 
 @dataclass(frozen=True)
+class StoredLesson:
+    """A concept's lesson as kept: written once, with its verified citations and the web pages
+    it drew on; `learned_at` is set when the learner finishes the learn phase."""
+
+    concept_id: UUID
+    markdown: str
+    citations: tuple[Citation, ...]
+    web_pages: tuple[dict, ...]
+    suggestions: tuple[str, ...]
+    checks: tuple[str, ...]
+    source_summary: dict
+    model: str
+    written_at: datetime
+    learned_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class Exchange:
+    """One question the learner put to Ebb about a lesson (`kind` is check, suggested or typed)
+    and the answer; `position` orders them within the concept."""
+
+    position: int
+    kind: str
+    question: str
+    answer: str
+    citations: tuple[Citation, ...]
+    suggestions: tuple[str, ...]
+    asked_at: datetime
+
+
+@dataclass(frozen=True)
 class Grade:
     value: GradeValue
     explanation: str

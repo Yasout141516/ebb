@@ -17,11 +17,13 @@ from ebb.domain import (
     Dispute,
     DisputeOutcome,
     Document,
+    Exchange,
     GradeValue,
     LlmCall,
     NewDocument,
     Question,
     ResumableSession,
+    StoredLesson,
     Subject,
 )
 from ebb.progress import AnswerPoint
@@ -280,6 +282,27 @@ class Store(Protocol):
     ) -> list[LlmCall]:
         """The user's attempts with `since <= at < until`, oldest first. `all_tenants` drops the
         user filter; only the dev-only costs page asks for that."""
+        ...
+
+    def get_lesson(self, user_id: UUID, concept_id: UUID) -> StoredLesson | None: ...
+
+    def save_lesson(self, user_id: UUID, lesson: StoredLesson) -> None:
+        """Keep a concept's lesson. The first writer wins: a second save is ignored."""
+        ...
+
+    def mark_learned(self, user_id: UUID, concept_id: UUID, at: datetime) -> bool:
+        """Stamp the lesson learned; False when it already was or there is no lesson."""
+        ...
+
+    def is_learned(self, user_id: UUID, concept_id: UUID) -> bool: ...
+
+    def add_exchange(self, user_id: UUID, concept_id: UUID, exchange: Exchange) -> None:
+        """Keep a question and answer. A position already kept is left as it is, so a retried
+        turn adds nothing twice."""
+        ...
+
+    def exchanges(self, user_id: UUID, concept_id: UUID) -> list[Exchange]:
+        """The concept's exchanges, by position."""
         ...
 
     def resumable_session(

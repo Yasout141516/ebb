@@ -24,11 +24,13 @@ from ebb.domain import (
     DisputeOutcome,
     DisputeReason,
     Document,
+    Exchange,
     GradeValue,
     LlmCall,
     NewDocument,
     Question,
     ResumableSession,
+    StoredLesson,
     Subject,
 )
 from ebb.progress import AnswerPoint
@@ -656,6 +658,108 @@ class PgStore:
                 (user_id, all_tenants, since, until),
             ).fetchall()
         return [LlmCall(**row) for row in rows]
+
+    def get_lesson(self, user_id: UUID, concept_id: UUID) -> StoredLesson | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select * from concept_lessons where user_id = %s and concept_id = %s",
+                (user_id, concept_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return StoredLesson(
+            concept_id=row["concept_id"],
+            markdown=row["markdown"],
+            citations=tuple(citations.from_dict(c) for c in row["citations"]),
+            web_pages=tuple(row["web_pages"]),
+            suggestions=tuple(row["suggestions"]),
+            checks=tuple(row["checks"]),
+            source_summary=row["source_summary"],
+            model=row["model"],
+            written_at=row["written_at"],
+            learned_at=row["learned_at"],
+        )
+
+    def save_lesson(self, user_id: UUID, lesson: StoredLesson) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "insert into concept_lessons (user_id, concept_id, markdown, citations, web_pages,"
+                " suggestions, checks, source_summary, model, written_at, learned_at)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " on conflict (concept_id) do nothing",
+                (
+                    user_id,
+                    lesson.concept_id,
+                    lesson.markdown,
+                    _citations_json(lesson.citations),
+                    Jsonb(list(lesson.web_pages)),
+                    Jsonb(list(lesson.suggestions)),
+                    Jsonb(list(lesson.checks)),
+                    Jsonb(lesson.source_summary),
+                    lesson.model,
+                    lesson.written_at,
+                    lesson.learned_at,
+                ),
+            )
+
+    def mark_learned(self, user_id: UUID, concept_id: UUID, at: datetime) -> bool:
+        with self.pool.connection() as conn:
+            return (
+                conn.execute(
+                    "update concept_lessons set learned_at = %s"
+                    " where user_id = %s and concept_id = %s and learned_at is null",
+                    (at, user_id, concept_id),
+                ).rowcount
+                == 1
+            )
+
+    def is_learned(self, user_id: UUID, concept_id: UUID) -> bool:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                "select learned_at from concept_lessons where user_id = %s and concept_id = %s",
+                (user_id, concept_id),
+            ).fetchone()
+        return row is not None and row["learned_at"] is not None
+
+    def add_exchange(self, user_id: UUID, concept_id: UUID, exchange: Exchange) -> None:
+        with self.pool.connection() as conn:
+            conn.execute(
+                "insert into lesson_exchanges (user_id, concept_id, position, kind, question,"
+                " answer, citations, suggestions, asked_at)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                " on conflict (concept_id, position) do nothing",
+                (
+                    user_id,
+                    concept_id,
+                    exchange.position,
+                    exchange.kind,
+                    exchange.question,
+                    exchange.answer,
+                    _citations_json(exchange.citations),
+                    Jsonb(list(exchange.suggestions)),
+                    exchange.asked_at,
+                ),
+            )
+
+    def exchanges(self, user_id: UUID, concept_id: UUID) -> list[Exchange]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select position, kind, question, answer, citations, suggestions, asked_at"
+                " from lesson_exchanges where user_id = %s and concept_id = %s order by position",
+                (user_id, concept_id),
+            ).fetchall()
+        return [
+            Exchange(
+                position=r["position"],
+                kind=r["kind"],
+                question=r["question"],
+                answer=r["answer"],
+                citations=tuple(citations.from_dict(c) for c in r["citations"]),
+                suggestions=tuple(r["suggestions"]),
+                asked_at=r["asked_at"],
+            )
+            for r in rows
+        ]
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime

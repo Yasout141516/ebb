@@ -24,11 +24,13 @@ from ebb.domain import (
     Dispute,
     DisputeOutcome,
     DisputeReason,
+    Exchange,
     GradeValue,
     LlmCall,
     NewDocument,
     Option,
     Question,
+    StoredLesson,
 )
 from ebb.graph.build import build_graph
 from ebb.progress import replay
@@ -70,6 +72,7 @@ def test_migrations_apply_once(pg_pool):
         "003_notes_citations_disputes.sql",
         "004_web_app.sql",
         "005_gateway_learn.sql",
+        "006_lesson_checks.sql",
     ]
 
 
@@ -1296,3 +1299,119 @@ def test_answer_history_is_scoped_to_the_user_and_subject(store):
 
 def test_ping_reaches_the_database(store):
     store.ping()
+
+
+# --- lessons and learn-phase exchanges ----------------------------------------------------
+
+
+@pytest.fixture(params=["postgres", "memory"])
+def lesson_store(request, store):
+    return store if request.param == "postgres" else MemoryStore()
+
+
+def a_concept(store) -> UUID:
+    subject_id = store.create_subject(ALICE, "Networks", [("Frames", "Layer 2 units.")])
+    return store.list_concepts(ALICE, subject_id)[0].id
+
+
+def a_lesson(concept_id: UUID, **fields) -> StoredLesson:
+    base = dict(
+        concept_id=concept_id,
+        markdown="A frame is a layer 2 unit.",
+        citations=(Citation("chunk", "c1", "notes.md", 3, "frame"),),
+        web_pages=({"url": "https://example.com", "title": "Frames"},),
+        suggestions=("What is a packet?",),
+        checks=("Why frame at all?",),
+        source_summary={"chunks": 2, "web": 1},
+        model="m1",
+        written_at=datetime(2026, 10, 27, 9, 0, tzinfo=UTC),
+        learned_at=None,
+    )
+    return StoredLesson(**{**base, **fields})
+
+
+def an_exchange(position: int, **fields) -> Exchange:
+    base = dict(
+        position=position,
+        kind="typed",
+        question=f"Question {position}?",
+        answer=f"Answer {position}.",
+        citations=(Citation("web", "https://example.com", "example.com", None, "a quote"),),
+        suggestions=("And then?",),
+        asked_at=datetime(2026, 10, 27, 9, position, tzinfo=UTC),
+    )
+    return Exchange(**{**base, **fields})
+
+
+def test_lesson_round_trips(lesson_store):
+    concept_id = a_concept(lesson_store)
+    lesson = a_lesson(concept_id)
+
+    assert lesson_store.get_lesson(ALICE, concept_id) is None
+    lesson_store.save_lesson(ALICE, lesson)
+
+    assert lesson_store.get_lesson(ALICE, concept_id) == lesson
+    assert lesson_store.get_lesson(BOB, concept_id) is None  # scoped to the user
+
+
+def test_save_lesson_first_writer_wins(lesson_store):
+    concept_id = a_concept(lesson_store)
+    first = a_lesson(concept_id, markdown="first", model="m1")
+
+    lesson_store.save_lesson(ALICE, first)
+    lesson_store.save_lesson(ALICE, a_lesson(concept_id, markdown="second", model="m2"))
+
+    assert lesson_store.get_lesson(ALICE, concept_id) == first
+
+
+def test_mark_learned_once(lesson_store):
+    concept_id = a_concept(lesson_store)
+    first = datetime(2026, 10, 27, 10, 0, tzinfo=UTC)
+
+    assert lesson_store.mark_learned(ALICE, concept_id, first) is False  # no lesson yet
+    assert lesson_store.is_learned(ALICE, concept_id) is False
+    lesson_store.save_lesson(ALICE, a_lesson(concept_id))
+    assert lesson_store.is_learned(ALICE, concept_id) is False
+
+    assert lesson_store.mark_learned(BOB, concept_id, first) is False  # not Bob's
+    assert lesson_store.mark_learned(ALICE, concept_id, first) is True
+    assert lesson_store.mark_learned(ALICE, concept_id, first + timedelta(hours=1)) is False
+
+    assert lesson_store.is_learned(ALICE, concept_id) is True
+    assert lesson_store.is_learned(BOB, concept_id) is False
+    assert lesson_store.get_lesson(ALICE, concept_id).learned_at == first  # the first stamp stays
+
+
+def test_exchanges_in_order(lesson_store):
+    concept_id = a_concept(lesson_store)
+    lesson_store.save_lesson(ALICE, a_lesson(concept_id))
+    third, first, second = an_exchange(3), an_exchange(1, kind="check"), an_exchange(2)
+
+    for exchange in (third, first, second):
+        lesson_store.add_exchange(ALICE, concept_id, exchange)
+
+    assert lesson_store.exchanges(ALICE, concept_id) == [first, second, third]
+    assert lesson_store.exchanges(BOB, concept_id) == []
+
+
+def test_add_exchange_at_a_kept_position_is_ignored(lesson_store):
+    concept_id = a_concept(lesson_store)
+    lesson_store.save_lesson(ALICE, a_lesson(concept_id))
+    kept = an_exchange(1)
+
+    lesson_store.add_exchange(ALICE, concept_id, kept)
+    lesson_store.add_exchange(ALICE, concept_id, an_exchange(1, answer="a retry"))
+
+    assert lesson_store.exchanges(ALICE, concept_id) == [kept]
+
+
+def test_lesson_deleted_with_concept(store, pg_pool):
+    concept_id = a_concept(store)
+    store.save_lesson(ALICE, a_lesson(concept_id))
+    store.add_exchange(ALICE, concept_id, an_exchange(1))
+
+    with pg_pool.connection() as conn:
+        conn.execute("delete from concepts where id = %s", (concept_id,))
+
+    assert store.get_lesson(ALICE, concept_id) is None
+    assert store.exchanges(ALICE, concept_id) == []

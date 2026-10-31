@@ -21,6 +21,7 @@ from ebb.domain import (
     DisputeOutcome,
     DisputeReason,
     Document,
+    Exchange,
     Grade,
     GradeValue,
     LearnText,
@@ -32,6 +33,7 @@ from ebb.domain import (
     Regrade,
     ResumableSession,
     Source,
+    StoredLesson,
     Subject,
 )
 from ebb.llm.schemas import ConceptDraft, EvalCaseDraft, NoteConcept
@@ -82,6 +84,8 @@ class MemoryStore:
         self.timezones: dict[UUID, str] = {}
         self.ai_calls: dict[tuple[UUID, date], int] = {}
         self.llm_call_log: list[LlmCall] = []
+        self.lessons: dict[UUID, tuple[UUID, StoredLesson]] = {}  # concept id -> (user id, lesson)
+        self.lesson_exchanges: dict[UUID, tuple[UUID, dict[int, Exchange]]] = {}
         self.locks: set[str] = set()
 
     def ping(self) -> None:
@@ -396,6 +400,32 @@ class MemoryStore:
     ) -> list[LlmCall]:
         mine = [c for c in self.llm_call_log if all_tenants or c.user_id == user_id]
         return sorted((c for c in mine if since <= c.at < until), key=lambda c: (c.at, c.id))
+
+    def get_lesson(self, user_id: UUID, concept_id: UUID) -> StoredLesson | None:
+        owner, lesson = self.lessons.get(concept_id, (None, None))
+        return lesson if owner == user_id else None
+
+    def save_lesson(self, user_id: UUID, lesson: StoredLesson) -> None:
+        self.lessons.setdefault(lesson.concept_id, (user_id, lesson))
+
+    def mark_learned(self, user_id: UUID, concept_id: UUID, at: datetime) -> bool:
+        lesson = self.get_lesson(user_id, concept_id)
+        if lesson is None or lesson.learned_at is not None:
+            return False
+        self.lessons[concept_id] = (user_id, replace(lesson, learned_at=at))
+        return True
+
+    def is_learned(self, user_id: UUID, concept_id: UUID) -> bool:
+        lesson = self.get_lesson(user_id, concept_id)
+        return lesson is not None and lesson.learned_at is not None
+
+    def add_exchange(self, user_id: UUID, concept_id: UUID, exchange: Exchange) -> None:
+        _, kept = self.lesson_exchanges.setdefault(concept_id, (user_id, {}))
+        kept.setdefault(exchange.position, exchange)
+
+    def exchanges(self, user_id: UUID, concept_id: UUID) -> list[Exchange]:
+        owner, kept = self.lesson_exchanges.get(concept_id, (None, {}))
+        return [kept[p] for p in sorted(kept)] if owner == user_id else []
 
     def resumable_session(
         self, user_id: UUID, subject_id: UUID, now: datetime
