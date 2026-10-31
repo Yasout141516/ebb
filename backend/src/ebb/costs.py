@@ -258,7 +258,7 @@ def _feature_of(call: LlmCall) -> str:
     return _endpoint_info(call.endpoint)[2]
 
 
-def _endpoint_label(endpoint: str) -> str:
+def endpoint_label(endpoint: str) -> str:
     return _endpoint_info(endpoint)[0]
 
 
@@ -282,7 +282,7 @@ def by_feature(calls: Sequence[LlmCall]) -> list[Breakdown]:
 def by_endpoint(calls: Sequence[LlmCall]) -> list[Breakdown]:
     present = {c.endpoint for c in calls}
     order = [e for e in ENDPOINTS if e in present] + sorted(present - set(ENDPOINTS))
-    return _grouped_rows(calls, lambda c: c.endpoint, _endpoint_label, order=order)
+    return _grouped_rows(calls, lambda c: c.endpoint, endpoint_label, order=order)
 
 
 def by_tenant(calls: Sequence[LlmCall]) -> list[Breakdown]:

@@ -99,10 +99,6 @@ def _classify(error: BaseException) -> Failure:
     return "retry"
 
 
-def _retryable(error: BaseException) -> bool:
-    return isinstance(error, PROVIDER_ERRORS) and _classify(error) == "retry"
-
-
 EXHAUSTED_NOTICE = "The tutor couldn't respond — your progress is saved. Try again in a minute."
 REFUSED_NOTICE = "The tutor won't help with that topic."
 
@@ -317,7 +313,7 @@ class Gateway:
                 try:
                     value = attempt_once(provider, index, meter)
                 except PROVIDER_ERRORS as error:
-                    if not _retryable(error):
+                    if _classify(error) != "retry":
                         raise _config_error(error, provider, role, index) from error
                     if meter.sent_text:
                         raise AllProvidersExhausted(str(error)) from error

@@ -39,8 +39,41 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
   const [error, setError] = useState<StudyError | null>(null);
   const [running, setRunning] = useState(false);
   const inFlight = useRef<AbortController | null>(null);
+  // Streamed text not yet shown: it goes on screen once a frame, not once per piece (a
+  // lesson comes in some 1500 pieces, and each render parses all the markdown so far).
+  const pending = useRef("");
+  const frame = useRef<number | null>(null);
 
-  useEffect(() => () => inFlight.current?.abort(), []);
+  useEffect(
+    () => () => {
+      inFlight.current?.abort();
+      dropPending();
+    },
+    [],
+  );
+
+  function dropPending() {
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+    frame.current = null;
+    pending.current = "";
+  }
+
+  function addText(delta: string) {
+    pending.current += delta;
+    frame.current ??= requestAnimationFrame(() => {
+      const text = pending.current;
+      frame.current = null;
+      pending.current = "";
+      setLive((shown) => (shown ?? "") + text);
+    });
+  }
+
+  /** Nothing streaming shows: no text, no step. */
+  function clear() {
+    dropPending();
+    setLive(null);
+    setStep(null);
+  }
 
   /**
    * POST and read the call's events. A refusal (4xx) goes to `refused` first, which returns
@@ -54,8 +87,7 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
     inFlight.current = controller;
     setRunning(true);
     setError(null);
-    setStep(null);
-    setLive(null);
+    clear();
     let shown = false; // text was on screen, then wiped: focus goes to Retry
     const onEvent = (event: SseEvent) => {
       switch (event.event) {
@@ -65,24 +97,22 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
         case "text":
           shown = true;
           setStep(null);
-          setLive((text) => (text ?? "") + (event.data as { delta: string }).delta);
+          addText((event.data as { delta: string }).delta);
           break;
         case "discard":
+          dropPending();
           setLive(null);
           break;
         case "learn":
-          setLive(null);
-          setStep(null);
+          clear();
           setCards((c) => applyLearn(c, (event.data as { payload: LearnPayload }).payload));
           break;
         case "learned":
-          setLive(null);
-          setStep(null);
+          clear();
           setCards((c) => learned(c, (event.data as { concept_id: string }).concept_id));
           break;
         case "error": {
-          setLive(null);
-          setStep(null);
+          clear();
           const data = event.data as StreamError;
           if ("notice" in data) setError({ message: data.notice, retry, focus: shown });
           else onFatal(data.error);
@@ -94,6 +124,7 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
       await streamPost(path, body, onEvent, signal);
     } catch (e) {
       if (signal.aborted) return;
+      dropPending();
       setLive(null); // cut off: nothing partial stays on screen
       if (e instanceof ApiError && e.status >= 400 && e.status < 500) {
         if (!refused?.(e)) setError({ message: e.message, retry: null });
@@ -146,8 +177,7 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
     inFlight.current?.abort();
     inFlight.current = null;
     setRunning(false);
-    setStep(null);
-    setLive(null);
+    clear();
     setError(null);
   }
 

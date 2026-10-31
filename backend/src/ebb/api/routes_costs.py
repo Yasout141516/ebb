@@ -85,8 +85,9 @@ def _today(services: Services) -> date:
 
 
 def _row(call: LlmCall, anomaly: str | None = None) -> CostCall:
-    label = costs.ENDPOINTS[call.endpoint][0] if call.endpoint in costs.ENDPOINTS else call.endpoint
-    return CostCall(**asdict(call), endpoint_label=label, anomaly=anomaly)
+    return CostCall(
+        **asdict(call), endpoint_label=costs.endpoint_label(call.endpoint), anomaly=anomaly
+    )
 
 
 @router.get("/summary")

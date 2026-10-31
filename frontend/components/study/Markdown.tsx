@@ -1,10 +1,12 @@
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import styles from "./Markdown.module.css";
 
 /** Only web links are kept: a `javascript:`, relative or other link loses its URL. */
 const safeUrl = (url: string): string | null => (/^https?:\/\//i.test(url) ? url : null);
+
+const remarkPlugins = [remarkGfm];
 
 const components: Components = {
   // A link without a URL left is just its words.
@@ -28,14 +30,15 @@ const components: Components = {
 
 /**
  * The tutor's markdown: headings, lists, tables, code. Raw HTML is never rendered: without
- * rehype-raw, react-markdown shows it as its text.
+ * rehype-raw, react-markdown shows it as its text. Memoised: kept text doesn't change, so a
+ * thread re-rendering as an answer streams in parses only the streaming card again.
  */
-export default function Markdown({ text, compact = false }: { text: string; compact?: boolean }) {
+export default memo(function Markdown({ text, compact = false }: { text: string; compact?: boolean }) {
   return (
     <div className={`${styles.markdown} ${compact ? styles.compact : ""}`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeUrl} components={components}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} urlTransform={safeUrl} components={components}>
         {text}
       </ReactMarkdown>
     </div>
   );
-}
+});

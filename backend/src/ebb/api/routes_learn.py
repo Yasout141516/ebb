@@ -14,10 +14,9 @@ from uuid import UUID
 from fastapi import APIRouter, Request
 from fastapi.sse import EventSourceResponse
 
-from ebb.api.routes_study import Sse, encode, failure
+from ebb.api.routes_study import Sse, respond
 from ebb.api.schemas import LearnReplyBody, LessonPage
 from ebb.api.services import services_of
-from ebb.api.sse import close, event_stream
 from ebb.learn.graph import exchange_to_dict, lesson_to_dict
 from ebb.learn.service import Discard, Learned, LearnEvent, LearnTurn, TextDelta
 from ebb.study import SessionBusy, Step
@@ -61,28 +60,9 @@ def get_lesson(concept_id: UUID, request: Request) -> LessonPage:
 
 
 def _respond(events: Iterator[LearnEvent]) -> EventSourceResponse:
-    """The run's events as SSE. The first is pulled here, so a thread driven elsewhere
-    answers as plain JSON before any stream opens; any other failure is the stream's
-    last event."""
-    try:
-        first = next(events)
-    except SessionBusy, LookupError:
-        raise
-    except Exception as error:
-        return event_stream(iter([failure(error)]), encode)
-    return event_stream(_items(first, events), encode, source=events)
-
-
-def _items(first: LearnEvent, events: Iterator[LearnEvent]) -> Iterator[Sse]:
-    """Each event as SSE; a failure becomes the last one, so the stream always ends."""
-    try:
-        yield _sse(first)
-        for event in events:
-            yield _sse(event)
-    except Exception as error:
-        yield failure(error)
-    finally:
-        close(events)  # a reader gone mid-turn: the turn finishes, and its text is kept
+    """The run's events as SSE. A thread driven elsewhere, or a concept not the user's,
+    answers as plain JSON before any stream opens."""
+    return respond(events, _sse, (SessionBusy, LookupError))
 
 
 def _sse(event: LearnEvent) -> Sse:

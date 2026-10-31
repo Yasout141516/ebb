@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duration, keyedModelName, modelName, money, percent, tokens } from "./costFormat";
+import { duration, keyedModelName, modelName, money, shareText, tokens } from "./costFormat";
 
 describe("costFormat", () => {
   it("money keeps tiny amounts non-zero and says when the price is unknown", () => {
@@ -28,10 +28,10 @@ describe("costFormat", () => {
     expect(duration(null)).toBe("—");
   });
 
-  it("percent is one decimal, a dash when unknown", () => {
-    expect(percent(0.083)).toBe("8.3%");
-    expect(percent(0)).toBe("0.0%");
-    expect(percent(null)).toBe("—");
+  it("shareText is one decimal, a dash when unknown", () => {
+    expect(shareText(0.083)).toBe("8.3%");
+    expect(shareText(0)).toBe("0.0%");
+    expect(shareText(null)).toBe("—");
   });
 
   it("modelName writes the provider, then the model without its vendor prefix", () => {

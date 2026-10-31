@@ -577,7 +577,7 @@ describe("the learn phase", () => {
     start.emit("text", { delta: "ages, streamed  " });
     const article = screen.getByRole("article", { name: "Lesson" });
     expect(within(article).getByText("Lesson · quiz opens when you press Ready")).toBeInTheDocument();
-    expect(within(article).getByText(/Three messages, streamed/)).toBeInTheDocument();
+    expect(await within(article).findByText(/Three messages, streamed/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "I'm ready, quiz me" })).not.toBeInTheDocument();
     // The kept markdown replaces what streamed.
     start.emit("learn", { payload: payload() });
@@ -604,7 +604,7 @@ describe("the learn phase", () => {
     const sent = ask.body as { reply: { ask: string; kind: string; ask_id: string } };
     expect(sent.reply).toMatchObject({ ask: "What does TLS add?", kind: "suggested" });
     ask.emit("text", { delta: "TLS adds encryp" });
-    expect(screen.getByText("TLS adds encryp")).toBeInTheDocument();
+    expect(await screen.findByText("TLS adds encryp")).toBeInTheDocument();
     ask.emit("discard", {});
     expect(screen.queryByText("TLS adds encryp")).not.toBeInTheDocument();
     ask.emit("error", { notice: EXHAUSTED });

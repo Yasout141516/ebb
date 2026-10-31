@@ -23,7 +23,7 @@ export function duration(ms: number | null): string {
 }
 
 /** A share (0–1) as "8.3%"; unknown is a dash. */
-export function percent(share: number | null): string {
+export function shareText(share: number | null): string {
   return share === null ? "—" : `${(share * 100).toFixed(1)}%`;
 }
 

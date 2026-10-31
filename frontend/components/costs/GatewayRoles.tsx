@@ -1,4 +1,4 @@
-import { duration, modelName, percent } from "@/lib/costFormat";
+import { duration, modelName, shareText } from "@/lib/costFormat";
 import type { CostRole } from "@/lib/types";
 import shared from "./shared.module.css";
 
@@ -35,7 +35,7 @@ export default function GatewayRoles({ roles }: { roles: CostRole[] }) {
                 <td>{ROLES[r.role] ?? r.role}</td>
                 <td>{modelName(r.main.provider, r.main.model)}</td>
                 <td>{r.backup ? modelName(r.backup.provider, r.backup.model) : "none"}</td>
-                <td>{r.attempts === 0 ? "Idle" : r.failed_share === null ? "—" : `${percent(r.failed_share)} failed`}</td>
+                <td>{r.attempts === 0 ? "Idle" : r.failed_share === null ? "—" : `${shareText(r.failed_share)} failed`}</td>
                 <td className={shared.n}>{duration(r.p95_total_ms)}</td>
               </tr>
             ))}

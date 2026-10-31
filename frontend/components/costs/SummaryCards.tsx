@@ -1,4 +1,4 @@
-import { duration, money, percent, tokens } from "@/lib/costFormat";
+import { duration, money, shareText, tokens } from "@/lib/costFormat";
 import type { CostSummary } from "@/lib/types";
 import styles from "./SummaryCards.module.css";
 
@@ -61,12 +61,12 @@ export default function SummaryCards({
       />
       <Card
         label="Fell back to a backup"
-        value={percent(s.fallback_rate)}
+        value={shareText(s.fallback_rate)}
         note={`${s.fell_back} of ${tokens(s.calls)} calls`}
       />
       <Card
         label="Retried after a bad reply"
-        value={percent(s.retry_rate)}
+        value={shareText(s.retry_rate)}
         note={`${s.retried} of ${tokens(s.calls)} calls`}
       />
       <Card

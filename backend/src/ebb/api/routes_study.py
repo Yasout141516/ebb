@@ -9,7 +9,7 @@ stream opens.
 
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict
 from typing import Annotated, Any
 from uuid import UUID
@@ -133,32 +133,45 @@ def _check_choice(services: Services, thread_id: str, reply: dict[str, Any]) -> 
 
 
 def _respond(services: Services, events: Iterator[Event], *before: Sse) -> EventSourceResponse:
-    """The run's events as SSE, after `before`. The first is pulled here, so a session
-    driven elsewhere or not found answers as plain JSON before any stream opens; any other
-    failure is the stream's last event."""
+    """The run's events as SSE, after `before`. A session driven elsewhere or not found
+    answers as plain JSON before any stream opens."""
+    return respond(
+        events, lambda event: _sse(services, event), (SessionBusy, SessionNotFound), *before
+    )
+
+
+def respond[E](
+    events: Iterator[E],
+    to_sse: Callable[[E], Sse],
+    refused: tuple[type[Exception], ...],
+    *before: Sse,
+) -> EventSourceResponse:
+    """A run's events as SSE, after `before`. The first is pulled here, so an error in
+    `refused` is raised before any stream opens (the route answers it as plain JSON); any
+    other failure is the stream's last event."""
     try:
         first = next(events)
-    except SessionBusy, SessionNotFound:
+    except refused:
         raise
     except Exception as error:
         return event_stream(iter([*before, failure(error)]), encode)
-    return event_stream(_items(services, before, first, events), encode, source=events)
+    return event_stream(_items(to_sse, before, first, events), encode, source=events)
 
 
-def _items(
-    services: Services, before: tuple[Sse, ...], first: Event, events: Iterator[Event]
+def _items[E](
+    to_sse: Callable[[E], Sse], before: tuple[Sse, ...], first: E, events: Iterator[E]
 ) -> Iterator[Sse]:
     """`before`, then each event as SSE; a failure becomes the last one, so the stream
     always ends."""
     try:
         yield from before
-        yield _sse(services, first)
+        yield to_sse(first)
         for event in events:
-            yield _sse(services, event)
+            yield to_sse(event)
     except Exception as error:
         yield failure(error)
     finally:
-        close(events)  # a reader gone mid-turn: the turn finishes, and its answer counts
+        close(events)  # a reader gone mid-turn: the turn finishes, and what it did is kept
 
 
 def failure(error: Exception) -> Sse:
