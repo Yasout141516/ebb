@@ -175,17 +175,18 @@ class StudySessions:
     ) -> Iterator[Event]:
         """Send the learner's reply: {attempt_id, answer}, {dispute: {id, reason,
         explanation}} or {quit: True}; to a lesson turn {learned: True} (refused, so the
-        lesson turn comes back, until the store has the concept learned), {skip: True} or
-        {quit: True}. A reply already applied is not applied again; the session's current
-        turn comes back instead."""
+        lesson turn comes back, until the store has the concept learned), {skip: True},
+        {dispute: ...} (of the last answer, as on a question) or {quit: True}. A reply already
+        applied is not applied again; the session's current turn comes back instead."""
         return self._carry_on(user_id, thread_id, driver, reply)
 
     def pending(
         self, user_id: UUID, thread_id: str, reply: Mapping[str, Any] | None = None
     ) -> dict[str, Any] | None:
-        """The question waiting for `reply` (for any reply if None), as the last turn showed
-        it; None if there is none, or if `reply` was already applied: sent again, it is not
-        answering this question but gets the current turn back."""
+        """The question (or a web session's lesson turn) waiting for `reply` (for any reply
+        if None), as the last turn showed it; None if there is none, or if `reply` was
+        already applied: sent again, it is not answering this turn but gets the current turn
+        back."""
         saved = self.graph.get_state(_config(thread_id))
         if saved.values.get("user_id") != str(user_id) or not saved.interrupts:
             return None

@@ -17,6 +17,7 @@ from rich.console import Console
 
 from ebb.db.repo import PgStore
 from ebb.graph.build import build_graph
+from ebb.graph.nodes import FALLBACK_NOTICE
 from ebb.llm import request
 from ebb.study import (
     LEASE,
@@ -185,7 +186,18 @@ def test_web_session_pauses_on_a_new_concept(s):
     got = list(events)
 
     concept = s.store.list_concepts(USER, s.subject_id)[0]
-    payload = {"kind": "learn", "concept": "Concept 1", "concept_id": str(concept.id), "number": 0}
+    payload = {
+        "kind": "learn",
+        "concept": "Concept 1",
+        "concept_id": str(concept.id),
+        "number": 0,
+        # No answer before it: nothing of a last answer to show.
+        "feedback": None,
+        "lesson": None,
+        "notices": [],
+        "can_dispute": False,
+        "dispute_result": None,
+    }
     assert got == [Pending(payload)]
     assert s.tutor.generate_calls == []  # no questions are written before the lesson
     assert s.sessions.pending(USER, thread_id) == payload
@@ -243,6 +255,90 @@ def test_learned_reply_without_lesson_learned_repeats_the_offer(s):
     assert resent == skipped
     assert not s.store.is_learned(USER, UUID(first.payload["concept_id"]))
     assert s.store.attempts == {}
+
+
+def at_second_lesson(s: Setup, ready: bool = False) -> tuple[str, Pending]:
+    """A web session at Concept 2's lesson turn. Concept 1's lesson was skipped (or learned,
+    if `ready`), then its two questions, short answers, were answered wrong: each was graded
+    by the model and taught, with the backup model's notice."""
+    s.tutor.batch_size = 1  # one short answer per batch
+    s.tutor.fell_back = True
+    thread_id, first = learning(s)
+    if ready:
+        learn(s.store, USER, UUID(first.payload["concept_id"]))
+    turn = ending(
+        s.sessions.reply(USER, thread_id, "tab-a", {"learned" if ready else "skip": True})
+    )
+    for _ in range(2):
+        wrong = {"answer": "no idea", "attempt_id": str(uuid4())}
+        turn = ending(s.sessions.reply(USER, thread_id, "tab-a", wrong))
+    assert isinstance(turn, Pending)
+    assert (turn.payload["kind"], turn.payload["concept"]) == ("learn", "Concept 2")
+    return thread_id, turn
+
+
+def test_learn_turn_shows_the_last_answers_turn(s):
+    _, turn = at_second_lesson(s)
+
+    payload = turn.payload
+    assert payload["number"] == 0
+    assert payload["feedback"]["value"] == "incorrect"
+    assert payload["lesson"]["text"] == "Here is the idea, with an example."
+    assert payload["notices"] == [FALLBACK_NOTICE]
+    assert payload["can_dispute"] is True
+    assert payload["dispute_result"] is None
+
+
+def test_dispute_on_a_learn_turn_is_rechecked_once_and_returns_to_it(s):
+    thread_id, turn = at_second_lesson(s)
+    dispute = {"dispute": {"id": str(uuid4()), "reason": "correct", "explanation": ""}}
+
+    once = ending(s.sessions.reply(USER, thread_id, "tab-a", dispute))
+    twice = list(s.sessions.reply(USER, thread_id, "tab-a", dispute))
+
+    assert isinstance(once, Pending)
+    assert (once.payload["kind"], once.payload["concept"]) == ("learn", "Concept 2")
+    assert once.payload["dispute_result"]["concept"] == "Concept 1"
+    assert once.payload["can_dispute"] is False
+    assert len(s.tutor.regrade_calls) == 1 and len(s.store.disputes) == 1
+    assert twice == [once]
+
+
+def test_learned_reply_starts_the_next_question_clean(s):
+    thread_id, turn = at_second_lesson(s)
+    learn(s.store, USER, UUID(turn.payload["concept_id"]))
+    s.tutor.fell_back = False  # so a notice could only be Concept 1's
+
+    question = ending(s.sessions.reply(USER, thread_id, "tab-a", {"learned": True}))
+
+    assert isinstance(question, Pending)
+    assert (question.payload["concept"], question.payload["number"]) == ("Concept 2", 1)
+    assert question.payload["feedback"] is None and question.payload["lesson"] is None
+    assert question.payload["notices"] == []
+    assert question.payload["can_dispute"] is False
+    assert question.payload["dispute_result"] is None
+
+
+def test_skipped_lesson_leaves_the_last_answers_turn_to_the_next_question(s):
+    thread_id, _ = at_second_lesson(s)
+
+    question = ending(s.sessions.reply(USER, thread_id, "tab-a", {"skip": True}))
+
+    # As a terminal session shows it: the grade comes with the next question.
+    assert isinstance(question, Pending)
+    assert question.payload["concept"] == "Concept 2"
+    assert question.payload["feedback"]["value"] == "incorrect"
+    assert question.payload["lesson"]["text"] == "Here is the idea, with an example."
+    assert question.payload["can_dispute"] is True
+
+
+def test_a_late_ready_for_one_concept_does_not_pass_the_next_ones_lesson(s):
+    thread_id, turn = at_second_lesson(s, ready=True)
+
+    late = ending(s.sessions.reply(USER, thread_id, "tab-a", {"learned": True}))  # Concept 1's
+
+    assert late == turn
+    assert not s.store.is_learned(USER, UUID(turn.payload["concept_id"]))
 
 
 def test_reply_to_another_users_session_is_refused(s):

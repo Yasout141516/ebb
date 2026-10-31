@@ -2,6 +2,7 @@
 
 pick_concept -> retrieve_notes | offer_lesson (web sessions) | extend_subject | summarize
 offer_lesson -> retrieve_notes | offer_lesson (not learned yet) | summarize
+offer_lesson -> regrade -> offer_lesson (a grade disputed on a lesson turn)
 extend_subject -> pick_concept | summarize
 retrieve_notes -> generate_questions -> verify_citations -> ask_question
 verify_citations -> search_web -> generate_questions (web mode) | ask_question
@@ -29,6 +30,7 @@ from ebb.routing import (
     after_lesson,
     after_mastery,
     after_pick,
+    after_regrade,
     after_search,
     after_verify,
     decide_next,
@@ -94,7 +96,7 @@ def build_graph(
         ["retrieve_notes", "offer_lesson", "extend_subject", "summarize"],
     )
     graph.add_conditional_edges(
-        "offer_lesson", after_lesson, ["offer_lesson", "retrieve_notes", "summarize"]
+        "offer_lesson", after_lesson, ["regrade", "offer_lesson", "retrieve_notes", "summarize"]
     )
     graph.add_conditional_edges("extend_subject", after_extend, ["pick_concept", "summarize"])
     graph.add_edge("retrieve_notes", "generate_questions")
@@ -108,7 +110,7 @@ def build_graph(
     )
     graph.add_conditional_edges("search_web", after_search, _NEXT)
     graph.add_conditional_edges("ask_question", after_ask, ["grade_answer", "regrade", "summarize"])
-    graph.add_edge("regrade", "ask_question")
+    graph.add_conditional_edges("regrade", after_regrade, ["offer_lesson", "ask_question"])
     graph.add_conditional_edges("grade_answer", after_grade, ["update_mastery", "ask_question"])
     graph.add_conditional_edges("update_mastery", after_mastery, ["teach", *_NEXT])
     graph.add_conditional_edges("teach", decide_next, _NEXT)

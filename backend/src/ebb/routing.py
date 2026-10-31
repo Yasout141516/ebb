@@ -145,11 +145,18 @@ def after_pick(
 
 def after_lesson(
     state: Mapping[str, Any],
-) -> Literal["offer_lesson", "retrieve_notes", "summarize"]:
+) -> Literal["regrade", "offer_lesson", "retrieve_notes", "summarize"]:
     """The lesson is offered again until the learner has learned or skipped it."""
+    if state.get("dispute"):
+        return "regrade"
     if state["quit"]:
         return "summarize"
     return "offer_lesson" if state["lesson_due"] else "retrieve_notes"
+
+
+def after_regrade(state: Mapping[str, Any]) -> Literal["offer_lesson", "ask_question"]:
+    """Back to the turn the dispute was raised on: a lesson's, or the question's."""
+    return "offer_lesson" if state.get("lesson_due") else "ask_question"
 
 
 def after_extend(state: Mapping[str, Any]) -> Literal["pick_concept", "summarize"]:

@@ -154,6 +154,21 @@ def _dedupe(questions: Sequence[Question], known: Sequence[str]) -> list[Questio
     return kept
 
 
+def _last_turn(state: QuizState) -> dict[str, Any]:
+    """What a turn shows of the last answer: its grade card, its lesson, the notices, and its
+    dispute (offered, or the re-check's result)."""
+    grade = state["grade"]
+    feedback = None if grade is None else {"citations": [], "general_knowledge": False, **grade}
+    graded = state["last_graded"]
+    return {
+        "feedback": feedback,
+        "lesson": state["lesson"],
+        "notices": state["notices"],
+        "can_dispute": graded is not None and not graded["disputed"],
+        "dispute_result": state["dispute_result"],
+    }
+
+
 def _dispute_result(dispute: Dispute, concept: Concept) -> dict[str, Any]:
     return {
         "outcome": dispute.outcome.value,
@@ -209,7 +224,7 @@ def make_nodes(
             "current_question_id": None,
         }
 
-    def lesson_due(state: QuizState, concept: Concept) -> bool:
+    def needs_lesson(state: QuizState, concept: Concept) -> bool:
         """Whether `concept` is taught before it is quizzed: the session has the learn phase,
         and the concept is new, never answered and not learned. A concept whose answers were
         all voided is back at stage 0 with no reviews, but it has answers."""
@@ -240,23 +255,44 @@ def make_nodes(
             "current_question_id": None,
             "run": _fresh_run(),
             "web_sources": [],
-            "lesson_due": lesson_due(state, concept),
+            "lesson_due": needs_lesson(state, concept),
             "mcq_first": False,
         }
 
     def offer_lesson(state: QuizState) -> dict[str, Any]:
         # Runs again from the top when resumed, so nothing before interrupt() may have side effects.
         concept = state["concept"]
+        # The last answer's turn comes with it, so its grade card shows above the lesson.
         reply = interrupt(
-            {"kind": "learn", "concept": concept["name"], "concept_id": concept["id"], "number": 0}
+            {
+                "kind": "learn",
+                "concept": concept["name"],
+                "concept_id": concept["id"],
+                "number": 0,
+                **_last_turn(state),
+            }
         )
+        if "dispute" in reply:
+            return {"dispute": reply["dispute"]}  # re-checked by regrade, then back here
         if reply.get("quit"):
             return {"quit": True}
         if reply.get("skip"):
-            return {"lesson_due": False}  # the terminal has no lessons: it stays not learned
+            # The terminal has no lessons: the concept stays not learned, and the last
+            # answer's turn shows with the next question, as in any terminal session.
+            return {"lesson_due": False}
         user_id, _ = ids(state)
+        # A late Ready for the previous concept is refused too: this one isn't learned.
         if reply.get("learned") and store.is_learned(user_id, UUID(concept["id"])):
-            return {"lesson_due": False, "mcq_first": True}
+            # This turn showed the last answer's; the first question starts clean.
+            return {
+                "lesson_due": False,
+                "mcq_first": True,
+                "grade": None,
+                "lesson": None,
+                "notices": [],
+                "last_graded": None,
+                "dispute_result": None,
+            }
         return {}  # not learned yet, or no reply to a lesson: it is offered again
 
     def extend_subject(state: QuizState) -> dict[str, Any]:
@@ -418,9 +454,6 @@ def make_nodes(
                 prefer_mcq=state["mcq_first"],
             )
         question = batch[index]
-        grade = state["grade"]
-        feedback = None if grade is None else {"citations": [], "general_knowledge": False, **grade}
-        graded = state["last_graded"]
         reply = interrupt(
             {
                 "concept": state["concept"]["name"],
@@ -433,11 +466,7 @@ def make_nodes(
                     "source": question.get("source", "general"),
                     "source_line": source_line(question),
                 },
-                "feedback": feedback,
-                "lesson": state["lesson"],
-                "notices": state["notices"],
-                "can_dispute": graded is not None and not graded["disputed"],
-                "dispute_result": state["dispute_result"],
+                **_last_turn(state),
             }
         )
         if "dispute" in reply:

@@ -11,6 +11,7 @@ from ebb.routing import (
     after_lesson,
     after_mastery,
     after_pick,
+    after_regrade,
     after_search,
     after_verify,
     choose_question,
@@ -166,6 +167,13 @@ def test_after_lesson():
     assert after_lesson({"quit": False, "lesson_due": True}) == "offer_lesson"  # not learned
     assert after_lesson({"quit": False, "lesson_due": False}) == "retrieve_notes"
     assert after_lesson({"quit": True, "lesson_due": False}) == "summarize"
+    assert after_lesson({"quit": False, "lesson_due": True, "dispute": {"id": "d"}}) == "regrade"
+
+
+def test_after_regrade_returns_to_the_turn_disputed_on():
+    assert after_regrade({"lesson_due": True}) == "offer_lesson"
+    assert after_regrade({"lesson_due": False}) == "ask_question"
+    assert after_regrade({}) == "ask_question"  # a checkpoint saved before lesson turns
 
 
 def test_after_pick_extends_when_nothing_is_left():

@@ -283,6 +283,8 @@ def test_milestone4_checkpoint_without_learn_first_resumes(store, subject_id, pg
     offer = sessions.offer(ALICE, subject_id, "tab-a")
     [first] = list(sessions.resume(ALICE, thread_id, "tab-a"))
     assert isinstance(first, Pending)
+    # A lesson reply can't be for this session's question: it gets the question back.
+    assert list(sessions.reply(ALICE, thread_id, "tab-a", {"learned": True})) == [first]
     after = list(sessions.reply(ALICE, thread_id, "tab-a", reply(first.payload)))[-1]
 
     assert offer is not None and (offer.concept, offer.number) == ("DNS", 2)
