@@ -16,6 +16,8 @@ const components: Components = {
     ) : (
       <span>{children}</span>
     ),
+  // An image would load a URL the model wrote (a way to leak the notes): only its alt text shows.
+  img: ({ alt }) => (alt ? <span>{alt}</span> : null),
   // A wide table scrolls inside its frame, not the page.
   table: ({ children }: { children?: ReactNode }) => (
     <div className={styles.tableFrame}>
@@ -24,11 +26,14 @@ const components: Components = {
   ),
 };
 
-/** The tutor's markdown: headings, lists, tables, code. Raw HTML is never rendered. */
+/**
+ * The tutor's markdown: headings, lists, tables, code. Raw HTML is never rendered: without
+ * rehype-raw, react-markdown shows it as its text.
+ */
 export default function Markdown({ text, compact = false }: { text: string; compact?: boolean }) {
   return (
     <div className={`${styles.markdown} ${compact ? styles.compact : ""}`}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={safeUrl} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={safeUrl} components={components}>
         {text}
       </ReactMarkdown>
     </div>

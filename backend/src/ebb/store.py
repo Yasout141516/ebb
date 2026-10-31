@@ -300,6 +300,10 @@ class Store(Protocol):
 
     def is_learned(self, user_id: UUID, concept_id: UUID) -> bool: ...
 
+    def learned_concepts(self, user_id: UUID, subject_id: UUID) -> set[UUID]:
+        """The subject's concepts whose lesson is learned."""
+        ...
+
     def add_exchange(self, user_id: UUID, concept_id: UUID, exchange: Exchange) -> None:
         """Keep a question and answer. A position already kept is left as it is, so a retried
         turn adds nothing twice."""

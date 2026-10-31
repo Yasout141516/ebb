@@ -423,6 +423,15 @@ class MemoryStore:
         lesson = self.get_lesson(user_id, concept_id)
         return lesson is not None and lesson.learned_at is not None
 
+    def learned_concepts(self, user_id: UUID, subject_id: UUID) -> set[UUID]:
+        return {
+            concept_id
+            for concept_id, (owner, lesson) in self.lessons.items()
+            if owner == user_id
+            and lesson.learned_at is not None
+            and self.concepts[concept_id][1].subject_id == subject_id
+        }
+
     def add_exchange(self, user_id: UUID, concept_id: UUID, exchange: Exchange) -> None:
         _, kept = self.lesson_exchanges.setdefault(concept_id, (user_id, {}))
         kept.setdefault(exchange.position, exchange)

@@ -134,6 +134,7 @@ def turn(state: LearnState) -> dict[str, Any]:
         "exchanges": state["exchanges"],
         "suggestions": state["suggestions"],
         "notices": state["notices"],
+        "has_notes": state["has_notes"],
     }
 
 

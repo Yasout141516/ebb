@@ -542,6 +542,7 @@ describe("the learn phase", () => {
     exchanges: [],
     suggestions: lesson.suggestions,
     notices: [],
+    has_notes: true,
     ...over,
   });
   const exchange = (question: string, kind: Exchange["kind"]): Exchange => ({
@@ -701,5 +702,80 @@ describe("the learn phase", () => {
     await again.end();
     expect(screen.getAllByRole("article", { name: "Lesson" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "I'm ready, quiz me" })).toHaveLength(1);
+  });
+
+  it("hands over to the quiz after a refresh lost the learned reply, and Retry sends it again", async () => {
+    // Ready answered `learned`, then the tab went away before the quiz heard of it.
+    const saved: Card[] = [
+      { kind: "tutor", id: "g", text: "Hello." },
+      { kind: "learn", id: "l1", conceptId: "c1", concept: "TCP handshake", lesson, hasNotes: true, learned: true },
+    ];
+    saveThread("t1", saved);
+    rememberThread("s1", "t1");
+    render(<Harness />);
+    const resume = await lastStream();
+    expect(resume.path).toBe("/sessions/t1/resume");
+    resume.emit("turn", { payload: learnTurn() }); // the session still waits on the lesson
+    await resume.end();
+    await waitFor(() => expect(streams.at(-1)!.path).toBe("/sessions/t1/reply"));
+    const handOver = streams.at(-1)!;
+    expect(handOver.body).toEqual({ driver: "drv-1", reply: { learned: true } });
+    expect(streams.filter((s) => s.path.startsWith("/concepts/"))).toHaveLength(0);
+    await handOver.fail(new ApiError(200, CUT_OFF));
+    expect(screen.getByRole("alert")).toHaveTextContent(CUT_OFF);
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    const again = streams.at(-1)!;
+    expect(again).not.toBe(handOver);
+    expect(again.body).toEqual(handOver.body);
+    again.emit("turn", { payload: mcq({ concept: "TCP handshake" }) });
+    await again.end();
+    expect(screen.getByText("Multiple choice · TCP handshake · Q1")).toBeInTheDocument();
+    expect(streams.filter((s) => s.body.reply && "learned" in (s.body.reply as object))).toHaveLength(2);
+  });
+
+  it("still hands over when the Ready call is cut off after learned", async () => {
+    await lessonShown();
+    await userEvent.click(screen.getByRole("button", { name: "I'm ready, quiz me" }));
+    const ready = streams.at(-1)!;
+    ready.emit("learned", { concept_id: "c1" });
+    await ready.fail(new ApiError(200, CUT_OFF));
+    await waitFor(() => expect(streams.at(-1)!.path).toBe("/sessions/t1/reply"));
+    expect(streams.at(-1)!.body).toEqual({ driver: "drv-1", reply: { learned: true } });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("starts the lesson again when a dispute follows a failed start", async () => {
+    function Disputing() {
+      const study = useStudy("s1");
+      return <Thread study={study} onDispute={(id) => study.dispute(id, "correct", "")} />;
+    }
+    const graded = learnTurn({
+      feedback: { value: "partial", explanation: "Close.", misconception: null, claims: [], citations: [], general_knowledge: false },
+      can_dispute: true,
+    });
+    render(<Disputing />);
+    const quiz = await lastStream();
+    quiz.emit("started", { thread_id: "t1", greeting: "Hello." });
+    quiz.emit("turn", { payload: graded });
+    await quiz.end();
+    await waitFor(() => expect(streams.at(-1)!.path).toBe("/concepts/c1/learn"));
+    const start = streams.at(-1)!;
+    start.emit("error", { notice: EXHAUSTED });
+    await start.end();
+    await userEvent.click(screen.getByRole("button", { name: "Dispute grade" }));
+    const dispute = streams.at(-1)!;
+    expect(dispute.path).toBe("/sessions/t1/reply");
+    dispute.emit("turn", { payload: { ...graded, can_dispute: false, dispute_result: { outcome: "refused" } } });
+    await dispute.end();
+    await waitFor(() => expect(streams.at(-1)!.path).toBe("/concepts/c1/learn"));
+    expect(streams.at(-1)).not.toBe(start);
+  });
+
+  it("marks an answer with no notes citation from the subject's has_notes", async () => {
+    const start = await learning();
+    const webOnly = { ...lesson, citations: [], source_summary: { notes: 0, notes_pages: [], web_pages: 1, label: null } };
+    start.emit("learn", { payload: payload({ lesson: webOnly, has_notes: true }) });
+    await start.end();
+    expect(within(screen.getByRole("article", { name: "Lesson" })).getByText("Not in your notes")).toBeInTheDocument();
   });
 });

@@ -729,6 +729,16 @@ class PgStore:
             ).fetchone()
         return row is not None and row["learned_at"] is not None
 
+    def learned_concepts(self, user_id: UUID, subject_id: UUID) -> set[UUID]:
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "select l.concept_id from concept_lessons l"
+                " join concepts c on c.id = l.concept_id"
+                " where l.user_id = %s and c.subject_id = %s and l.learned_at is not null",
+                (user_id, subject_id),
+            ).fetchall()
+        return {row["concept_id"] for row in rows}
+
     def add_exchange(self, user_id: UUID, concept_id: UUID, exchange: Exchange) -> None:
         with self.pool.connection() as conn:
             conn.execute(

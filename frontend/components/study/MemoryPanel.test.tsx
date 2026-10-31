@@ -16,6 +16,7 @@ const concept = (over: Partial<ConceptState>): ConceptState => ({
   next_review_at: new Date(2026, 9, 30, 9, 0).toISOString(),
   due: false,
   projected_tide: 0.4,
+  learned: false,
   ...over,
 });
 

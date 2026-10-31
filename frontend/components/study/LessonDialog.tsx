@@ -7,7 +7,7 @@ import { getJson, messageOf } from "@/lib/api";
 import { modalKeys, useFocusReturn } from "@/lib/modal";
 import type { LessonPage } from "@/lib/types";
 import LearnExchange from "./LearnExchange";
-import LearnLesson, { hasNotes } from "./LearnLesson";
+import LearnLesson from "./LearnLesson";
 import styles from "./LessonDialog.module.css";
 
 type Props = {
@@ -39,7 +39,6 @@ export default function LessonDialog({ conceptId, concept, onClose }: Props) {
     return () => controller.abort();
   }, [conceptId, attempt]);
 
-  const notes = hasNotes(page?.lesson ?? null);
   return createPortal(
     <div className={styles.scrim}>
       <div
@@ -71,9 +70,9 @@ export default function LessonDialog({ conceptId, concept, onClose }: Props) {
         )}
         {page && (
           <div className={styles.body}>
-            <LearnLesson label="Lesson" lesson={page.lesson} />
+            <LearnLesson label="Lesson" lesson={page.lesson} hasNotes={page.has_notes} />
             {page.exchanges.map((e) => (
-              <LearnExchange key={e.position} question={e.question} exchange={e} hasNotes={notes} />
+              <LearnExchange key={e.position} question={e.question} exchange={e} hasNotes={page.has_notes} />
             ))}
           </div>
         )}

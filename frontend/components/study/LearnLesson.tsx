@@ -4,13 +4,6 @@ import styles from "./LearnLesson.module.css";
 import Markdown from "./Markdown";
 
 export const LESSON_LABEL = "Lesson · quiz opens when you press Ready";
-const NOTES_ONLY = "Your notes only";
-
-/** Whether the subject has notes, as far as the lesson's sources tell. */
-export function hasNotes(lesson: StoredLesson | null): boolean {
-  const summary = lesson?.source_summary;
-  return summary !== undefined && (summary.notes > 0 || summary.label === NOTES_ONLY);
-}
 
 /** What the header says the lesson was written from: "Your notes · pp. 12 to 15", "2 web sources". */
 function sourceLines(summary: SourceSummary): string[] {
@@ -46,6 +39,8 @@ type Props = {
   lesson: StoredLesson | null;
   /** The text streaming in, until the kept lesson replaces it. */
   live?: string | null;
+  /** The subject has notes: a lesson with no notes citation is marked. */
+  hasNotes?: boolean;
   /** Asks a check-yourself question; without it the lesson is read-only. */
   onAsk?: (question: string) => void;
   /** The check-yourself questions already asked: answered below, so no button. */
@@ -54,7 +49,15 @@ type Props = {
 };
 
 /** A new concept's lesson, at the top of its part of the thread. */
-export default function LearnLesson({ label, lesson, live = null, onAsk, asked = [], disabled = false }: Props) {
+export default function LearnLesson({
+  label,
+  lesson,
+  live = null,
+  hasNotes = false,
+  onAsk,
+  asked = [],
+  disabled = false,
+}: Props) {
   const streaming = lesson === null && live !== null;
   return (
     <article aria-label="Lesson" className={styles.card}>
@@ -70,7 +73,7 @@ export default function LearnLesson({ label, lesson, live = null, onAsk, asked =
           </span>
         )}
       </div>
-      {lesson && <NotInNotes citations={lesson.citations} notes={hasNotes(lesson)} />}
+      {lesson && <NotInNotes citations={lesson.citations} notes={hasNotes} />}
       <div aria-live="polite" aria-busy={streaming}>
         {(lesson?.markdown ?? live) && <Markdown text={lesson?.markdown ?? live ?? ""} />}
         {streaming && <span className="caret" aria-hidden="true" />}

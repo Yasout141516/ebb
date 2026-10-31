@@ -75,6 +75,7 @@ def list_concepts(subject_id: UUID, request: Request) -> Concepts:
     owned_subject(services, subject_id)
     now = services.now()
     concepts = services.store.list_concepts(services.user_id, subject_id)
+    learned = services.store.learned_concepts(services.user_id, subject_id)
     states = []
     for c in concepts:
         level = mastery.tide(c, now)
@@ -89,6 +90,7 @@ def list_concepts(subject_id: UUID, request: Request) -> Concepts:
                 next_review_at=c.next_review_at,
                 due=mastery.is_review_due(c, now),
                 projected_tide=progress.projected_tide(c, now),
+                learned=c.id in learned,
             )
         )
     return Concepts(

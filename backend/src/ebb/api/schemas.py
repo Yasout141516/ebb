@@ -82,6 +82,7 @@ class ConceptState(BaseModel):
     next_review_at: datetime | None
     due: bool
     projected_tide: float | None
+    learned: bool  # its lesson read and Ready pressed: the lesson can be read again
 
 
 class Concepts(BaseModel):
@@ -161,6 +162,7 @@ class LearnReplyBody(BaseModel):
 class LessonPage(BaseModel):
     lesson: dict[str, Any]  # a kept lesson and its exchanges, as the learn turn shows them
     exchanges: list[dict[str, Any]]
+    has_notes: bool  # the subject has notes: text with no notes citation is marked
 
 
 class Streak(BaseModel):

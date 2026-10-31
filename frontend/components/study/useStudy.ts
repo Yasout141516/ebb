@@ -14,6 +14,7 @@ import {
   driverId,
   forgetThread,
   type LearnCard,
+  learnedCard,
   learningCard,
   loadThread,
   type QuestionCard,
@@ -95,8 +96,9 @@ export default function useStudy(subjectId: string): Study {
   const [running, setRunning] = useState(false);
   const [updates, setUpdates] = useState(0);
   const thread = useRef<string | null>(null); // the open session's id, once known
+  const begun = useRef<string | null>(null); // the lesson card whose learn phase was started
   const inFlight = useRef<AbortController | null>(null);
-  const learn = useLearn(setCards, { onLearned: () => reply({ learned: true }), onFatal: setFatal });
+  const learn = useLearn(setCards, { onFatal: setFatal });
 
   useEffect(() => {
     if (thread.current) saveThread(thread.current, cards);
@@ -105,6 +107,8 @@ export default function useStudy(subjectId: string): Study {
   /** A new request, showing `step` until the API names one; the one before it (if any) is abandoned. */
   function begin(step: string | null = null): AbortSignal {
     inFlight.current?.abort();
+    // A lesson that never came (its start failed): it starts again once this request is done.
+    if (learningCard(cards)?.lesson === null) begun.current = null;
     learn.cancel();
     const controller = new AbortController();
     inFlight.current = controller;
@@ -344,7 +348,6 @@ export default function useStudy(subjectId: string): Study {
 
   // A turn paused on a new concept: once the quiz's request is done, its lesson starts (or,
   // after a refresh, carries on: the kept lesson comes back without a model call).
-  const begun = useRef<string | null>(null);
   const startLearning = useEffectEvent((conceptId: string) => learn.start(conceptId));
   const learningId = learning?.id ?? null;
   const learningConcept = learning?.conceptId ?? null;
@@ -353,6 +356,18 @@ export default function useStudy(subjectId: string): Study {
     begun.current = learningId;
     startLearning(learningConcept);
   }, [learningId, learningConcept, running]);
+
+  // The concept is learned but the quiz is still paused on it (just now, or the reply was
+  // lost to a refresh or a failure): tell the session, once per lesson card; Retry resends.
+  const handed = useRef<string | null>(null);
+  const handOver = useEffectEvent(() => reply({ learned: true }));
+  const learnedId = offer ? null : (learnedCard(cards)?.id ?? null);
+  const idle = !running && !learn.running && error === null;
+  useEffect(() => {
+    if (!learnedId || !idle || handed.current === learnedId) return;
+    handed.current = learnedId;
+    handOver();
+  }, [learnedId, idle]);
 
   /**
    * Renew this tab's lease while the session is open; a request in flight renews it

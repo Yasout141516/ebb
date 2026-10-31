@@ -1392,6 +1392,25 @@ def test_mark_learned_once(lesson_store):
     assert lesson_store.get_lesson(ALICE, concept_id).learned_at == first  # the first stamp stays
 
 
+def test_learned_concepts_by_subject(lesson_store):
+    subject_id = lesson_store.create_subject(
+        ALICE, "Networks", [("Frames", "a"), ("Packets", "b"), ("Routes", "c")]
+    )
+    other = lesson_store.create_subject(ALICE, "Biology", [("Cells", "d")])
+    frames, packets, routes = (c.id for c in lesson_store.list_concepts(ALICE, subject_id))
+    [cells] = (c.id for c in lesson_store.list_concepts(ALICE, other))
+    at = datetime(2026, 10, 27, 10, 0, tzinfo=UTC)
+    for concept_id in (frames, packets, cells):
+        lesson_store.save_lesson(ALICE, a_lesson(concept_id))
+    lesson_store.mark_learned(ALICE, frames, at)
+    lesson_store.mark_learned(ALICE, cells, at)
+
+    assert lesson_store.learned_concepts(ALICE, subject_id) == {frames}  # packets: not yet
+    assert lesson_store.learned_concepts(ALICE, other) == {cells}
+    assert lesson_store.learned_concepts(BOB, subject_id) == set()
+    assert routes not in lesson_store.learned_concepts(ALICE, subject_id)
+
+
 def test_exchanges_in_order(lesson_store):
     concept_id = a_concept(lesson_store)
     lesson_store.save_lesson(ALICE, a_lesson(concept_id))

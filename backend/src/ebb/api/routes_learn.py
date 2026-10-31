@@ -49,8 +49,14 @@ def get_lesson(concept_id: UUID, request: Request) -> LessonPage:
     if lesson is None:
         raise LookupError(f"concept {concept_id} has no lesson")
     exchanges = services.store.exchanges(services.user_id, concept_id)
+    concept = services.store.get_concept(services.user_id, concept_id)
+    has_notes = concept is not None and (
+        services.store.count_documents(services.user_id, concept.subject_id) > 0
+    )
     return LessonPage(
-        lesson=lesson_to_dict(lesson), exchanges=[exchange_to_dict(e) for e in exchanges]
+        lesson=lesson_to_dict(lesson),
+        exchanges=[exchange_to_dict(e) for e in exchanges],
+        has_notes=has_notes,
     )
 
 

@@ -226,6 +226,7 @@ describe("the learn phase", () => {
     exchanges: [],
     suggestions: lesson.suggestions,
     notices: [],
+    has_notes: true,
     ...over,
   });
   const ask = (question: string): ExchangeCard => ({
@@ -253,8 +254,8 @@ describe("the learn phase", () => {
     cards = applyLearn(cards, payload());
     cards = disputeSent(cards, cards[0].id);
     const result = { outcome: "refused" as const };
-    cards = applyTurn(cards, learnTurn({ feedback: grade(), dispute_result: result }));
-    expect(kinds(cards)).toEqual(["grade", "learn", "ready"]);
+    cards = applyTurn(cards, learnTurn({ feedback: grade(), dispute_result: result, notices: ["n"] }));
+    expect(kinds(cards)).toEqual(["grade", "learn", "notice", "ready"]); // Ready stays last
     expect(cards[0]).toMatchObject({ dispute: result });
   });
 
@@ -262,7 +263,8 @@ describe("the learn phase", () => {
     let cards = applyTurn([], learnTurn());
     cards = applyLearn(cards, payload({ notices: ["Web search unavailable — this lesson uses your notes only."] }));
     expect(kinds(cards)).toEqual(["learn", "notice", "ready"]);
-    expect(cards[0]).toMatchObject({ lesson });
+    expect(cards[0]).toMatchObject({ lesson, hasNotes: true });
+    expect(applyLearn(cards, payload({ has_notes: false }))[0]).toMatchObject({ hasNotes: false });
     cards = asked(cards, ask("Why SYN?"));
     expect(kinds(cards)).toEqual(["learn", "notice", "exchange", "ready"]);
     const next = payload({ exchanges: [exchange(0, "Why SYN?")], suggestions: ["After Why SYN?"] });

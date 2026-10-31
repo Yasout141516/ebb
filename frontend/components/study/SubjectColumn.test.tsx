@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, getJson } from "@/lib/api";
+import { getJson } from "@/lib/api";
 import type { ConceptState, Concepts, LessonPage, Source } from "@/lib/types";
 import SourceList from "./SourceList";
 import SubjectColumn from "./SubjectColumn";
@@ -189,7 +189,7 @@ describe("the 375 px drawer", () => {
 });
 
 describe("Read the lesson again", () => {
-  const state = (id: string, name: string, tide: number | null): ConceptState => ({
+  const state = (id: string, name: string, tide: number | null, learned: boolean): ConceptState => ({
     id,
     name,
     description: "",
@@ -199,9 +199,15 @@ describe("Read the lesson again", () => {
     next_review_at: null,
     due: false,
     projected_tide: null,
+    learned,
   });
   const concepts: Concepts = {
-    concepts: [state("c1", "TCP handshake", null), state("c2", "Subnetting", 0.71), state("c3", "DNS", 0.48)],
+    concepts: [
+      state("c1", "TCP handshake", null, false),
+      state("c2", "Subnetting", 0.71, true),
+      state("c3", "DNS", 0.48, false), // studied before lessons
+      state("c4", "NAT", null, true), // learned, never quizzed yet
+    ],
     due_count: 0,
     next_review_at: null,
   };
@@ -213,7 +219,7 @@ describe("Read the lesson again", () => {
       web_pages: [],
       suggestions: [],
       checks: ["How many hosts fit in a /26?"],
-      source_summary: { notes: 0, notes_pages: [], web_pages: 0, label: "General knowledge · not from your notes" },
+      source_summary: { notes: 0, notes_pages: [], web_pages: 1, label: null },
       model: "m",
       written_at: "2026-10-30T09:00:00Z",
       learned_at: "2026-10-30T09:10:00Z",
@@ -229,14 +235,16 @@ describe("Read the lesson again", () => {
         asked_at: "2026-10-30T09:05:00Z",
       },
     ],
+    has_notes: true,
   };
+  const lessonGets = () => vi.mocked(getJson).mock.calls.filter(([path]) => path.startsWith("/concepts/"));
 
   beforeEach(() => {
+    vi.mocked(getJson).mockReset();
     vi.mocked(getJson).mockImplementation(async (path: string) => {
-      if (path === "/subjects") return [{ id: "s1", name: "Computer Networks", concept_count: 3, due_count: 0 }];
+      if (path === "/subjects") return [{ id: "s1", name: "Computer Networks", concept_count: 4, due_count: 0 }];
       if (path === "/subjects/s1/sources") return [];
       if (path === "/concepts/c2/lesson") return page;
-      if (path === "/concepts/c3/lesson") throw new ApiError(404, "Not found."); // studied before lessons
       throw new Error(`unexpected ${path}`);
     });
   });
@@ -245,26 +253,32 @@ describe("Read the lesson again", () => {
     render(<SubjectColumn subjectId="s1" updates={0} concepts={concepts} learning="c1" />);
     const list = screen.getByRole("list", { name: "Concepts" });
     expect(within(list).getByText("Learning now · not quizzed yet")).toBeInTheDocument();
-    const again = await within(list).findByRole("button", { name: "Read the lesson again" });
-    expect(again).toHaveAccessibleDescription("Subnetting");
-    expect(within(list).getAllByRole("button", { name: "Read the lesson again" })).toHaveLength(1);
-    await userEvent.click(again);
+    const buttons = within(list).getAllByRole("button", { name: "Read the lesson again" });
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]).toHaveAccessibleDescription("Subnetting");
+    expect(buttons[1]).toHaveAccessibleDescription("NAT"); // learned, though never quizzed
+    expect(lessonGets()).toHaveLength(0); // nothing fetched until a lesson is opened
+    await userEvent.click(buttons[0]);
     const dialog = await screen.findByRole("dialog", { name: "Lesson: Subnetting" });
     expect(await within(dialog).findByText("A mask splits an address.")).toBeInTheDocument();
     expect(within(dialog).getByText("How many hosts fit in a /26?")).toBeInTheDocument();
     expect(within(dialog).getByText("Why /26?")).toBeInTheDocument();
     expect(within(dialog).getByText("Six bits are left for hosts.")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Not in your notes")).toHaveLength(2); // the subject has notes
     expect(within(dialog).queryByRole("button", { name: "Answer this for me" })).not.toBeInTheDocument();
+    expect(lessonGets()).toHaveLength(1);
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(again).toHaveFocus();
+    expect(buttons[0]).toHaveFocus();
   });
 
-  it("offers a lesson learned in this tab without asking the API", async () => {
+  it("offers a lesson learned in this tab before the concepts reload", () => {
     render(<SubjectColumn subjectId="s1" updates={0} concepts={concepts} learned={["c1"]} />);
-    const list = screen.getByRole("list", { name: "Concepts" });
-    const buttons = await within(list).findAllByRole("button", { name: "Read the lesson again" });
+    const buttons = within(screen.getByRole("list", { name: "Concepts" })).getAllByRole("button", {
+      name: "Read the lesson again",
+    });
+    expect(buttons).toHaveLength(3);
     expect(buttons[0]).toHaveAccessibleDescription("TCP handshake");
-    expect(getJson).not.toHaveBeenCalledWith("/concepts/c1/lesson", expect.anything());
+    expect(lessonGets()).toHaveLength(0);
   });
 });

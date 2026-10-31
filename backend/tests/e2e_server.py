@@ -35,7 +35,7 @@ class E2ETutor(FakeTutor):
 def main() -> None:
     base = make_services()
     # Every concept counts as learned, so a session goes straight to its questions, as this
-    # browser test expects; the learn phase gets its own browser test.
+    # browser test expects. TODO(Task 15): drop this when the learn phase's browser test lands.
     base.store.is_learned = lambda user_id, concept_id: True  # type: ignore[method-assign]
     tutor, saver = E2ETutor(rng=random.Random(7)), InMemorySaver()
     graph = build_graph(tutor, base.store, saver, now=lambda: NOW)

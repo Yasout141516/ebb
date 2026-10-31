@@ -45,6 +45,8 @@ export type LearnCard = {
   conceptId: string;
   concept: string;
   lesson: StoredLesson | null;
+  /** The subject has notes (from the learn turn): text with no notes citation is marked. */
+  hasNotes: boolean;
   learned: boolean;
 };
 
@@ -161,6 +163,12 @@ export function waitingQuestion(cards: Card[]): QuestionCard | null {
   return waitingIn(lastTurn(cards));
 }
 
+/** A lesson learned that the session is still paused on: the quiz hasn't heard yet. */
+export function learnedCard(cards: Card[]): LearnCard | null {
+  const last = lastTurn(cards);
+  return last?.kind === "learn" && last.learned ? last : null;
+}
+
 /** The lesson the session is paused on, until Ready is pressed. */
 export function learningCard(cards: Card[]): LearnCard | null {
   const last = lastTurn(cards);
@@ -205,6 +213,7 @@ const learnCard = (payload: LearnTurn): LearnCard => ({
   conceptId: payload.concept_id,
   concept: payload.concept,
   lesson: null,
+  hasNotes: false,
   learned: false,
 });
 
@@ -224,11 +233,14 @@ export function applyTurn(cards: Card[], payload: QuizTurn, reconnected = false)
   const checking = cards.findLast((c) => c.kind === "grade" && c.dispute === "checking");
   if (payload.dispute_result && checking) {
     // The re-check's result goes on the disputed card; the question is shown again (a
-    // lesson under way stays where it is).
+    // lesson under way stays where it is, its Ready card last).
     const kept = cards
       .filter((c) => c !== waiting)
       .map((c) => (c === checking ? { ...c, dispute: payload.dispute_result } : c));
-    return [...kept, ...feedbackCards(null, null, payload.notices, false), ...next()];
+    const notices = feedbackCards(null, null, payload.notices, false);
+    const ready = learning ? kept.findLastIndex((c) => c.kind === "ready") : -1;
+    if (ready !== -1) return [...kept.slice(0, ready), ...notices, ...kept.slice(ready)];
+    return [...kept, ...notices, ...next()];
   }
   if (learning) return cards; // a reconnect: already shown
   if (payload.kind !== "learn" && waiting && sameQuestion(waiting, payload)) return cards; // likewise
@@ -268,7 +280,7 @@ const exchangeCard = (conceptId: string, exchange: Exchange, id = uuid()): Excha
 export function applyLearn(cards: Card[], payload: LearnPayload): Card[] {
   const at = cards.findLastIndex((c) => c.kind === "learn" && c.conceptId === payload.concept_id);
   if (at === -1) return cards;
-  const learn = { ...(cards[at] as LearnCard), lesson: payload.lesson };
+  const learn = { ...(cards[at] as LearnCard), lesson: payload.lesson, hasNotes: payload.has_notes };
   const after = cards.slice(at + 1);
   const pending = after.filter((c) => c.kind === "exchange" && c.exchange === null);
   const kept = after.filter((c) => c.kind !== "ready" && !pending.includes(c));

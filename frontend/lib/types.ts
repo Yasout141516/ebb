@@ -32,6 +32,8 @@ export type ConceptState = {
   next_review_at: string | null;
   due: boolean;
   projected_tide: number | null;
+  /** Its lesson was read and Ready pressed: the lesson can be read again. */
+  learned: boolean;
 };
 
 export type Concepts = {
@@ -189,9 +191,11 @@ export type LearnPayload = {
   exchanges: Exchange[];
   suggestions: string[];
   notices: string[];
+  /** The subject has notes: a lesson or answer with no notes citation is marked. */
+  has_notes: boolean;
 };
 
-export type LessonPage = { lesson: StoredLesson; exchanges: Exchange[] };
+export type LessonPage = { lesson: StoredLesson; exchanges: Exchange[]; has_notes: boolean };
 
 export type AskReply = { ask: string; kind: AskKind; ask_id: string };
 export type LearnReply = AskReply | { ready: true };

@@ -22,8 +22,6 @@ export type Learn = {
 };
 
 type Options = {
-  /** The concept is learned: the quiz session carries on. */
-  onLearned: () => void;
   /** A configuration problem, shown full width. */
   onFatal: (message: string) => void;
 };
@@ -31,10 +29,11 @@ type Options = {
 /**
  * A new concept's learn phase, for useStudy: its lesson and the learner's questions about
  * it, each call streaming its text into the thread, then Ready. Every call ends with one
- * `learn` turn (the kept lesson and answers replace the streamed text) or `learned`. A
- * failed call can be sent again as it was, so a retried question keeps its ask id.
+ * `learn` turn (the kept lesson and answers replace the streamed text) or `learned`, which
+ * marks the lesson card (useStudy then hands over to the quiz). A failed call can be sent
+ * again as it was, so a retried question keeps its ask id.
  */
-export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { onLearned, onFatal }: Options): Learn {
+export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { onFatal }: Options): Learn {
   const [live, setLive] = useState<string | null>(null);
   const [step, setStep] = useState<string | null>(null);
   const [error, setError] = useState<StudyError | null>(null);
@@ -58,7 +57,6 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
     setStep(null);
     setLive(null);
     let shown = false; // text was on screen, then wiped: focus goes to Retry
-    let done = false;
     const onEvent = (event: SseEvent) => {
       switch (event.event) {
         case "step":
@@ -81,7 +79,6 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
           setLive(null);
           setStep(null);
           setCards((c) => learned(c, (event.data as { concept_id: string }).concept_id));
-          done = true;
           break;
         case "error": {
           setLive(null);
@@ -103,7 +100,6 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
       } else {
         setError({ message: messageOf(e), retry, focus: shown });
       }
-      done = false;
     } finally {
       if (inFlight.current === controller) {
         inFlight.current = null;
@@ -111,7 +107,6 @@ export default function useLearn(setCards: Dispatch<SetStateAction<Card[]>>, { o
         setStep(null);
       }
     }
-    if (done && !signal.aborted) onLearned();
   }
 
   function start(conceptId: string) {

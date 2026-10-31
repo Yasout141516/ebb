@@ -36,6 +36,7 @@ const memory: Concepts = {
       next_review_at: new Date(Date.now() - 3_600_000).toISOString(),
       due: true,
       projected_tide: 0.38,
+      learned: false,
     },
   ],
   due_count: 1,

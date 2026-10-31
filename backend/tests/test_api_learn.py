@@ -91,8 +91,18 @@ def test_learn_stream_event_order():
     assert payload["kind"] == "learn" and payload["concept_id"] == str(concept_id)
     assert payload["lesson"]["markdown"] == "".join(PIECES)
     assert payload["exchanges"] == []
+    assert payload["has_notes"] is True
     [citation] = payload["lesson"]["citations"]  # the shape the quiz's citation chips read
     assert set(citation) == CITATION_KEYS
+
+
+def test_learn_turn_says_whether_the_subject_has_notes():
+    services = make_services()
+    concept_id = _concept(services)  # a subject with no notes
+
+    events = _events(client(services).post(f"/concepts/{concept_id}/learn"))
+
+    assert events[-1][1]["payload"]["has_notes"] is False
 
 
 def test_ask_streams_an_answer_and_a_new_turn():
@@ -138,7 +148,8 @@ def test_get_lesson_makes_no_model_call():
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"lesson", "exchanges"}
+    assert set(body) == {"lesson", "exchanges", "has_notes"}
+    assert body["has_notes"] is True
     assert body["lesson"]["markdown"] == "".join(PIECES)
     assert body["lesson"]["written_at"] == NOW.isoformat()
     assert set(body["lesson"]["citations"][0]) == CITATION_KEYS

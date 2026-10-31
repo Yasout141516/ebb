@@ -4,6 +4,7 @@ from uuid import UUID, uuid4
 
 from ebb.domain import ChunkDraft, NewDocument
 from tests.api_support import NOW, USER, client, make_services
+from tests.fakes import learn
 
 OTHER = UUID("00000000-0000-0000-0000-000000000002")
 
@@ -106,6 +107,18 @@ def test_concepts_have_tide_band_and_projection():
     assert genes["tide"] is None and genes["band"] == "new" and genes["due"] is False
     assert body["due_count"] == 1
     assert body["next_review_at"] is not None
+    assert cells["learned"] is False and genes["learned"] is False
+
+
+def test_concepts_say_which_are_learned():
+    services = make_services()
+    subject = _subject(services, concepts=[("Cells", "a"), ("Genes", "b")])
+    genes = next(c for c in services.store.list_concepts(USER, subject) if c.name == "Genes")
+    learn(services.store, USER, genes.id)
+
+    body = client(services).get(f"/subjects/{subject}/concepts").json()
+
+    assert {c["name"]: c["learned"] for c in body["concepts"]} == {"Cells": False, "Genes": True}
 
 
 def test_another_users_subject_is_404():

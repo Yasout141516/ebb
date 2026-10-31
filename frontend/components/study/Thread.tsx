@@ -7,7 +7,7 @@ import type { Card, QuestionCard as QuestionModel } from "@/lib/session";
 import Composer from "./Composer";
 import GradeCard from "./GradeCard";
 import LearnExchange, { SuggestedNext } from "./LearnExchange";
-import LearnLesson, { hasNotes, LESSON_LABEL } from "./LearnLesson";
+import LearnLesson, { LESSON_LABEL } from "./LearnLesson";
 import LessonCard from "./LessonCard";
 import NoticeDivider from "./NoticeDivider";
 import QuestionCard from "./QuestionCard";
@@ -129,6 +129,7 @@ export default function Thread({ study, onDispute }: Props) {
             label={card.learned ? "Lesson" : LESSON_LABEL}
             lesson={card.lesson}
             live={streamingTo === card.id ? study.live : null}
+            hasNotes={card.hasNotes}
             onAsk={open ? (question) => study.ask(question, "check") : undefined}
             asked={asked}
             disabled={study.running}
@@ -142,7 +143,7 @@ export default function Thread({ study, onDispute }: Props) {
             question={card.question}
             exchange={card.exchange}
             live={streamingTo === card.id ? study.live : null}
-            hasNotes={lesson?.kind === "learn" && hasNotes(lesson.lesson)}
+            hasNotes={lesson?.kind === "learn" && lesson.hasNotes}
           />
         );
       }

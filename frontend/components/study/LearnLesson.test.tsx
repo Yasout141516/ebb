@@ -43,7 +43,7 @@ const lesson = (over: Partial<StoredLesson> = {}): StoredLesson => ({
 describe("LearnLesson", () => {
   it("shows its label, sources, the lesson and the check-yourself questions, unanswered", async () => {
     const onAsk = vi.fn();
-    render(<LearnLesson label={LESSON_LABEL} lesson={lesson()} onAsk={onAsk} />);
+    render(<LearnLesson label={LESSON_LABEL} lesson={lesson()} hasNotes onAsk={onAsk} />);
     const card = screen.getByRole("article", { name: "Lesson" });
     expect(within(card).getByText("Lesson · quiz opens when you press Ready")).toBeInTheDocument();
     expect(within(card).getByText("Your notes · pp. 12 to 15")).toBeInTheDocument();
@@ -70,14 +70,17 @@ describe("LearnLesson", () => {
   });
 
   it("marks a lesson with no notes citation, when the subject has notes", () => {
-    const summary = { notes: 1, notes_pages: [14], web_pages: 0, label: "Your notes only" };
+    // Written from the web alone (the notes search found nothing), in a subject with notes.
+    const webOnly = { notes: 0, notes_pages: [], web_pages: 2, label: null };
     const { rerender } = render(
-      <LearnLesson label={LESSON_LABEL} lesson={lesson({ citations: [web], source_summary: summary })} />,
+      <LearnLesson label={LESSON_LABEL} lesson={lesson({ citations: [web], source_summary: webOnly })} hasNotes />,
     );
-    expect(screen.getByText("Your notes only")).toBeInTheDocument();
+    expect(screen.getByText("2 web sources")).toBeInTheDocument();
     expect(screen.getByText("Not in your notes")).toBeInTheDocument();
     const general = { notes: 0, notes_pages: [], web_pages: 0, label: "General knowledge · not from your notes" };
-    rerender(<LearnLesson label={LESSON_LABEL} lesson={lesson({ citations: [], source_summary: general })} />);
+    rerender(
+      <LearnLesson label={LESSON_LABEL} lesson={lesson({ citations: [], source_summary: general })} hasNotes={false} />,
+    );
     expect(screen.getByText("General knowledge · not from your notes")).toBeInTheDocument();
     expect(screen.queryByText("Not in your notes")).not.toBeInTheDocument();
   });
