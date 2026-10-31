@@ -88,3 +88,25 @@ Minor findings from reviews that are still open (none blocks the work). Items a 
 - Task 14: a quick 4xx on the auto {learned:true} hand-off leaves handed set (no resend except Retry); GET lesson does an extra get_concept for subject_id
 - Task 14/15: learn checkpoints (`learn:{user}:{concept}`) are never pruned unless the concept is learned (`threads_to_prune` only covers study sessions); harmless at one per concept, for milestone 6
 - Task 6: flooring still prints "3.0 times" for a call at e.g. 3.007× — consider "just over 3 times" wording or two decimals near the threshold (my requested fix was insufficient)
+
+## Live smoke run (2026-10-31, real Groq / Mistral / Tavily keys)
+
+Worked live: streamed question writing and rewriting, re-teaching, a lesson (Tavily search plus
+notes, 1,553 streamed pieces, first text at 6.6 s, 10.9 s in all), a learn answer, Ready, the
+MCQ after Ready, shuffled options, and the Costs page and API. Groq does report usage on streamed
+calls: input, output and reasoning tokens, TTFT and cost were all recorded.
+
+- **Fixed (6b464fb):** gpt-oss once ended a good learn answer with the bare trailer object and
+  no `<<<EBB` markers. The parse failed and the answer was wiped behind the error card. `split`
+  now reads a final JSON object made only of the trailer's keys.
+- **Not exercised:** free-text grading. The session picked MCQs every time for these review
+  concepts. Grading goes through the same gateway path, which ran live for every other endpoint.
+- **Found, not fixed (for the token-saving and lag work):**
+  - Groq's free tier for gpt-oss-120b allows 8,000 tokens a minute. One lesson (about 7.4k)
+    uses almost all of it, so a learn question asked in the same minute gets a 429.
+  - Each learn answer resends the whole lesson, about 6.5k input tokens, so the free tier allows
+    roughly one learn question a minute.
+  - The Mistral backup key answered 429 "rate limited" throughout, so the backup didn't help.
+  - Each provider client also retries once inside its SDK (`max_retries=1`), on top of the
+    gateway's retries, so one 429 attempt took 10.4 s. A rate-limited turn took 36 s before the
+    gateway kept the first draft of the questions.
