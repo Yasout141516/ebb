@@ -8,6 +8,7 @@ from ebb.routing import (
     after_ask,
     after_extend,
     after_generate,
+    after_lesson,
     after_mastery,
     after_pick,
     after_search,
@@ -91,6 +92,22 @@ def test_choose_question_falls_back_to_closest_difficulty():
     assert choose_question([{"difficulty": 3}, {"difficulty": 1}], 2, "partial", False) == 0
 
 
+def test_choose_question_prefers_the_easiest_mcq_first():
+    batch = [
+        {"type": "short", "difficulty": 1},
+        {"type": "mcq", "difficulty": 3},
+        {"type": "mcq", "difficulty": 2},
+    ]
+    assert choose_question(batch, None, None, True, prefer_mcq=True) == 2
+    # Only the first question: after it, the usual rules.
+    assert choose_question(batch, 1, "partial", False, prefer_mcq=True) == 0
+
+
+def test_choose_question_prefers_mcq_only_when_the_batch_has_one():
+    batch = [{"type": "short", "difficulty": 2}, {"type": "short", "difficulty": 1}]
+    assert choose_question(batch, None, None, True, prefer_mcq=True) == 1
+
+
 def state(**overrides):
     base = {
         "correct_streak": 0,
@@ -138,6 +155,17 @@ def test_duplicate_answer_routes_like_an_uncounted_answer():
 
 def test_after_pick_retrieves_notes_when_a_concept_was_picked():
     assert after_pick({"concept": {"id": "a"}, "caught_up": False}) == "retrieve_notes"
+
+
+def test_after_pick_offers_the_lesson_of_a_concept_due_one():
+    picked = {"concept": {"id": "a"}, "caught_up": False, "lesson_due": True}
+    assert after_pick(picked) == "offer_lesson"
+
+
+def test_after_lesson():
+    assert after_lesson({"quit": False, "lesson_due": True}) == "offer_lesson"  # not learned
+    assert after_lesson({"quit": False, "lesson_due": False}) == "retrieve_notes"
+    assert after_lesson({"quit": True, "lesson_due": False}) == "summarize"
 
 
 def test_after_pick_extends_when_nothing_is_left():

@@ -52,7 +52,9 @@ class Step:
 
 @dataclass(frozen=True)
 class Pending:
-    payload: dict[str, Any]  # the question waiting for a reply, as ask_question shows it
+    # The question waiting for a reply, as ask_question shows it, or the lesson turn
+    # ({kind: "learn", concept, concept_id, number: 0}) of a web session.
+    payload: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -84,12 +86,18 @@ def _stopped_on(saved: StateSnapshot) -> tuple[str, int] | None:
     carry on with."""
     if saved.interrupts:
         payload = saved.interrupts[0].value
+        if payload.get("kind") == "learn":
+            return payload["concept"], 1  # its first question comes after the lesson
         return payload["concept"], payload["number"]
     if _cut_off(saved) and saved.values.get("concept"):
         # Stopped mid-step, e.g. while grading: the answer is in the state but its step
         # never finished. The stored attempt_id makes re-running it count once.
         return saved.values["concept"]["name"], saved.values["asked_on_concept"] + 1
     return None
+
+
+def _lesson_reply(reply: Mapping[str, Any]) -> bool:
+    return "learned" in reply or "skip" in reply
 
 
 class StudySessions:
@@ -137,17 +145,23 @@ class StudySessions:
         return Offer(found.thread_id, concept, number, found.last_active_at, busy)
 
     def start(
-        self, user_id: UUID, subject_id: UUID, driver: str
+        self, user_id: UUID, subject_id: UUID, driver: str, learn_first: bool = False
     ) -> tuple[str, str, Iterator[Event]]:
         """A new session: its thread id, the greeting, and its events up to the first
-        question (or the summary). Raises LookupError if the subject isn't the user's."""
+        question (or the summary). With `learn_first` (the web app's sessions) a new concept
+        stops at its lesson turn first. Raises LookupError if the subject isn't the user's."""
         if self.store.get_subject(user_id, subject_id) is None:
             raise LookupError(f"subject {subject_id} not found")
         concepts = self.store.list_concepts(user_id, subject_id)
         new = sum(1 for c in concepts if c.stage == 0)
         text = greeting(len(reviews_due(concepts, self.now())), new)
         thread_id = str(uuid4())
-        first = {"user_id": str(user_id), "subject_id": str(subject_id), "thread_id": thread_id}
+        first = {
+            "user_id": str(user_id),
+            "subject_id": str(subject_id),
+            "thread_id": thread_id,
+            "learn_first": learn_first,
+        }
         # The session row is made by the run, so its lease is first claimed at the question.
         run = self._stream(user_id, thread_id, driver, first)
         return thread_id, text, self._drive(user_id, thread_id, driver, run, claim=False)
@@ -160,8 +174,10 @@ class StudySessions:
         self, user_id: UUID, thread_id: str, driver: str, reply: Mapping[str, Any]
     ) -> Iterator[Event]:
         """Send the learner's reply: {attempt_id, answer}, {dispute: {id, reason,
-        explanation}} or {quit: True}. A reply already applied is not applied again; the
-        session's current turn comes back instead."""
+        explanation}} or {quit: True}; to a lesson turn {learned: True} (refused, so the
+        lesson turn comes back, until the store has the concept learned), {skip: True} or
+        {quit: True}. A reply already applied is not applied again; the session's current
+        turn comes back instead."""
         return self._carry_on(user_id, thread_id, driver, reply)
 
     def pending(
@@ -223,9 +239,16 @@ class StudySessions:
         self, user_id: UUID, thread_id: str, driver: str, reply: Mapping[str, Any] | None
     ) -> Iterator[Event]:
         if self.store.get_session(user_id, thread_id) is None:
-            # Ended: a repeated last reply gets the summary again.
+            # Ended: a repeated last reply gets the summary again. A lesson's reply instead comes
+            # from a tab whose lesson stayed open while the session ended elsewhere. (Only if no
+            # questions could be written after it did one end the session; a resend of that is
+            # told the same.)
             saved = self.graph.get_state(_config(thread_id))
-            if saved.values.get("user_id") != str(user_id) or _cut_off(saved):
+            if (
+                saved.values.get("user_id") != str(user_id)
+                or _cut_off(saved)
+                or (reply is not None and _lesson_reply(reply))
+            ):
                 raise SessionNotFound(thread_id)
             yield self._finished(user_id, saved.values)
             return
@@ -271,9 +294,13 @@ class StudySessions:
 
     def _applied(self, user_id: UUID, values: Mapping[str, Any], reply: Mapping[str, Any]) -> bool:
         """Whether `reply` was already applied: resuming with it again would answer the next
-        question with an old attempt id, or re-check a dispute twice."""
+        question with an old attempt id, re-check a dispute twice, or send a learned or
+        skipped lesson's reply to the question after it."""
         if "attempt_id" in reply:
             return reply["attempt_id"] == values.get("attempt_id")
+        if _lesson_reply(reply):
+            # The lesson turn it answered is over once the session has moved past it.
+            return not values.get("lesson_due")
         if "dispute" in reply:
             dispute_id = reply["dispute"]["id"]
             waiting = values.get("dispute")

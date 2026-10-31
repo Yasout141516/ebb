@@ -42,6 +42,7 @@ from tests.fakes import (
     FakeTutor,
     FakeWebSearch,
     MemoryStore,
+    learn,
     make_subject,
     new_document,
     seed_concept,
@@ -58,10 +59,17 @@ def run(
     answer: Callable[[dict[str, Any]], dict[str, Any]],
     web: FakeWebSearch | None = None,
     now: Callable[[], datetime] = lambda: NOW,
+    learn_first: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     graph = build_graph(tutor, store, InMemorySaver(), now=now, web=web)
     config = {"configurable": {"thread_id": str(uuid4())}}
-    start = {"user_id": str(USER), "subject_id": str(subject_id), "thread_id": "t-1"}
+    start: dict[str, Any] = {
+        "user_id": str(USER),
+        "subject_id": str(subject_id),
+        "thread_id": "t-1",
+    }
+    if learn_first:
+        start["learn_first"] = True
     result = graph.invoke(start, config)
     payloads = []
     while "__interrupt__" in result:
@@ -897,6 +905,29 @@ def answered_before(store: MemoryStore, subject_id: UUID, prompt: str, index: in
     seed_concept(
         store, concept.id, stage=1, last_reviewed_at=earlier, next_review_at=NOW - timedelta(days=1)
     )
+
+
+def test_concept_with_answers_is_not_offered_a_lesson():
+    store, tutor = MemoryStore(), FakeTutor()
+    subject_id = make_subject(store, USER, concepts=4)
+    answered_before(store, subject_id, "An earlier question?", index=0)  # a due review
+    answered_before(store, subject_id, "A voided question?", index=1)
+    _, voided, learned, _ = store.list_concepts(USER, subject_id)
+    # Its only answer was voided, so it is back at stage 0 with no reviews; the answer stays.
+    seed_concept(
+        store, voided.id, stage=0, last_reviewed_at=None, next_review_at=None, review_count=0
+    )
+    learn(store, USER, learned.id)
+
+    def answer(payload: dict[str, Any]) -> dict[str, Any]:
+        return {"skip": True} if payload.get("kind") == "learn" else always_right(payload)
+
+    _, payloads = run(tutor, store, subject_id, answer, learn_first=True)
+
+    assert [p["concept"] for p in payloads if p.get("kind") == "learn"] == ["Concept 4"]
+    assert [p["concept"] for p in payloads if "kind" not in p] == [
+        f"Concept {n}" for n in (1, 1, 2, 2, 3, 3, 4, 4)
+    ]
 
 
 def prompts_of(payloads: list[dict[str, Any]]) -> list[str]:

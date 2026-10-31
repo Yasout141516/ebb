@@ -937,3 +937,11 @@ def make_subject(
 def seed_concept(store: MemoryStore, concept_id: UUID, **changes) -> None:
     owner, concept = store.concepts[concept_id]
     store.concepts[concept_id] = (owner, replace(concept, **changes))
+
+
+def learn(store: MemoryStore, user_id: UUID, concept_id: UUID) -> None:
+    """The learner read the concept's lesson and pressed Ready."""
+    at = datetime(2026, 10, 27, 9, 0, tzinfo=UTC)
+    lesson = StoredLesson(concept_id, "A lesson.", (), (), (), (), {}, "m", at)
+    store.save_lesson(user_id, lesson)
+    assert store.mark_learned(user_id, concept_id, at)

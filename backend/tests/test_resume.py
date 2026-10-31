@@ -17,7 +17,9 @@ from ebb import cli
 from ebb.config import Settings
 from ebb.db.migrate import MIGRATION_LOCK
 from ebb.db.repo import PgStore
+from ebb.domain import Question
 from ebb.graph.build import build_graph
+from ebb.graph.state import concept_to_dict, question_to_dict
 from ebb.study import Offer, Pending, Step, StudySessions
 from tests.fakes import FakeTutor
 
@@ -226,6 +228,68 @@ def test_service_carries_on_a_step_cut_off_after_it_ran(store, subject_id, pg_po
     last = resumed[-1]
     assert isinstance(last, Pending)
     assert last.payload["number"] == 2 and last.payload["feedback"]["value"] == "correct"
+    assert attempt_count(pg_pool) == 1
+
+
+def test_milestone4_checkpoint_without_learn_first_resumes(store, subject_id, pg_pool):
+    """A session saved before the learn phase has none of its keys: it quizzes as before."""
+    dns = store.list_concepts(ALICE, subject_id)[0]
+    thread_id = "milestone-4"
+    session_id = store.create_session(ALICE, subject_id, thread_id)
+    question = Question(uuid4(), dns.id, "short", 1, "An old question?", "right")
+    store.save_questions(ALICE, session_id, [question])
+    grade = {"value": "correct", "explanation": "Earlier.", "misconception": None}
+    saved = {
+        "user_id": str(ALICE),
+        "subject_id": str(subject_id),
+        "thread_id": thread_id,
+        "session_id": str(session_id),
+        "studied_concept_ids": [str(dns.id)],
+        "results": [],
+        "quit": False,
+        "caught_up": False,
+        "fatal": None,
+        "notices": [],
+        "has_notes": False,
+        "web_searched": [],
+        "web_failed": False,
+        "web_notice_shown": False,
+        "concept": concept_to_dict(dns),
+        "batch": [question_to_dict(question)],
+        "asked_prompts": [],
+        "asked_on_concept": 1,
+        "correct_streak": 1,
+        "generation_calls_on_concept": 1,
+        "sources": [],
+        "earlier_prompts": [],
+        "run": {"mode": "notes", "candidates": [], "replacing": 0},
+        "web_sources": [],
+        "question": None,
+        "difficulty": 1,
+        "current_question_id": None,
+        "attempt_id": None,
+        "answer": None,
+        "grade": {**grade, "claims": [], "citations": [], "general_knowledge": False},
+        "model_used": "code",
+        "lesson": None,
+        "last_graded": None,
+        "dispute": None,
+        "dispute_result": None,
+    }
+    config = {"configurable": {"thread_id": thread_id}}
+    new_process(store).update_state(config, saved, as_node="teach")
+
+    sessions = study_service(store, FakeTutor())
+    offer = sessions.offer(ALICE, subject_id, "tab-a")
+    [first] = list(sessions.resume(ALICE, thread_id, "tab-a"))
+    assert isinstance(first, Pending)
+    after = list(sessions.reply(ALICE, thread_id, "tab-a", reply(first.payload)))[-1]
+
+    assert offer is not None and (offer.concept, offer.number) == ("DNS", 2)
+    assert first.payload["question"]["prompt"] == "An old question?"
+    # DNS is done; TCP is new and has no lesson, yet the old session has no learn phase.
+    assert isinstance(after, Pending) and "kind" not in after.payload
+    assert (after.payload["concept"], after.payload["number"]) == ("TCP", 1)
     assert attempt_count(pg_pool) == 1
 
 

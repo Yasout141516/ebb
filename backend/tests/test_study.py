@@ -30,7 +30,7 @@ from ebb.study import (
     StudySessions,
 )
 from ebb.ui import render_turn
-from tests.fakes import FakeTutor, MemoryStore, make_subject
+from tests.fakes import FakeTutor, MemoryStore, learn, make_subject
 
 USER = UUID("00000000-0000-0000-0000-0000000000aa")
 
@@ -169,6 +169,80 @@ def test_quit_finishes_with_the_summary_and_a_repeat_gets_it_again(s):
     assert finished.next_review_at == s.store.next_review_at(USER, s.subject_id)
     assert again == [finished]
     assert session(s, thread_id)["ended_at"] is not None
+
+
+def learning(s: Setup) -> tuple[str, Pending]:
+    """A web session, waiting on its first concept's lesson."""
+    thread_id, _, events = s.sessions.start(USER, s.subject_id, "tab-a", learn_first=True)
+    first = ending(events)
+    assert isinstance(first, Pending)
+    return thread_id, first
+
+
+def test_web_session_pauses_on_a_new_concept(s):
+    thread_id, _, events = s.sessions.start(USER, s.subject_id, "tab-a", learn_first=True)
+
+    got = list(events)
+
+    concept = s.store.list_concepts(USER, s.subject_id)[0]
+    payload = {"kind": "learn", "concept": "Concept 1", "concept_id": str(concept.id), "number": 0}
+    assert got == [Pending(payload)]
+    assert s.tutor.generate_calls == []  # no questions are written before the lesson
+    assert s.sessions.pending(USER, thread_id) == payload
+    offer = s.sessions.offer(USER, s.subject_id, "tab-a")
+    assert offer is not None and (offer.concept, offer.number) == ("Concept 1", 1)
+
+
+def test_quit_on_a_lesson_turn_ends_the_session(s):
+    thread_id, _ = learning(s)
+
+    finished = ending(s.sessions.reply(USER, thread_id, "tab-a", {"quit": True}))
+
+    assert isinstance(finished, Finished) and finished.results == []
+    assert session(s, thread_id)["ended_at"] is not None
+    assert s.sessions.offer(USER, s.subject_id, "tab-a") is None
+
+
+def test_learned_reply_continues_to_questions_mcq_first(s):
+    thread_id, first = learning(s)
+    learn(s.store, USER, UUID(first.payload["concept_id"]))
+
+    turn = ending(s.sessions.reply(USER, thread_id, "tab-a", {"learned": True}))
+    again = ending(s.sessions.reply(USER, thread_id, "tab-a", {"learned": True}))  # pressed twice
+
+    assert isinstance(turn, Pending)
+    assert (turn.payload["concept"], turn.payload["number"]) == ("Concept 1", 1)
+    # The batch's easiest multiple-choice question, not its easiest question (a short answer).
+    assert (turn.payload["question"]["type"], turn.payload["question"]["difficulty"]) == ("mcq", 1)
+    assert again == turn
+    assert s.tutor.generate_calls == ["Concept 1"]
+    wrong = {"answer": "2", "attempt_id": str(uuid4())}
+    second = ending(s.sessions.reply(USER, thread_id, "tab-a", wrong))
+    # From the second question on, the usual rules: same difficulty after a wrong answer.
+    assert isinstance(second, Pending)
+    assert (second.payload["question"]["type"], second.payload["question"]["difficulty"]) == (
+        "short",
+        1,
+    )
+
+
+def test_learned_reply_without_lesson_learned_repeats_the_offer(s):
+    thread_id, first = learning(s)
+
+    refused = ending(s.sessions.reply(USER, thread_id, "tab-a", {"learned": True}))
+    answer = {"answer": "right", "attempt_id": str(uuid4())}
+    stray = ending(s.sessions.reply(USER, thread_id, "tab-a", answer))
+    skipped = ending(s.sessions.reply(USER, thread_id, "tab-a", {"skip": True}))
+    resent = ending(s.sessions.reply(USER, thread_id, "tab-a", {"skip": True}))
+
+    assert refused == first
+    assert stray == first  # an answer is no reply to a lesson
+    assert isinstance(skipped, Pending)
+    assert (skipped.payload["concept"], skipped.payload["number"]) == ("Concept 1", 1)
+    assert skipped.payload["question"]["type"] == "short"  # skipped: the easiest question
+    assert resent == skipped
+    assert not s.store.is_learned(USER, UUID(first.payload["concept_id"]))
+    assert s.store.attempts == {}
 
 
 def test_reply_to_another_users_session_is_refused(s):

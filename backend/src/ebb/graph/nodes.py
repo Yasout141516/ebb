@@ -1,4 +1,4 @@
-"""The fourteen quiz-loop nodes. Only generate_questions, verify_citations (rewriting the
+"""The fifteen quiz-loop nodes. Only generate_questions, verify_citations (rewriting the
 questions whose citations fail), extend_subject, grade_answer (short answers), teach and
 regrade call the LLM, and only search_web searches the web; everything else is plain code."""
 
@@ -209,6 +209,17 @@ def make_nodes(
             "current_question_id": None,
         }
 
+    def lesson_due(state: QuizState, concept: Concept) -> bool:
+        """Whether `concept` is taught before it is quizzed: the session has the learn phase,
+        and the concept is new, never answered and not learned. A concept whose answers were
+        all voided is back at stage 0 with no reviews, but it has answers."""
+        if not state["learn_first"] or concept.stage != 0:
+            return False
+        user_id, _ = ids(state)
+        return not store.answered_prompts(user_id, concept.id, 1) and not store.is_learned(
+            user_id, concept.id
+        )
+
     def pick_concept(state: QuizState) -> dict[str, Any]:
         user_id, subject_id = ids(state)
         moment = now()
@@ -229,7 +240,24 @@ def make_nodes(
             "current_question_id": None,
             "run": _fresh_run(),
             "web_sources": [],
+            "lesson_due": lesson_due(state, concept),
+            "mcq_first": False,
         }
+
+    def offer_lesson(state: QuizState) -> dict[str, Any]:
+        # Runs again from the top when resumed, so nothing before interrupt() may have side effects.
+        concept = state["concept"]
+        reply = interrupt(
+            {"kind": "learn", "concept": concept["name"], "concept_id": concept["id"], "number": 0}
+        )
+        if reply.get("quit"):
+            return {"quit": True}
+        if reply.get("skip"):
+            return {"lesson_due": False}  # the terminal has no lessons: it stays not learned
+        user_id, _ = ids(state)
+        if reply.get("learned") and store.is_learned(user_id, UUID(concept["id"])):
+            return {"lesson_due": False, "mcq_first": True}
+        return {}  # not learned yet, or no reply to a lesson: it is offered again
 
     def extend_subject(state: QuizState) -> dict[str, Any]:
         user_id, subject_id = ids(state)
@@ -383,7 +411,11 @@ def make_nodes(
         if index is None:
             last = state["grade"]["value"] if state["grade"] else None
             index = choose_question(
-                batch, state["difficulty"], last, first=state["asked_on_concept"] == 0
+                batch,
+                state["difficulty"],
+                last,
+                first=state["asked_on_concept"] == 0,
+                prefer_mcq=state["mcq_first"],
             )
         question = batch[index]
         grade = state["grade"]
@@ -626,6 +658,7 @@ def make_nodes(
     return {
         "load_learner": load_learner,
         "pick_concept": pick_concept,
+        "offer_lesson": offer_lesson,
         "extend_subject": extend_subject,
         "retrieve_notes": retrieve_notes,
         "generate_questions": generate_questions,

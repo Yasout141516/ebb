@@ -421,7 +421,7 @@ def study(
             events = sessions.resume(user_id, thread_id, driver)
             doing = "Thinking…"  # finishing a cut-off step, if there is one
         else:
-            thread_id, text, events = sessions.start(user_id, chosen.id, driver)
+            thread_id, text, events = sessions.start(user_id, chosen.id, driver, learn_first=False)
             held.enter_context(sessions.hold(user_id, thread_id))  # a new id: always ours
             console.print(escape(text))
             doing = "Preparing questions…"
@@ -431,6 +431,11 @@ def study(
         try:
             turn = _until_turn(events, doing)
             while not isinstance(turn, Finished):
+                if turn.payload.get("kind") == "learn":
+                    # A web session stopped at a lesson: the terminal has none, so it skips it.
+                    events = sessions.reply(user_id, thread_id, driver, {"skip": True})
+                    turn = _until_turn(events, "Preparing questions…")
+                    continue
                 render_turn(console, turn.payload)
                 reply = _ask(turn.payload)
                 events = sessions.reply(user_id, thread_id, driver, reply)

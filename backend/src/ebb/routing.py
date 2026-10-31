@@ -36,9 +36,15 @@ def choose_question(
     difficulty: int | None,
     last_grade: str | None,
     first: bool,
+    prefer_mcq: bool = False,
 ) -> int:
-    """Index into `batch` of the next question to ask. `batch` must not be empty."""
+    """Index into `batch` of the next question to ask. `batch` must not be empty. With
+    `prefer_mcq`, the first question is the easiest multiple-choice one, if there is one."""
     levels = [q["difficulty"] for q in batch]
+    if first and prefer_mcq:
+        mcqs = [i for i, q in enumerate(batch) if q["type"] == "mcq"]
+        if mcqs:
+            return min(mcqs, key=lambda i: levels[i])
     if first or difficulty is None:
         return levels.index(min(levels))
     if last_grade == "correct":
@@ -131,10 +137,19 @@ def after_search(state: Mapping[str, Any]) -> NextStep:
 
 def after_pick(
     state: Mapping[str, Any],
-) -> Literal["retrieve_notes", "extend_subject", "summarize"]:
+) -> Literal["retrieve_notes", "offer_lesson", "extend_subject", "summarize"]:
     if state["concept"] is not None:
-        return "retrieve_notes"
+        return "offer_lesson" if state.get("lesson_due") else "retrieve_notes"
     return "summarize" if state["caught_up"] else "extend_subject"
+
+
+def after_lesson(
+    state: Mapping[str, Any],
+) -> Literal["offer_lesson", "retrieve_notes", "summarize"]:
+    """The lesson is offered again until the learner has learned or skipped it."""
+    if state["quit"]:
+        return "summarize"
+    return "offer_lesson" if state["lesson_due"] else "retrieve_notes"
 
 
 def after_extend(state: Mapping[str, Any]) -> Literal["pick_concept", "summarize"]:

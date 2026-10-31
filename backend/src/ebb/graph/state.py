@@ -23,6 +23,7 @@ class QuizState(TypedDict, total=False):
     user_id: str
     subject_id: str
     thread_id: str
+    learn_first: bool  # a new concept's lesson comes before its quiz (web sessions)
     # session
     session_id: str
     studied_concept_ids: list[str]
@@ -37,6 +38,8 @@ class QuizState(TypedDict, total=False):
     web_notice_shown: bool
     # current concept
     concept: dict[str, Any] | None
+    lesson_due: bool  # waiting for the learner to learn (or skip) the concept's lesson
+    mcq_first: bool  # the concept's lesson was just learned: its first question is an MCQ
     batch: list[dict[str, Any]]
     asked_prompts: list[str]
     asked_on_concept: int
@@ -101,6 +104,9 @@ STATE_DEFAULTS: dict[str, Any] = {
     "last_graded": None,
     "dispute_result": None,
     "current_question_id": None,
+    "learn_first": False,
+    "lesson_due": False,
+    "mcq_first": False,
 }
 
 

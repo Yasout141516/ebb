@@ -2,6 +2,7 @@
 
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -9,9 +10,12 @@ from langgraph.checkpoint.memory import InMemorySaver
 from typer.testing import CliRunner
 
 from ebb import cli
+from ebb.clock import utc_now
 from ebb.config import ConfigError, Settings
 from ebb.domain import ChunkDraft
+from ebb.graph.build import build_graph
 from ebb.llm.tutor import AllProvidersExhausted
+from ebb.study import Pending, SessionNotFound, StudySessions
 from ebb.ui import format_day
 from tests.fakes import (
     FakeTutor,
@@ -449,6 +453,51 @@ def test_other_subjects_session_is_not_offered(fakes, monkeypatch):
     assert "Resume?" not in result.output
     assert "Nothing is due. Let's learn something new." in result.output
     assert resumable(store, old).session_id == old_id
+
+
+def test_cli_session_never_pauses(fakes):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+
+    result = runner.invoke(cli.app, ["study"], input="q\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Short answer" in result.output
+    _, session = only_session(store)
+    graph = build_graph(tutor, store, cli._checkpointer(store))
+    saved = graph.get_state({"configurable": {"thread_id": session["thread_id"]}})
+    assert saved.values["learn_first"] is False
+
+
+def test_cli_resuming_a_paused_web_session_skips_the_lesson(fakes):
+    store, tutor = fakes
+    runner.invoke(cli.app, ["new", "Networks"])
+    settings, _ = cli._open_store()
+    user_id = settings.ebb_dev_user_id
+    [subject] = store.list_subjects(user_id)
+    saver = cli._checkpointer(store)
+    web = StudySessions(store, build_graph(tutor, store, saver), saver, utc_now)
+    thread_id, _, events = web.start(user_id, subject.id, "web:1", learn_first=True)
+    [lesson] = list(events)
+    assert isinstance(lesson, Pending) and lesson.payload["kind"] == "learn"
+    web.release(user_id, thread_id, "web:1")  # the tab was closed
+
+    result = runner.invoke(cli.app, ["study"], input="y\nq\n")
+
+    assert result.exit_code == 0, result.output
+    question = "You stopped on Networks 1, question 1, a moment ago. Resume? [Y/n]"
+    assert question in result.output
+    shown = result.output.split(question, 1)[1]
+    # Straight to the quiz, with not a word about the lesson.
+    before_question = shown.split("┌", 1)[0]  # the question's panel
+    assert before_question.split() == "Studying Networks. Type q at any question to stop.".split()
+    assert "Short answer" in shown
+    assert "No answers this session." in shown  # q at the question ended it
+    assert not store.is_learned(user_id, UUID(lesson.payload["concept_id"]))
+    assert len(store.sessions) == 1  # the web session, carried on and ended in the terminal
+    # Ready pressed later in another tab: the session has ended.
+    with pytest.raises(SessionNotFound):
+        list(web.reply(user_id, thread_id, "web:2", {"learned": True}))
 
 
 def test_q_ends_the_session_and_is_not_offered_again(fakes):

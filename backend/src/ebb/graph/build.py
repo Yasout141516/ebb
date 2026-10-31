@@ -1,6 +1,7 @@
-"""Wire the fourteen quiz-loop nodes into a LangGraph graph.
+"""Wire the fifteen quiz-loop nodes into a LangGraph graph.
 
-pick_concept -> retrieve_notes | extend_subject | summarize
+pick_concept -> retrieve_notes | offer_lesson (web sessions) | extend_subject | summarize
+offer_lesson -> retrieve_notes | offer_lesson (not learned yet) | summarize
 extend_subject -> pick_concept | summarize
 retrieve_notes -> generate_questions -> verify_citations -> ask_question
 verify_citations -> search_web -> generate_questions (web mode) | ask_question
@@ -25,6 +26,7 @@ from ebb.routing import (
     after_extend,
     after_generate,
     after_grade,
+    after_lesson,
     after_mastery,
     after_pick,
     after_search,
@@ -87,7 +89,12 @@ def build_graph(
     graph.add_edge(START, "load_learner")
     graph.add_edge("load_learner", "pick_concept")
     graph.add_conditional_edges(
-        "pick_concept", after_pick, ["retrieve_notes", "extend_subject", "summarize"]
+        "pick_concept",
+        after_pick,
+        ["retrieve_notes", "offer_lesson", "extend_subject", "summarize"],
+    )
+    graph.add_conditional_edges(
+        "offer_lesson", after_lesson, ["offer_lesson", "retrieve_notes", "summarize"]
     )
     graph.add_conditional_edges("extend_subject", after_extend, ["pick_concept", "summarize"])
     graph.add_edge("retrieve_notes", "generate_questions")
