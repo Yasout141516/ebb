@@ -2,7 +2,7 @@
 questions whose citations fail), extend_subject, grade_answer (short answers), teach and
 regrade call the LLM, and only search_web searches the web; everything else is plain code."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import datetime
 from typing import Any, cast
@@ -24,7 +24,6 @@ from ebb.citations import (
 from ebb.domain import (
     Answer,
     Citation,
-    Claim,
     Concept,
     Dispute,
     DisputeOutcome,
@@ -36,7 +35,7 @@ from ebb.domain import (
     Source,
 )
 from ebb.grading import dispute_outcome, grade_mcq
-from ebb.graph.retry import fix_citations
+from ebb.graph.retry import fix_citations, with_citations
 from ebb.graph.state import (
     QuizState,
     concept_from_dict,
@@ -60,7 +59,8 @@ WEB_NOTICE = "Web search unavailable — skipped repeated questions."
 Node = Callable[[QuizState], dict[str, Any]]
 
 
-def _with_notice(state: QuizState, notice: str) -> list[str]:
+def with_notice(state: Mapping[str, Any], notice: str) -> list[str]:
+    """The state's notices with `notice` added, once."""
     notices = list(state["notices"])
     if notice not in notices:
         notices.append(notice)
@@ -68,14 +68,14 @@ def _with_notice(state: QuizState, notice: str) -> list[str]:
 
 
 def _notices(state: QuizState, generated: Generated[Any]) -> list[str]:
-    return _with_notice(state, FALLBACK_NOTICE) if generated.fell_back else list(state["notices"])
+    return with_notice(state, FALLBACK_NOTICE) if generated.fell_back else list(state["notices"])
 
 
 def _web_notice(state: QuizState) -> dict[str, Any]:
     """The notice that repeats were skipped without replacements, once per session."""
     if state["web_notice_shown"]:
         return {}
-    return {"notices": _with_notice(state, WEB_NOTICE), "web_notice_shown": True}
+    return {"notices": with_notice(state, WEB_NOTICE), "web_notice_shown": True}
 
 
 # Every node gets its state through fill_defaults (see build._wrap), so keys added after
@@ -107,21 +107,6 @@ def source_line(question: dict[str, Any]) -> str | None:
     if first.page is not None:
         return f"From your notes · p. {first.page}"
     return f"From your notes · § {first.heading}" if first.heading else "From your notes"
-
-
-def _with_citations[T](
-    generated: Generated[T],
-    claims_of: Callable[[T], Sequence[Claim]],
-    sources: Sequence[Source],
-    fix: Callable[[Generated[T], tuple[str, ...]], Generated[T]],
-) -> tuple[Generated[T], tuple[Citation, ...]]:
-    """`generated` once `fix` has had its tries at any invalid claim (see fix_citations),
-    with the citations that hold. Missing claims aren't retried, and nothing counts as
-    cited when there are no sources."""
-    if not sources:
-        return generated, ()
-    fixed = fix_citations(generated, lambda value: verify(claims_of(value), sources)[1], fix)
-    return fixed, verify(claims_of(fixed.value), sources)[0]
 
 
 def _failing(
@@ -256,7 +241,7 @@ def make_nodes(
                 subject.name, store.list_concepts(user_id, subject_id)
             )
         except TutorUnavailable as error:
-            return {"fatal": error.notice, "notices": _with_notice(state, error.notice)}
+            return {"fatal": error.notice, "notices": with_notice(state, error.notice)}
         added = store.add_concepts(
             user_id, subject_id, [(d.name, d.description) for d in generated.value]
         )
@@ -298,7 +283,7 @@ def make_nodes(
             return {
                 "fatal": error.notice,
                 "generation_calls_on_concept": calls,
-                "notices": _with_notice(state, error.notice),
+                "notices": with_notice(state, error.notice),
             }
         return {
             "run": {**state["run"], "candidates": [question_to_dict(q) for q in generated.value]},
@@ -459,14 +444,14 @@ def make_nodes(
                 "grade": None,
                 "batch": [state["question"], *state["batch"]],
                 "current_question_id": state["question"]["id"],
-                "notices": _with_notice(state, error.notice),
+                "notices": with_notice(state, error.notice),
             }
 
         def fix(last: Generated[Grade], failures: tuple[str, ...]) -> Generated[Grade]:
             retried = tutor.grade(question, state["answer"], sources, failures, previous=last.value)
             return replace(retried, value=_keep_grade(first.value, retried.value))
 
-        generated, citations = _with_citations(first, lambda grade: grade.claims, sources, fix)
+        generated, citations = with_citations(first, lambda grade: grade.claims, sources, fix)
         return {
             "grade": _grade_dict(state, generated.value, citations, question),
             "model_used": generated.model,
@@ -522,9 +507,9 @@ def make_nodes(
         except TutorUnavailable as error:
             return {
                 "lesson": None,
-                "notices": _with_notice(state, error.notice),
+                "notices": with_notice(state, error.notice),
             }
-        generated, citations = _with_citations(
+        generated, citations = with_citations(
             first,
             lambda lesson: lesson.claims,
             sources,
@@ -575,7 +560,7 @@ def make_nodes(
                 retried, value=Regrade(_keep_grade(kept.grade, retried.value.grade), kept.ambiguous)
             )
 
-        generated, citations = _with_citations(
+        generated, citations = with_citations(
             initial, lambda regraded: regraded.grade.claims, sources, fix
         )
         new = generated.value.grade
