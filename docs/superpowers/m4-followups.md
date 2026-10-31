@@ -4,6 +4,8 @@ Minor items found while building and reviewing milestone 4 that were deliberatel
 grouped. Earlier items: [m1-followups.md](m1-followups.md), [m2-followups.md](m2-followups.md),
 [m3-followups.md](m3-followups.md). The decisions taken on the owner's behalf during milestone 4
 are in [m4-rulings.md](m4-rulings.md) (R1–R46).
+The decisions taken in the pre-milestone-5 round (gateway, Costs page, learn phase) are in
+[pre-m5-rulings.md](pre-m5-rulings.md) (R1–R33, with its own deferred items).
 
 ## Worth a look with the owner
 
@@ -128,7 +130,7 @@ Judged too large or too risky for a no-behaviour-change pass:
 
 ## Found in use (2026-10-27)
 
-- **Correct option is almost always option 1.** Options are stored in the order the LLM writes
+- **Closed (pre-M5): correct option is almost always option 1.** Options are stored in the order the LLM writes
   them (`llm/tutor.py` builds `Option`s straight from the draft; nothing shuffles), so the model's
   position bias reaches the learner. Fix in code, not the prompt: shuffle the four options after
   validation, before the question is saved. Selecting by number in `grading.py` keeps working
@@ -136,14 +138,15 @@ Judged too large or too risky for a no-behaviour-change pass:
 - **Ebb is sometimes slow.** Suspected: free-tier Groq latency and rate limits (the primary model
   is `openai/gpt-oss-120b`), with the fallback model taking over on errors. Not measured yet:
   time one question and one grade per provider before changing anything.
-- **Switch models when the main one lags.** Today the fallback (Mistral) only triggers on errors
+- **Still open: switch models when the main one lags.** Today the fallback (Mistral) only triggers on errors
   such as rate limits; a slow but successful Groq call waits up to `REQUEST_TIMEOUT_SECONDS`
   (60, `llm/tutor.py`) before anything changes. Options: lower the timeout so a slow call falls
   back sooner; or track recent latency per provider and prefer the faster one for a while (code
   decides, per the project's design rule). OpenRouter is a candidate extra provider: one key,
   many models, OpenAI-compatible API.
-- **Log tokens and time per LLM call** (provider, model, method, input/output tokens, seconds,
-  whether it fell back or retried). Do this first: it turns "slow" and "uses many tokens" into
+- **Closed (pre-M5, the logging part): log tokens and time per LLM call** (provider, model, method, input/output tokens, seconds,
+  whether it fell back or retried). Done: the gateway records every attempt and the dev Costs
+  page shows them; the token-saving tweaks that follow are still open. Do this first: it turns "slow" and "uses many tokens" into
   numbers. Then, in this order, by likely effect: lower the reasoning effort on
   `gpt-oss-120b` (grading and teaching rarely need much); trim `generate_questions` output
   (fewer questions per call, shorter "why" lines, generate when due); cap the "avoid" list so
@@ -151,9 +154,10 @@ Judged too large or too risky for a no-behaviour-change pass:
   try a smaller model for concept extraction and short-answer grading, checked against the
   grading eval (baseline 70%).
 
-## Feature idea: learn phase before quizzing (brainstorm in progress, 2026-10-27)
+## Feature idea: learn phase before quizzing (built in the pre-M5 round)
 
-Not designed or approved yet; what the owner has said so far:
+Built on branch `pre-m5-learn-gateway-costs` (see [pre-m5-rulings.md](pre-m5-rulings.md)). The
+owner's original notes, kept for reference:
 
 - Today a new concept starts with a question, and a lesson only follows a wrong answer
   (`routing.after_mastery`). Owner wants teaching first, in more detail, with quizzing as its own

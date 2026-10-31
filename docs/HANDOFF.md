@@ -1,6 +1,6 @@
 # Ebb — handoff for the next chat
 
-Last updated 2026-10-27. Read this first, then the files it points to.
+Last updated 2026-10-31. Read this first, then the files it points to.
 
 ## What Ebb is
 
@@ -22,10 +22,37 @@ Code makes every decision; the LLM only generates questions, grades short answer
 | 2. Spaced review + resumable sessions (FR-6, FR-7) | Done, merged at `05c0f1f` |
 | 3. Uploads with cited answers, web questions, grade disputes, grading eval (FR-8, FR-9, NFR-2) | Done, merged to `main` and pushed on 2026-10-22 |
 | 4. FastAPI backend + Next.js frontend from the prototype | Done, merged to `main` and pushed on 2026-10-27 (`7cd4589`); the owner's hands-on test is still to do |
+| Pre-5: shuffled options, LLM gateway + OpenRouter, Costs page, learn phase | Built on branch `pre-m5-learn-gateway-costs` (not merged yet; the owner tests it hands-on) |
 | 5. Flashcards, exam mode, PDF export, resource search (FR-10–FR-13) | **Next** — not started |
 | 6. Auth (Supabase) and deployment (FR-14, NFR-13, NFR-14) | Later |
 
 ## Where things stand
+
+- **The pre-milestone-5 round is built** on branch `pre-m5-learn-gateway-costs` (worktree
+  `.claude/worktrees/pre-m5`); its whole-branch review is still to do. Spec:
+  `docs/superpowers/specs/2026-10-27-learn-phase-gateway-costs-design.md`; the 33 decisions taken
+  on the owner's behalf and the deferred minor items: `docs/superpowers/pre-m5-rulings.md`.
+  What it added:
+  - multiple-choice options are shuffled in code before a question is saved;
+  - an LLM gateway (`llm/gateway.py`) with three roles (teach, quiz, eval writer) chosen from
+    `.env` (`EBB_TEACH_MODEL`, `EBB_QUIZ_MODEL`, `EBB_EVAL_WRITER_MODEL`, backups
+    `EBB_TEACH_BACKUP`/`EBB_QUIZ_BACKUP`; `EBB_PRIMARY_MODEL`/`EBB_FALLBACK_MODEL` remain the
+    defaults), OpenRouter as a third provider (`OPENROUTER_API_KEY`), every call streamed and
+    recorded per attempt in `llm_calls` (tokens, first-token and total time, estimated cost,
+    whether the backup served it);
+  - the dev-only Costs page (`/costs`, `EBB_SHOW_COSTS`, default on; to be hidden in milestone
+    6): costs are estimates for a paid plan; only Groq `openai/gpt-oss-120b` has a price
+    (`llm/prices.py`, from Groq's page); Mistral and OpenRouter models show "price unknown";
+  - the learn phase on the web (`learn/` package, learn routes, migrations `005` and `006`):
+    a lesson in the `/teach-me` format from notes plus Tavily, streamed; check-yourself
+    questions answered on request; suggested follow-ups; "I'm ready, quiz me" hands over to the
+    quiz, which starts with multiple choice; "Read the lesson again" for learned concepts. Q&A
+    there never changes mastery. The CLI is unchanged (it still opens a concept with a question).
+  - The browser test now covers lesson, "Answer this for me", a suggestion chip, ready, a
+    multiple-choice answer and the Costs page. `backend/tests/e2e_server.py` records
+    representative `LlmCall`s for its fake tutor's calls, since the fake bypasses the gateway.
+  - **Before the first start of this branch against the real database**, back it up as
+    `ebb_pre005` (README, Run it): the API migrates `ebb` to `006`.
 
 - **Milestone 4 is merged and pushed (2026-10-27).** `docker compose up` starts the database,
   the API (port 8000) and the website (http://localhost:3000), all bound to this PC only:
@@ -42,9 +69,9 @@ Code makes every decision; the LLM only generates questions, grades short answer
 - **The owner tests milestone 4 hands-on** (the spec's *Done when* list is the acceptance check).
 - **The real `ebb` database is still at migration `002`.** The API (and any `ebb` command)
   applies pending migrations when it first connects, so the first `docker compose up` on this
-  code upgrades it to `004`. Back it up first, with nothing else connected to `ebb`
-  (`docker compose up -d db`, then):
-  `docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre003 template ebb"`
+  code upgrades it to `004`, and the pre-5 branch then to `006`. Back it up first, with nothing
+  else connected to `ebb` (`docker compose up -d db`, then):
+  `docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre005 template ebb"`
 - Set `EBB_TIMEZONE` in `.env` (e.g. `Asia/Dhaka`): Docker defaults to UTC, while the website
   shows dates in the browser's zone (R35). `EBB_DAILY_AI_CALLS` (default 300) caps AI calls per
   user per day.
@@ -58,6 +85,8 @@ Code makes every decision; the LLM only generates questions, grades short answer
   fallback today and `ebb eval build` can't run. Details in `docs/superpowers/m3-followups.md`.
 
 Key documents, newest first:
+- Pre-5 design and rulings: `docs/superpowers/specs/2026-10-27-learn-phase-gateway-costs-design.md`,
+  `docs/superpowers/pre-m5-rulings.md`
 - Milestone 4 rulings: `docs/superpowers/m4-rulings.md`
 - Milestone 4 design: `docs/superpowers/specs/2026-10-23-web-app-design.md`
 - Milestone 4 plan: `docs/superpowers/plans/2026-10-23-web-app.md`
@@ -83,10 +112,13 @@ Key documents, newest first:
 - `notes.py` (upload checks, PDF/TXT/MD text extraction), `chunking.py` (passages with page
   offsets), `citations.py` (labels, quote verification, pages), `repeats.py` (repeated-question
   detection), `web.py` (Tavily search), `evals.py` (the grading eval).
-- `llm/`: `tutor.py` (Groq primary, Mistral fallback, error classification), `schemas.py`,
-  prompts in `llm/prompts/*.md`.
+- `llm/`: `tutor.py` (the Tutor: one method per kind of work, each routed to a role),
+  `gateway.py` (streams every call, retries, backup, records `LlmCall`s), `providers.py`
+  (Groq/OpenRouter/Mistral), `prices.py`, `schemas.py`, prompts in `llm/prompts/*.md`.
+- `learn/` (the learn phase: its LangGraph graph and the `LearnSessions` service), `costs.py`
+  (pure sums and anomaly rules for the Costs page), `api/routes_learn.py`, `api/routes_costs.py`.
 - `store.py` (Store protocol, every method takes `user_id` first), `db/` (psycopg 3 PgStore,
-  SQL migrations `001`-`004`, advisory locks, full-text search over `document_chunks`).
+  SQL migrations `001`-`006`, advisory locks, full-text search over `document_chunks`).
 - `cli.py` (Typer: `new [--notes FILE]`, `add`, `study`, `status`, `serve`, `eval build|run`),
   `ui.py` (Rich).
 - `study.py` (`StudySessions`: the one service the CLI and the API both drive the graph through:
@@ -96,8 +128,8 @@ Key documents, newest first:
   drafts and SSE uploads, `routes_study.py` SSE sessions, `routes_progress.py`, `schemas.py`,
   `services.py`, `drafts.py`, `errors.py`); `progress.py` (streak, average tide, chart data).
 - `frontend/` (Next.js 16, React 19, CSS Modules, no UI library): `app/` pages (`new`,
-  `study/[id]`, `progress/[id]`, `subjects/[id]/add`), `components/` (`onboarding`, `study`,
-  `progress`), `lib/` (API client, SSE reader, types, session reducer), `e2e/` (Playwright).
+  `study/[id]`, `progress/[id]`, `subjects/[id]/add`, `costs`), `components/` (`onboarding`, `study`,
+  `progress`, `costs`), `lib/` (API client, SSE reader, types, session reducer), `e2e/` (Playwright).
   All data is fetched in the browser from `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`).
 
 Tests in `backend/tests/` (fakes: `MemoryStore`, `FakeTutor`, `FakeWebSearch`; test PDFs built
@@ -129,10 +161,12 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run e2e   # e2e: npx
   - `TAVILY_API_KEY` (optional: web questions when Ebb repeats itself).
   - Optional: `EBB_TIMEZONE` (e.g. `Asia/Dhaka`; Docker defaults to UTC), `EBB_DAILY_AI_CALLS`
     (default 300), `EBB_WEB_ORIGIN` (comma-separated; default
-    `http://localhost:3000,http://127.0.0.1:3000`), `EBB_PRIMARY_MODEL`, `EBB_FALLBACK_MODEL`.
-- Default models: `openai/gpt-oss-120b` on Groq (primary), `mistral-medium-latest` (fallback).
-  Providers retire models; if one disappears, Ebb exits with
-  `Model '…' was not found — set EBB_PRIMARY_MODEL…`. Check current models before changing.
+    `http://localhost:3000,http://127.0.0.1:3000`), `EBB_PRIMARY_MODEL`, `EBB_FALLBACK_MODEL`
+    (legacy), `EBB_TEACH_MODEL`, `EBB_QUIZ_MODEL`, `EBB_EVAL_WRITER_MODEL`, `EBB_TEACH_BACKUP`,
+    `EBB_QUIZ_BACKUP`, `OPENROUTER_API_KEY`, `EBB_SHOW_COSTS`. All are in `.env.example`.
+- Default models: `openai/gpt-oss-120b` on Groq for teach and quiz, `mistral-medium-latest` as
+  backup and eval writer. Providers retire models; if one disappears, Ebb exits with a message
+  naming the setting to change. Check current models before changing.
 - Kaspersky Anti-Virus on the owner's PC intercepts TLS to `api.mistral.ai` (not to Groq);
   Kaspersky exclusion vs `truststore` is undecided.
 - Databases in the same container: `ebb` (the owner's real data), `ebb_test` (pytest),
@@ -175,6 +209,12 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run e2e   # e2e: npx
 
 ## Next steps
 
+0. **Pre-5 branch:** the whole-branch review and merge (with the owner's OK), after the owner
+   tries it: back up `ebb_pre005`, `docker compose up`, open a new concept (lesson streams,
+   "Answer this for me", a chip, "I'm ready, quiz me", first question is multiple choice), then
+   look at Costs. Worth a live check: that Groq returns token usage while streaming (else the
+   Costs rows honestly show "not reported"). Deferred: switching models when the main one is
+   slow, and token-saving tweaks (`m4-followups.md`, "Found in use").
 1. **The owner tests milestone 4 hands-on** against the spec's *Done when* list:
    - back up `ebb` first (above; restore command in the README), set `EBB_TIMEZONE`;
    - `docker compose up` (first build takes a few minutes), open http://localhost:3000;
@@ -203,6 +243,9 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run e2e   # e2e: npx
    - schema: the plan's `flashcards`, `exams`, `exam_questions` tables, attempts gaining
      `flashcard_id`/`exam_id` (check constraint: exactly one of question/flashcard), every new
      table with `user_id` (E9);
+   - milestone 5 starts from the pre-5 branch merged: lessons are stored per concept, every
+     call is recorded per user (`llm_calls`), and the gateway routes by role (new flashcard or
+     exam work needs an `Endpoint` in `llm/gateway.py` and a row in `costs.ENDPOINTS`);
    - the free-tier budget: Groq's free tier for `openai/gpt-oss-120b` is about 1,000 requests
      and 200,000 tokens a day; the daily cap is 300 calls; Mistral is still inactive.
    Then the usual flow: written design → `writing-plans` → subagent-driven development in a new

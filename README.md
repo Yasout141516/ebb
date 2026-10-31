@@ -14,7 +14,10 @@ routing) and the LLM only generates questions, grades and teaches.
 Milestone 4 of 6 is built: Ebb now has a website (onboarding, the study workspace and a
 progress dashboard) on top of a FastAPI backend, next to the terminal app. Milestone 3 added
 notes uploads with cited answers, web questions when Ebb repeats itself, grade disputes and a
-grading eval (first baseline: 70%). Next: flashcards and exam mode (milestone 5).
+grading eval (first baseline: 70%). Since then, a pre-milestone-5 round is done: shuffled
+multiple-choice options, a role-based LLM gateway (with OpenRouter) that records tokens, time and
+estimated cost for every call, a dev-only Costs page, and a learn phase before the quiz.
+Next: flashcards and exam mode (milestone 5).
 
 ## Run it
 
@@ -26,14 +29,17 @@ this, with nothing else connected to `ebb` (`up -d db` starts only the database)
 
 ```bash
 docker compose up -d db
-docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre003 template ebb"
+docker exec ebb-db-1 psql -U ebb -d postgres -c "create database ebb_pre005 template ebb"
 ```
+
+(Older copies, such as `ebb_pre003`, are not touched. This round's migrations are `005` and
+`006`, so the copy must be taken before the first start of this version.)
 
 To go back to that copy later, stop the app first (`docker compose stop api web`, and close any
 `ebb` terminal), then:
 
 ```bash
-docker exec ebb-db-1 psql -U ebb -d postgres -c "drop database ebb" -c "create database ebb template ebb_pre003"
+docker exec ebb-db-1 psql -U ebb -d postgres -c "drop database ebb" -c "create database ebb template ebb_pre005"
 ```
 
 Then:
@@ -67,11 +73,57 @@ Settings in `.env`:
 - `EBB_WEB_ORIGIN`: the website's address, which the API allows; several separated by commas
   (default `http://localhost:3000,http://127.0.0.1:3000`).
 
-Ebb grades and writes with Groq (`openai/gpt-oss-120b`). Optional keys in `.env`:
+Ebb grades and writes with Groq (`openai/gpt-oss-120b`) unless you choose other models below.
+Optional keys in `.env`:
 `MISTRAL_API_KEY` (free plan at https://console.mistral.ai) adds Mistral as a fallback when
 Groq fails, and is needed for `ebb eval build`. `TAVILY_API_KEY` (free at
 https://app.tavily.com) lets Ebb replace a question it is about to repeat with one written
-from a web search; without it, repeated questions are just dropped.
+from a web search, and feeds the learn phase's lessons; without it, repeated questions are just
+dropped and lessons use your notes only.
+
+### Models, OpenRouter and what calls cost
+
+Every model call goes through one gateway that streams the reply and records the provider,
+model, tokens, time to the first token, total time and an estimated cost for each attempt.
+Models are chosen per kind of work (a role) as `provider:model`, where the provider is `groq`,
+`openrouter` or `mistral`:
+
+- `EBB_TEACH_MODEL`: lessons and the learn phase's answers. Default `groq:openai/gpt-oss-120b`.
+- `EBB_QUIZ_MODEL`: writing questions, grading and re-grading. Same default.
+- `EBB_EVAL_WRITER_MODEL`: the model `ebb eval build` writes cases with. Default
+  `mistral:mistral-medium-latest`; it must differ from the quiz model, which it is checked
+  against.
+- `EBB_TEACH_BACKUP`, `EBB_QUIZ_BACKUP`: the model tried when the main one fails (default:
+  Mistral, when `MISTRAL_API_KEY` is set).
+- `OPENROUTER_API_KEY`: needed when any role names an `openrouter:` model (keys at
+  https://openrouter.ai/keys). OpenRouter serves many models through one key.
+- `EBB_PRIMARY_MODEL`, `EBB_FALLBACK_MODEL`: the older settings, a bare model name (primary on
+  Groq, fallback on Mistral). They still work, as the defaults for the settings above.
+- `EBB_SHOW_COSTS` (default `true`): shows the Costs page and its header link.
+
+### The Costs page (dev only)
+
+With `EBB_SHOW_COSTS` on, the header has a "Costs" link (marked "dev only") to a page of totals,
+a tokens-per-day chart, per-role and per-model health, a table of the latest calls and
+anomalies (for example a call far slower than that endpoint's usual). It will be hidden in
+milestone 6. Costs are **estimates for a paid plan**: tokens times the price per million that the
+model's provider lists. Ebb uses free plans today, so what you really pay is $0; a model on a free
+plan is labelled as such. Only Groq `openai/gpt-oss-120b` has a price, read from Groq's page (its
+source and date are on the Costs page). A model with no recorded price, such as Mistral's
+`-latest` models (no Mistral page says which version the alias serves), shows "price unknown"
+rather than a guess, and a total that includes one says so.
+
+### The learn phase
+
+The first time you study a concept, the website opens a lesson instead of a question. It is
+written in the `/teach-me` format from your notes plus a web search (Tavily, when its key is
+set), streams in as it is written, cites its sources and says when something is not in your
+notes. It ends with a few "Check yourself" questions that Ebb leaves unanswered until you press
+"Answer this for me". You can also ask your own questions on the same page, or tap a "Suggested
+next" chip. When you are ready, "I'm ready, quiz me" starts the quiz, which begins with multiple
+choice. What you ask in the learn phase never changes your tide or review schedule. A learned
+concept's lesson stays under "Read the lesson again" in the left column. The learn phase is on
+the website only; the terminal app is unchanged and still starts a concept with a question.
 
 ### Add your notes
 
@@ -133,8 +185,8 @@ uv run ebb serve                  # the API on port 8000; then, in frontend/: np
 ```
 
 The website's checks run from `frontend/`: `npm test`, `npm run typecheck`, `npm run lint`, and
-`npm run e2e`, a browser test (Playwright) of onboarding, a short study session and the progress
-page against a fake tutor, so it needs no database or API key. The first time, install its
+`npm run e2e`, a browser test (Playwright) of onboarding, a lesson, the quiz, the Costs page and
+the progress page against a fake tutor, so it needs no database or API key. The first time, install its
 browser with `npx playwright install chromium`.
 
 **Try spaced review now:** pretend a week has passed, so every concept whose next review
