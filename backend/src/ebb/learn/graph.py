@@ -111,6 +111,19 @@ def source_summary(sources: Sequence[Source]) -> dict[str, Any]:
     return {"notes": len(notes), "notes_pages": sorted(pages), "web_pages": web, "label": label}
 
 
+def read_back(store: Store, user_id: UUID, concept_id: UUID) -> dict[str, Any]:
+    """The kept lesson, its exchanges and the follow-ups they offer now, as state."""
+    lesson = store.get_lesson(user_id, concept_id)
+    if lesson is None:
+        raise LookupError(f"no lesson kept for concept {concept_id}")
+    kept = store.exchanges(user_id, concept_id)
+    return {
+        "lesson": lesson_to_dict(lesson),
+        "exchanges": [exchange_to_dict(e) for e in kept],
+        "suggestions": list(kept[-1].suggestions if kept else lesson.suggestions),
+    }
+
+
 def turn(state: LearnState) -> dict[str, Any]:
     """What `wait` shows: the lesson, the questions asked so far and what to ask next."""
     return {
@@ -214,16 +227,7 @@ def build_learn_graph(
             store.save_lesson(user_id, lesson)
             update |= notices
         # Read back: if another run saved it first, theirs is the one kept.
-        stored = store.get_lesson(user_id, concept_id)
-        if stored is None:
-            raise LookupError(f"no lesson kept for concept {concept_id}")
-        kept = store.exchanges(user_id, concept_id)
-        return {
-            **update,
-            "lesson": lesson_to_dict(stored),
-            "exchanges": [exchange_to_dict(e) for e in kept],
-            "suggestions": list(kept[-1].suggestions if kept else stored.suggestions),
-        }
+        return {**update, **read_back(store, user_id, concept_id)}
 
     def answer(state: LearnState) -> dict[str, Any]:
         user_id, concept_id = ids(state)

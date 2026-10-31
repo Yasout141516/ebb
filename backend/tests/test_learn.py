@@ -17,6 +17,7 @@ from ebb.learn.service import (
     Discard,
     Learned,
     LearnEvent,
+    LearnNotStarted,
     LearnSessions,
     LearnTurn,
     TextDelta,
@@ -85,7 +86,7 @@ def setup(
         subject_id = store.create_subject(USER, "Networks", [concept])
     [found] = store.list_concepts(USER, subject_id)
     graph = build_learn_graph(tutor, store, saver, now=clock, web=web)
-    sessions = LearnSessions(store, graph, saver, clock)
+    sessions = LearnSessions(store, graph, saver)
     return Setup(store, tutor, web, clock, saver, sessions, found.id)
 
 
@@ -329,6 +330,151 @@ def test_answer_broken_after_text_is_discarded_and_retried_once(s):
     assert again == [retried[-1]]
     assert len(s.store.exchanges(USER, s.concept_id)) == 1
     assert len(s.tutor.answer_calls) == 2  # the broken call and its retry
+
+
+def failed(events: Iterator[LearnEvent]) -> list[LearnEvent]:
+    """The events before the turn's model call failed."""
+    got: list[LearnEvent] = []
+    with pytest.raises(TutorUnavailable):
+        for event in events:
+            got.append(event)
+    return got
+
+
+def test_start_after_a_failed_answer_shows_the_lesson_without_a_model_call(s):
+    lesson = turn(list(s.sessions.start(USER, s.concept_id)))["lesson"]
+    earlier = turn(list(s.sessions.reply(USER, s.concept_id, ask("Why?", "a1"))))
+    s.tutor.fail_learn_times = 5  # the provider stays down
+    failed(s.sessions.reply(USER, s.concept_id, ask("How?", "a2")))
+    calls = len(s.tutor.answer_calls)
+
+    events = list(s.sessions.start(USER, s.concept_id))  # the page is refreshed
+
+    assert len(events) == 1
+    assert turn(events)["lesson"] == lesson
+    assert turn(events)["exchanges"] == earlier["exchanges"]
+    assert turn(events)["suggestions"] == earlier["suggestions"]
+    assert len(s.tutor.answer_calls) == calls and len(s.tutor.lesson_calls) == 1
+    assert len(s.store.exchanges(USER, s.concept_id)) == 1
+
+
+def test_ready_after_a_failed_answer_marks_learned(s):
+    list(s.sessions.start(USER, s.concept_id))
+    s.tutor.fail_learn_times = 5
+    failed(s.sessions.reply(USER, s.concept_id, ask("Why?", "a1")))
+
+    events = list(s.sessions.reply(USER, s.concept_id, {"ready": True}))
+
+    assert events == [Learned(s.concept_id)]
+    assert s.store.is_learned(USER, s.concept_id)
+    assert len(s.tutor.answer_calls) == 1  # the failed answer wasn't asked again
+    assert checkpoint(s) is None
+
+
+def test_a_new_question_after_a_failed_answer_answers_only_it(s):
+    list(s.sessions.start(USER, s.concept_id))
+    s.tutor.break_learn_times = 1
+    failed(s.sessions.reply(USER, s.concept_id, ask("Why?", "a1")))
+
+    events = list(s.sessions.reply(USER, s.concept_id, ask("How?", "a2")))
+
+    assert [type(e) for e in events].count(LearnTurn) == 1
+    assert [c["question"] for c in s.tutor.answer_calls] == ["Why?", "How?"]
+    assert texts(events) == ["You asked: How? ", "Here is how Subnet masks ", "answers it."]
+    assert [e["question"] for e in turn(events)["exchanges"]] == ["How?"]
+    assert [e.question for e in s.store.exchanges(USER, s.concept_id)] == ["How?"]
+
+
+def test_retry_of_the_failed_ask_id_answers_it(s):
+    list(s.sessions.start(USER, s.concept_id))
+    s.tutor.fail_learn_times = 1
+    failed(s.sessions.reply(USER, s.concept_id, ask("Why?", "a1")))
+
+    events = list(s.sessions.reply(USER, s.concept_id, ask("Why?", "a1")))
+
+    assert [type(e) for e in events].count(LearnTurn) == 1
+    assert texts(events) == ["You asked: Why? ", "Here is how Subnet masks ", "answers it."]
+    assert [e["question"] for e in turn(events)["exchanges"]] == ["Why?"]
+    assert len(s.tutor.answer_calls) == 2
+
+
+def test_a_reply_after_a_lost_checkpoint_yields_one_final_turn(s):
+    list(s.sessions.start(USER, s.concept_id))
+    s.saver.delete_thread(thread_id(USER, s.concept_id))
+
+    events = list(s.sessions.reply(USER, s.concept_id, ask("Why?", "a1")))
+
+    assert [type(e) for e in events].count(LearnTurn) == 1
+    assert isinstance(events[-1], LearnTurn)
+    assert [e["question"] for e in turn(events)["exchanges"]] == ["Why?"]
+    assert len(s.tutor.lesson_calls) == 1
+
+
+def test_a_reply_before_any_lesson_is_refused(s):
+    with pytest.raises(LearnNotStarted):
+        s.sessions.reply(USER, s.concept_id, ask("Why?", "a1"))
+
+    assert s.tutor.lesson_calls == [] and s.tutor.answer_calls == []
+    assert issubclass(LearnNotStarted, LookupError)
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {},
+        {"ready": False},
+        {"ready": "yes"},
+        {"ready": True, "ask": "Why?"},
+        {"ask": "", "kind": "typed", "ask_id": "a1"},
+        {"ask": "   ", "kind": "typed", "ask_id": "a1"},
+        {"ask": "Why?", "kind": "shouted", "ask_id": "a1"},
+        {"ask": "Why?", "kind": "typed", "ask_id": ""},
+        {"ask": "Why?", "kind": "typed"},
+        {"ask": 3, "kind": "typed", "ask_id": "a1"},
+        {"ask": "Why?", "kind": "typed", "ask_id": "a1", "extra": 1},
+    ],
+)
+def test_malformed_replies_are_refused(s, reply):
+    list(s.sessions.start(USER, s.concept_id))
+
+    with pytest.raises(ValueError):
+        s.sessions.reply(USER, s.concept_id, reply)
+
+    assert s.tutor.answer_calls == [] and s.store.locks == set()
+    assert not s.store.is_learned(USER, s.concept_id)
+
+
+def test_reader_gone_mid_answer_stores_it_once(s):
+    list(s.sessions.start(USER, s.concept_id))
+    events = s.sessions.reply(USER, s.concept_id, ask("Why?", "a1"))
+    while not isinstance(next(events), TextDelta):
+        pass
+    events.close()
+
+    [kept] = s.store.exchanges(USER, s.concept_id)
+    assert kept.question == "Why?"
+    resumed = list(s.sessions.start(USER, s.concept_id))
+    again = list(s.sessions.reply(USER, s.concept_id, ask("Why?", "a1")))
+    assert len(resumed) == 1 and [e["question"] for e in turn(resumed)["exchanges"]] == ["Why?"]
+    assert again == resumed
+    assert len(s.tutor.answer_calls) == 1
+
+
+def test_reader_gone_before_an_answer_fails_leaves_it_cut_off(s):
+    list(s.sessions.start(USER, s.concept_id))
+    s.tutor.break_learn_times = 1
+    events = s.sessions.reply(USER, s.concept_id, ask("Why?", "a1"))
+    while not isinstance(next(events), TextDelta):
+        pass
+    events.close()  # the call fails while the turn is finished for nobody
+
+    config = {"configurable": {"thread_id": thread_id(USER, s.concept_id)}}
+    assert s.sessions.graph.get_state(config).next == ("answer",)
+    assert s.store.locks == set()
+    resumed = list(s.sessions.start(USER, s.concept_id))
+    assert len(resumed) == 1 and turn(resumed)["exchanges"] == []
+    assert len(s.tutor.answer_calls) == 1
+    assert s.store.exchanges(USER, s.concept_id) == []
 
 
 def test_reader_gone_mid_lesson_still_stores_it(s):

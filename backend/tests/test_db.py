@@ -1343,6 +1343,16 @@ def an_exchange(position: int, **fields) -> Exchange:
     return Exchange(**{**base, **fields})
 
 
+def test_get_concept_is_scoped_to_the_user(lesson_store):
+    concept_id = a_concept(lesson_store)
+
+    found = lesson_store.get_concept(ALICE, concept_id)
+
+    assert found is not None and (found.id, found.name) == (concept_id, "Frames")
+    assert lesson_store.get_concept(BOB, concept_id) is None
+    assert lesson_store.get_concept(ALICE, uuid4()) is None
+
+
 def test_lesson_round_trips(lesson_store):
     concept_id = a_concept(lesson_store)
     lesson = a_lesson(concept_id)

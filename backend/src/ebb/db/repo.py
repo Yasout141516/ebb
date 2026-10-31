@@ -220,6 +220,14 @@ class PgStore:
             ).fetchall()
         return [_concept(row) for row in rows]
 
+    def get_concept(self, user_id: UUID, concept_id: UUID) -> Concept | None:
+        with self.pool.connection() as conn:
+            row = conn.execute(
+                f"select {_CONCEPT_COLUMNS} from concepts where id = %s and user_id = %s",
+                (concept_id, user_id),
+            ).fetchone()
+        return None if row is None else _concept(row)
+
     def create_session(self, user_id: UUID, subject_id: UUID, thread_id: str) -> UUID:
         with self.pool.connection() as conn:
             row = conn.execute(

@@ -118,6 +118,10 @@ class MemoryStore:
             if owner == user_id and c.subject_id == subject_id
         ]
 
+    def get_concept(self, user_id: UUID, concept_id: UUID) -> Concept | None:
+        owner, concept = self.concepts.get(concept_id, (None, None))
+        return concept if owner == user_id else None
+
     def create_session(self, user_id: UUID, subject_id: UUID, thread_id: str) -> UUID:
         if self.subjects.get(subject_id, (None,))[0] != user_id:
             raise LookupError(f"subject {subject_id} not found")
