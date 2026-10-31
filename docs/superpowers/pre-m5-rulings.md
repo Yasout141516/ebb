@@ -45,7 +45,7 @@ this build's own (they restart at R1).
 ## Quiz hook (what happens after the lesson)
 
 1. **R28** Task 12 — learned/skip replies are resend-safe via _applied; quit on a learn turn ends like quit on a question; MCQ-first applies only to the first question after a learn turn; due reviews and answered/learned concepts never get a lesson. — Spec + resend safety. *If wrong:* small routing tweaks.
-2. **R29** (pending fix round) the learn payload also carries the previous answer's `feedback`, `lesson`, `notices`, `can_dispute`, `dispute_result` exactly as a question payload does; a dispute reply on a learn turn goes through regrade and returns to the learn turn. — Spec turn order shows the previous grade card first; hiding it behind the next lesson breaks that. *If wrong:* extra payload keys.
+2. **R29** the learn payload also carries the previous answer's `feedback`, `lesson`, `notices`, `can_dispute`, `dispute_result` exactly as a question payload does; a dispute reply on a learn turn goes through regrade and returns to the learn turn. — Spec turn order shows the previous grade card first; hiding it behind the next lesson breaks that. *If wrong:* extra payload keys.
 
 ## Web UI
 
@@ -54,33 +54,36 @@ this build's own (they restart at R1).
 3. **R20** filters are controlled selects refetching summary+calls; endpoint/model/tenant options from the current range's data; default 7d. *If wrong:* option lists.
 4. **R22** (amends R20) filter options come from a range-only summary load refetched on range change. — Lets users switch endpoint→endpoint directly. *If wrong:* one extra request per range change.
 5. **R31** Task 14 — replace streamed text with payload markdown on the final learn event; discard clears then ErrorCard Retry with the same ask_id; Read the lesson again is a left-column link per learned concept; e2e fake adjusted only to keep the existing spec green. — From T9/T13 carry notes. *If wrong:* UI tweaks.
-6. **R32** (for T14 fix round) drop `skipHtml` so raw HTML renders as escaped text (react-markdown escapes HTML without rehype-raw) — matches Review Focus 4 "shown as text" and keeps lessons about HTML intact. *If wrong:* one prop.
-7. **R33** (for T14 fix round) add `learned: bool` to the concepts API (`ConceptState`, from store.is_learned or a batched query) and `has_notes` to the learn payload; the left column uses `learned` instead of probing each concept. — Removes N requests + 404 noise; links for learned-but-unanswered concepts; correct "Not in your notes". *If wrong:* small backend additions.
+6. **R32** drop `skipHtml` so raw HTML renders as escaped text (react-markdown escapes HTML without rehype-raw) — matches Review Focus 4 "shown as text" and keeps lessons about HTML intact. *If wrong:* one prop.
+7. **R33** add `learned: bool` to the concepts API (`ConceptState`, from store.is_learned or a batched query) and `has_notes` to the learn payload; the left column uses `learned` instead of probing each concept. — Removes N requests + 404 noise; links for learned-but-unanswered concepts; correct "Not in your notes". *If wrong:* small backend additions.
 
 ## Deferred
 
-Minor findings from reviews that were left open (none blocks the work):
+Minor findings from reviews that are still open (none blocks the work). Items a later task fixed are left out (for example the gateway marking a row `ok` when `parse` then raised, closed in Task 9; the `Health` type missing `costs`). Two can affect the real app, and are marked so.
 
 - Task 1: `rng or random.Random()` → explicit `is not None` (tutor.py ~427)
 - Task 1: FakeTutor rng path has no direct unit test (covered by e2e)
 - Task 2: role_models() parses every role even when unused (a bad writer value breaks `ebb study`)
 - Task 3: `(user_id = %s or %s)` may defeat the (user_id, at) index — branch SQL
 - Task 3: `asdict(call)` per insert; lesson_exchanges has no user_id index; test_fakes.py untouched (coverage in test_db.py)
-- Task 4: a row says `ok` even if `parse` then raises (gateway.py ~291)
 - Task 4: `ebb eval build/run` print a DB failure line when the DB is down; `eval build` recorder choice untested
 - Task 4: no test that cli/api wire StoreRecorder for learner-facing commands
-- Task 4: ⚠️ live smoke check that Groq streams usage under x_groq (else rows honestly record None)
+- Task 4: live smoke check that Groq streams usage under x_groq (else rows honestly record None)
 - Task 4: test_tutor.py ~34 s because retry tests really sleep (inject no-op sleep in those tests)
 - Task 5: no test that GeneratorExit drain keeps the turn's id; drafts test's main-thread `current()==(None,None)` proves nothing; generate not asserted; dead `thread_id="unset"`
 - Task 6: role_health counts invalid attempts as failed while failures() drops recovered invalid ones; messages show HH:MM without date; chain[0] IndexError on empty chain
+- Task 6: DayTokens fields are int | None now; a call over 3× on both counts yields two token anomalies (UI may show two rows for one call); baselines take previous 50 ok calls then filter to known values
 - Task 7: /costs/calls tenant/endpoint/model filters and tenant-filtered anomalies untested; retry+fallback rows of one call repeat the same anomaly message; /costs/calls loads the whole range then slices
 - Task 8: header's own /health fetch = one extra request per full-header page
 - Task 8: first load fetches the same /costs/summary URL twice (main + options)
 - Task 8: daily-limit card hidden on an empty range (inside calls > 0 branch); non-UTC tz untested for daily_calls
 - Task 9: an unclosed real code block right before the marker loses its dangling fence line; tilde/indented fences not recognised
+- Task 10: no committed test that 006 applies on top of existing lesson rows; MemoryStore save_lesson/add_exchange don't check concept ownership (Pg FK does)
 - Task 11: ask_id dedupe doesn't survive a lost checkpoint (Exchange has no ask_id column)
 - Task 11: read_back raises bare LookupError if the lesson is missing during a drop (unreachable)
 - Task 12: resend of a Ready that itself ended the session → SessionNotFound, not the summary
+- Task 13: no ValueError→422 handler (schema makes it unreachable); eager psycopg.Error in start/reply → plain 500 not the DATABASE_DOWN notice event; no reader-gone / repeated-ask_id API tests; LessonPage typed dict[str, Any]; _respond docstring narrow **Real-app behaviour (a database outage during start/reply).**
+- Task 12: latest-answer tie-break uses random uuid id (repo.py ~379, fakes.py ~208); two answers in the same microsecond could refuse a legit dispute — consider an insertion sequence. Real-app risk low. **Real-app behaviour.**
 - Task 14: notice de-dup across the whole learn phase; answer step label shows under Ready; GFM footnote back-links lose links
 - Task 14: a quick 4xx on the auto {learned:true} hand-off leaves handed set (no resend except Retry); GET lesson does an extra get_concept for subject_id
 - Task 6: flooring still prints "3.0 times" for a call at e.g. 3.007× — consider "just over 3 times" wording or two decimals near the threshold (my requested fix was insufficient)

@@ -10,7 +10,7 @@ test("a learner studies a typed topic, ends the session and sees their progress"
   await expect(page).toHaveURL(/\/study\//, { timeout: 30_000 });
 
   const check = page.getByRole("button", { name: "Check answer" });
-  const composer = page.getByPlaceholder("Type your answer…");
+  const composer = page.getByPlaceholder("Type your answerâ€¦");
   const waiting = check.or(composer.and(page.locator(":enabled")));
 
   // Concepts start unlearned, so the first one opens its lesson. Wait for the streamed text to
@@ -27,15 +27,20 @@ test("a learner studies a typed topic, ends the session and sees their progress"
   await suggested.getByRole("button").first().click();
   await expect(page.getByText("You asked: How is this used in practice?")).toBeVisible({ timeout: 30_000 });
 
-  // On to the quiz. It starts with multiple choice; its options are shuffled, so choose the
-  // one the fake marks correct, wherever it landed; Enter submits.
+  // On to the quiz. It starts with multiple choice; its options are shuffled, so choose by name
+  // wherever the option landed; Enter submits. A wrong answer first: the tutor re-teaches, then
+  // asks a short question, which the fake tutor grades (so Costs gets a grading call).
   await page.getByRole("button", { name: "I'm ready, quiz me" }).click();
   await expect(check).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("radio", { name: "right option", exact: true }).check();
+  await page.getByRole("radio", { name: "wrong option A", exact: true }).check();
   await page.keyboard.press("Enter");
+  await expect(page.getByRole("article", { name: "Grade: Incorrect" })).toHaveCount(1, { timeout: 30_000 });
+  await expect(composer).toBeEnabled({ timeout: 30_000 });
+  await composer.fill("right");
+  await composer.press("Enter");
   await expect(page.getByRole("article", { name: "Grade: Correct" })).toHaveCount(1, { timeout: 30_000 });
 
-  // The next question is waiting; answer it (short or multiple choice) as the fake likes.
+  // The next question is waiting.
   await expect(waiting).toBeVisible({ timeout: 30_000 });
 
   // The header's Costs link opens the page with the run's calls.
@@ -45,6 +50,7 @@ test("a learner studies a typed topic, ends the session and sees their progress"
   await expect(recent.getByRole("cell", { name: "Lesson", exact: true }).first()).toBeVisible({ timeout: 30_000 });
   await expect(recent.getByRole("cell", { name: "Learn-phase answer", exact: true }).first()).toBeVisible();
   await expect(recent.getByRole("cell", { name: "Write questions", exact: true }).first()).toBeVisible();
+  await expect(recent.getByRole("cell", { name: "Grade answer", exact: true }).first()).toBeVisible();
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Study" }).click();
   await expect(waiting).toBeVisible({ timeout: 30_000 });
 

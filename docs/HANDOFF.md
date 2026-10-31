@@ -60,8 +60,8 @@ Code makes every decision; the LLM only generates questions, grades short answer
   lessons, citations, disputes, the memory panel, End session) and the progress dashboard,
   built like `ebb-prototype.html`. Chat is dropped; Flashcards/Exam are hidden until
   milestone 5. Done: 26 tasks, each reviewed; a whole-branch review and its fix wave;
-  `/code-review` (7 fixes, 3 deferred) and `/simplify` (11 refactors). Checks: 837 backend
-  tests, 206 frontend tests, ruff, typecheck, lint and one browser test (`npm run e2e`).
+  `/code-review` (7 fixes, 3 deferred) and `/simplify` (11 refactors). Checks at the merge: 837 backend
+  tests, 206 frontend tests (1090 and 260 after the pre-5 round), ruff, typecheck, lint and one browser test (`npm run e2e`).
   The 46 decisions taken on the owner's behalf: `docs/superpowers/m4-rulings.md`; minor
   leftovers: `docs/superpowers/m4-followups.md`.
 - Milestone 3 is merged to `main` (2026-10-22). Every decision taken on the owner's behalf:

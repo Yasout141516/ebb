@@ -186,8 +186,8 @@ uv run ebb serve                  # the API on port 8000; then, in frontend/: np
 
 The website's checks run from `frontend/`: `npm test`, `npm run typecheck`, `npm run lint`, and
 `npm run e2e`, a browser test (Playwright) of onboarding, a lesson, the quiz, the Costs page and
-the progress page against a fake tutor, so it needs no database or API key. The first time, install its
-browser with `npx playwright install chromium`.
+the progress page against a fake tutor, so it needs no database or API key. The first time,
+install its browser with `npx playwright install chromium`.
 
 **Try spaced review now:** pretend a week has passed, so every concept whose next review
 was within the next 7 days becomes due. The same statement moves the answer history and the
