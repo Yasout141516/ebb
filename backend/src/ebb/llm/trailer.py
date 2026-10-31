@@ -5,7 +5,9 @@
     EBB>>>
 
 Only the last `<<<EBB` block ends the markdown, so a marker earlier in the reply is text.
-Models often wrap the trailer, or its JSON, in a code fence; those fences are dropped."""
+Models often wrap the trailer, or its JSON, in a code fence; those fences are dropped. A
+reply with no marker at all may end with the bare object instead, which is read as the
+trailer; the streamed text then shows it until the reply's turn replaces that text."""
 
 import json
 from collections.abc import Callable
@@ -15,6 +17,7 @@ from langchain_core.exceptions import OutputParserException
 
 OPEN, CLOSE = "<<<EBB", "EBB>>>"
 FENCE = "```"
+TRAILER_KEYS = {"citations", "suggestions", "checks"}
 
 
 def _is_fence(line: str) -> bool:
@@ -36,11 +39,38 @@ def _opens_fence(text: str, start: int) -> bool:
     return sum(_is_fence(line) for line in text[:start].split("\n")) % 2 == 0
 
 
+def _markdown_before(text: str, start: int) -> str:
+    """The reply's markdown: all before the trailer, less a fence line opened to wrap it."""
+    markdown = text[:start].rstrip()
+    last = markdown.rfind("\n") + 1
+    if _is_fence(markdown[last:]) and _opens_fence(markdown, last):  # it fences the trailer
+        markdown = markdown[:last]
+    return markdown.strip()
+
+
+def _unmarked(text: str) -> tuple[str, dict[str, Any]]:
+    """A reply whose trailer came without its markers (seen live from gpt-oss): a JSON
+    object of only the trailer's keys, starting a line, ends it."""
+    body = text.rstrip()
+    if body.endswith(FENCE):  # the fence closing a fenced object
+        body = body[: -len(FENCE)].rstrip()
+    start = len(body)
+    while (start := body.rfind("{", 0, start)) >= 0:
+        if start == 0 or body[start - 1] == "\n":
+            try:
+                data = json.loads(body[start:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict) and data and set(data) <= TRAILER_KEYS:
+                return _markdown_before(text, start), data
+    raise OutputParserException(f"the reply has no {OPEN} trailer")
+
+
 def split(text: str) -> tuple[str, dict[str, Any]]:
     """The markdown and the trailer's object. A reply without one closing it is invalid."""
     start = text.rfind(OPEN)
     if start < 0:
-        raise OutputParserException(f"the reply has no {OPEN} trailer")
+        return _unmarked(text)
     body = text[start + len(OPEN) :].strip()
     if body.endswith(FENCE):  # the fence closing a fenced trailer
         body = body[: -len(FENCE)].rstrip()
@@ -52,11 +82,7 @@ def split(text: str) -> tuple[str, dict[str, Any]]:
         raise OutputParserException(f"the trailer is not JSON: {error}") from error
     if not isinstance(data, dict):
         raise OutputParserException("the trailer is not a JSON object")
-    markdown = text[:start].rstrip()
-    last = markdown.rfind("\n") + 1
-    if _is_fence(markdown[last:]) and _opens_fence(markdown, last):  # it fences the trailer
-        markdown = markdown[:last]
-    return markdown.strip(), data
+    return _markdown_before(text, start), data
 
 
 def _held(text: str) -> int:

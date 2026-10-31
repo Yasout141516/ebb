@@ -108,7 +108,22 @@ def test_streamer_shows_fences_of_real_code_blocks():
 @pytest.mark.parametrize(
     "reply",
     [
+        f"# DNS\n\nText.\n\n{JSON}",  # seen live: gpt-oss left the markers out
+        f"# DNS\n\nText.\n{JSON}\n",
+        f"# DNS\n\nText.\n```json\n{JSON}\n```",
+        "# DNS\n\nText.\n" + json.dumps(json.loads(JSON), indent=2),
+    ],
+)
+def test_split_reads_a_trailer_left_without_its_markers(reply):
+    assert trailer.split(reply) == ("# DNS\n\nText.", json.loads(JSON))
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
         "# DNS\n\nNo trailer at all.",
+        '# DNS\n\nA config:\n{"port": 53}',  # a JSON object, but not a trailer
+        "# DNS\n\n{not json}",
         "# DNS\n<<<EBB\n{}",  # never closed
         "# DNS\n<<<EBB\n{not json}\nEBB>>>",
         '# DNS\n<<<EBB\n["a list"]\nEBB>>>',
