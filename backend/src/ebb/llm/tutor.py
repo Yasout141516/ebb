@@ -31,7 +31,7 @@ from ebb.llm import trailer
 from ebb.llm.gateway import EXHAUSTED_NOTICE as EXHAUSTED_NOTICE
 from ebb.llm.gateway import REFUSED_NOTICE as REFUSED_NOTICE
 from ebb.llm.gateway import AllProvidersExhausted as AllProvidersExhausted
-from ebb.llm.gateway import Endpoint, Gateway, Generated, NullRecorder, Recorder
+from ebb.llm.gateway import Endpoint, Gateway, Generated, NullRecorder, Recorder, TextFilter
 from ebb.llm.gateway import TutorRefused as TutorRefused
 from ebb.llm.gateway import TutorUnavailable as TutorUnavailable
 from ebb.llm.providers import Provider, Role, chat_models
@@ -385,8 +385,11 @@ class LangChainTutor:
         creative: bool,
         parse: Callable[[Any], T],
         on_text: Callable[[str], None] | None = None,
+        hold: TextFilter | None = None,
     ) -> Generated[T]:
-        return self.gateway.call(role, endpoint, schema, prompt, creative, parse, on_text=on_text)
+        return self.gateway.call(
+            role, endpoint, schema, prompt, creative, parse, on_text=on_text, hold=hold
+        )
 
     def extract_concepts(self, topic: str) -> Generated[list[ConceptDraft]]:
         return self._run(
@@ -590,9 +593,15 @@ class LangChainTutor:
                 _texts(out.checks, MAX_CHECKS) if endpoint == "lesson" else (),
             )
 
-        streamer = None if on_text is None else trailer.Streamer(on_text)
         return self._run(
-            "teach", endpoint, None, prompt, creative=True, parse=to_text, on_text=streamer
+            "teach",
+            endpoint,
+            None,
+            prompt,
+            creative=True,
+            parse=to_text,
+            on_text=on_text,
+            hold=trailer.Streamer,
         )
 
     def _recite(

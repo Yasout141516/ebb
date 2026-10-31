@@ -60,9 +60,10 @@ def get_lesson(concept_id: UUID, request: Request) -> LessonPage:
 
 
 def _respond(events: Iterator[LearnEvent]) -> EventSourceResponse:
-    """The run's events as SSE. A thread driven elsewhere, or a concept not the user's,
-    answers as plain JSON before any stream opens."""
-    return respond(events, _sse, (SessionBusy, LookupError))
+    """The run's events as SSE. A thread driven elsewhere answers as plain JSON before any
+    stream opens. (A concept not the user's was refused already: `start` and `reply` raise
+    at once, so a LookupError inside the run is a failure like any other.)"""
+    return respond(events, _sse, (SessionBusy,))
 
 
 def _sse(event: LearnEvent) -> Sse:

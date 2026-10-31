@@ -253,3 +253,22 @@ def test_a_second_driver_gets_the_busy_answer():
 
     assert response.status_code == 409
     assert response.json() == {"error": BUSY}
+
+
+class _BrokenLearn:
+    """Learn sessions whose run fails inside its first event with an internal KeyError."""
+
+    def start(self, user_id: UUID, concept_id: UUID):
+        def run():
+            raise KeyError("position")
+            yield  # a generator, like the real runs
+
+        return run()
+
+
+def test_an_internal_lookup_failure_is_an_error_event_not_a_404():
+    services = replace(make_services(), learn=_BrokenLearn())
+
+    events = _events(client(services).post(f"/concepts/{uuid4()}/learn"))
+
+    assert _names(events) == ["error"] and list(events[0][1]) == ["notice"]

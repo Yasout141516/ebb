@@ -80,3 +80,15 @@ def test_eval_writer_equal_to_grader_is_refused():
             )
         )
     assert str(caught.value) == "EBB_EVAL_WRITER_MODEL must differ from EBB_QUIZ_MODEL (the grader)"
+
+
+def test_the_older_fallback_setting_still_picks_the_eval_writer():
+    assert settings(ebb_fallback_model="mistral-small-latest").role_models()["eval_writer"] == (
+        ModelSpec("mistral", "mistral-small-latest"),
+        None,
+    )
+    assert settings().role_models()["eval_writer"][0] == ModelSpec(
+        "mistral", "mistral-medium-latest"
+    )
+    chosen = settings(ebb_fallback_model="x", ebb_eval_writer_model="openrouter:w/z")
+    assert chosen.role_models()["eval_writer"][0] == ModelSpec("openrouter", "w/z")

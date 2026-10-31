@@ -8,7 +8,7 @@ export function money(usd: string | null): string {
   if (n >= 1 || n === 0) return `$${n.toFixed(2)}`;
   // Two significant digits, so a tiny amount never shows as $0.00; trailing zeros go, cents stay.
   const decimals = Math.min(8, Math.ceil(-Math.log10(n)) + 1);
-  return `$${n.toFixed(decimals).replace(/(\.\d\d)0+$/, "$1").replace(/(\.\d*[1-9])0+$/, "$1")}`;
+  return `$${n.toFixed(decimals).replace(/(\.\d\d\d*?)0+$/, "$1")}`;
 }
 
 /** A token count with thousands separators; unknown is "not reported". */

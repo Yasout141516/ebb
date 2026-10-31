@@ -87,7 +87,8 @@ def test_rates_are_over_calls_and_cost_over_all_attempts():
         call(call_id=retried, outcome="error", ttft_ms=None, cost_usd=Decimal("0.002")),
         call(call_id=retried, attempt=2),
         call(call_id=fell, outcome="error", ttft_ms=None),
-        call(call_id=fell, provider="openrouter", model="m", backup=True),
+        # Attempt numbers run across the chain: the backup's first try is attempt 2 here.
+        call(call_id=fell, provider="openrouter", model="m", backup=True, attempt=2),
         call(),
         call(),
     ]
@@ -96,6 +97,19 @@ def test_rates_are_over_calls_and_cost_over_all_attempts():
     assert s.retry_rate == 0.25 and s.fallback_rate == 0.25
     assert s.input_tokens == 600
     assert s.cost_usd == Decimal("0.007")
+
+
+def test_a_backup_asked_twice_is_retried_too():
+    both = uuid4()
+    rows = [
+        call(call_id=both, outcome="error", ttft_ms=None),
+        call(
+            call_id=both, provider="openrouter", model="m", backup=True, attempt=2, outcome="error"
+        ),
+        call(call_id=both, provider="openrouter", model="m", backup=True, attempt=3),
+    ]
+    s = costs.summary(rows)
+    assert (s.calls, s.retried, s.fell_back) == (1, 1, 1)
 
 
 def test_unpriced_model_makes_cost_unknown():

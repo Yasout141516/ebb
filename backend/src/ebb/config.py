@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     ebb_fallback_model: str | None = None
     ebb_teach_model: str | None = None
     ebb_quiz_model: str | None = None
-    ebb_eval_writer_model: str = "mistral:mistral-medium-latest"
+    ebb_eval_writer_model: str | None = None
     ebb_teach_backup: str | None = None
     ebb_quiz_backup: str | None = None
     ebb_show_costs: bool = True
@@ -71,7 +71,9 @@ class Settings(BaseSettings):
             # Today's behaviour: a Mistral key is what turns the backup on.
             return chosen, legacy_backup if self.mistral_api_key else None
 
-        writer = parse_model(self.ebb_eval_writer_model, "EBB_EVAL_WRITER_MODEL")
+        writer = parse_model(
+            self.ebb_eval_writer_model or f"mistral:{legacy_backup.model}", "EBB_EVAL_WRITER_MODEL"
+        )
         return {
             "teach": pair(
                 self.ebb_teach_model, self.ebb_teach_backup, "EBB_TEACH_MODEL", "EBB_TEACH_BACKUP"

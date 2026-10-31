@@ -806,7 +806,7 @@ def test_each_tutor_method_uses_its_role_and_endpoint(monkeypatch, method, role,
     monkeypatch.setattr(
         tutor.gateway,
         "call",
-        lambda role, endpoint, schema, prompt, creative, parse, on_text=None: call(
+        lambda role, endpoint, schema, prompt, creative, parse, on_text=None, hold=None: call(
             role, endpoint, schema, prompt, creative, lambda out: out, on_text
         ),
     )
@@ -1429,6 +1429,21 @@ def test_missing_trailer_after_streamed_text_is_not_retried():
     assert [(r.outcome, r.error_kind) for r in recorder.calls] == [
         ("invalid", "OutputParserException")
     ]
+
+
+def test_a_reply_held_back_whole_then_broken_is_retried_with_a_fresh_streamer():
+    # Nothing got past the trailer Streamer (it all came after a marker), so nothing was
+    # shown: the failed reply is retried, and its held text never joins the next one.
+    held = ["```json\n<<<EBB\n", "{not json}\nEBB>>>"]
+    main = chunks(held, LESSON_REPLY)
+    tutor, recorder = learn_tutor(main, attempts=2)
+    pieces: list[str] = []
+
+    out = tutor.write_lesson(CONCEPT, "Networks", [], on_text=pieces.append)
+
+    assert out.value == LESSON
+    assert "".join(pieces).strip() == LESSON.markdown
+    assert [r.outcome for r in recorder.calls] == ["invalid", "ok"]
 
 
 def test_missing_trailer_with_nothing_shown_is_retried():

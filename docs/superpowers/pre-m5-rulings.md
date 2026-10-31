@@ -27,7 +27,7 @@ this build's own (they restart at R1).
 3. **R5** `LlmCall.user_id: UUID` (after request_id); `llm_calls` returns it; `record_llm_call(user_id, call)` raises ValueError on mismatch. — Task 6 per-tenant totals need it; one source of truth. *If wrong:* redundant field.
 4. **R12** `costs.role_health(calls, roles: Mapping[Role, Sequence[tuple[str, str]]])` takes each role's chain as (provider, model) pairs, not LangChain Provider objects. — Keeps costs.py pure and testable; Task 7 builds the mapping from `settings.role_models()`. *If wrong:* one parameter shape.
 5. **R13** `per_day` and day anomalies count tokens as input + output (reasoning already inside output per prices.py); `by_feature` returns the six features in the plan's order, zero-filled. — Spec says "tokens per day"; one consistent definition. *If wrong:* chart totals differ.
-6. **R14** "retried" = some provider was asked more than once in the call (attempt > 1); a main-fail-then-backup call is "fell back", not "retried". — My R12-era wording "more than one attempt on any provider" meant this; keeps the two rates distinct. *If wrong:* retry rate reads lower. (Reviewer finding I2 closed as not-a-defect.)
+6. **R14** "retried" = the main model or the backup was asked more than once in the call (attempt numbers run across the chain, so the backup's first try isn't a retry; fixed after /code-review); a main-fail-then-backup call is "fell back", not "retried". — My R12-era wording "more than one attempt on any provider" meant this; keeps the two rates distinct. *If wrong:* retry rate reads lower. (Reviewer finding I2 closed as not-a-defect.)
 7. **R15** anomaly history = llm_calls over the 30 days before `since`, same tenant filter. — Simple at one user's volume; costs.anomalies picks prev-50/7-day itself. *If wrong:* thinner baselines for rarely used endpoints.
 8. **R16** query params range ∈ 24h|7d|30d (default 7d, else 422); tenant UUID or omitted = all tenants; endpoint/model exact filters before aggregation; until = now, days in services.tz. — Plan said only "filters as query parameters". *If wrong:* param shape.
 9. **R17** roles in the summary come from settings.role_models() as (provider, model) pairs so configured roles show with no calls. *If wrong:* roles appear only after use.
@@ -110,3 +110,27 @@ calls: input, output and reasoning tokens, TTFT and cost were all recorded.
   - Each provider client also retries once inside its SDK (`max_retries=1`), on top of the
     gateway's retries, so one 429 attempt took 10.4 s. A rate-limited turn took 36 s before the
     gateway kept the first draft of the questions.
+
+## Before the merge: /simplify and /code-review (2026-10-31)
+
+Fixed: one SSE `respond` for the study and learn routes; streamed learn text renders once a frame
+and `Markdown` is memoised; `costs.endpoint_label` reused; `money()` keeps both cent digits
+($0.50, not $0.5); a KeyError/IndexError inside a learn run is an error event, not a 404; the
+retry count no longer counts every fallback; a learn reply held back whole by the trailer
+Streamer is retried, with a fresh Streamer for each attempt (`Gateway.call(hold=...)`);
+`EBB_FALLBACK_MODEL` picks the eval writer again when `EBB_EVAL_WRITER_MODEL` is unset.
+
+Deferred, with the reason:
+- Turn identity: give each interrupt a turn id instead of reading the reply's shape and
+  `lesson_due` (study.py, routing.py, nodes.py), and make `mcq_first` a property of the
+  concept. A redesign across five layers of code the live run had just checked.
+- One shared stream hook for useStudy and useLearn, a shared graph-driving helper for study.py
+  and learn/service.py, and shared note and web source gathering for the two graphs. These
+  restructure working code and change nothing visible.
+- The seven Cost* pydantic mirrors of the costs.py dataclasses, and `Gateway._record`'s 11
+  parameters. Boilerplate only.
+- Costs page: the duplicate /costs/summary request, /costs/calls running every anomaly to label
+  50 rows, and the `llm_calls` query not using its index for all tenants. A dev page with one
+  user's data. Skipping the duplicate request would also blank the filter lists for a moment.
+- The code-review findings already listed above: anomaly labels repeated on every attempt row,
+  learn checkpoints not pruned, and has_notes and recorder-guard duplication.

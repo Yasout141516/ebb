@@ -2,9 +2,9 @@
 Pure functions, like progress and mastery.
 
 A "call" is one call_id; it may hold several attempts (retries, then a backup model); it
-was retried if some provider was asked more than once (an attempt number above 1); one that
-failed on the main model and then succeeded on the backup fell back, and was not retried. Rates
-count calls. Cost and tokens add
+was retried if the main model or the backup was asked more than once (attempt numbers run
+across the chain, so the backup's first try is not a retry); it fell back if the backup was
+asked at all. Rates count calls. Cost and tokens add
 up every attempt, since a failed attempt that used tokens cost money too. Percentiles use ok
 attempts only and the nearest-rank method."""
 
@@ -185,9 +185,15 @@ def _is_free(provider: str, model: str) -> bool:
     return price is not None and price.free_tier
 
 
+def _retried(attempts: Sequence[LlmCall]) -> bool:
+    """Whether the main model, or the backup, was asked more than once."""
+    backups = sum(a.backup for a in attempts)
+    return backups > 1 or len(attempts) - backups > 1
+
+
 def summary(calls: Sequence[LlmCall]) -> Summary:
     grouped = _by_call(calls)
-    retried = sum(1 for attempts in grouped.values() if any(a.attempt > 1 for a in attempts))
+    retried = sum(1 for attempts in grouped.values() if _retried(attempts))
     fell_back = sum(1 for attempts in grouped.values() if any(a.backup for a in attempts))
     ok = _ok(calls)
     ttfts = [c.ttft_ms for c in ok if c.ttft_ms is not None]

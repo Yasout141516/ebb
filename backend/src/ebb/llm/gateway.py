@@ -191,25 +191,40 @@ class StoreRecorder:
             log.warning("could not record the %s call (%s): %s", call.endpoint, call.model, error)
 
 
+# Built afresh for each attempt around the text sink: what it passes on is what is shown.
+type TextFilter = Callable[[Callable[[str], None]], Callable[[str], None]]
+
+
 class _Meter(BaseCallbackHandler):
     """Watches one attempt's model stream: when its first chunk came and the usage the
     provider reported. For plain replies, passes each chunk's text on."""
 
     raise_error = True  # a failing `on_text` fails the call, as if called directly
 
-    def __init__(self, clock: Callable[[], float], on_text: Callable[[str], None] | None):
+    def __init__(
+        self,
+        clock: Callable[[], float],
+        on_text: Callable[[str], None] | None,
+        hold: TextFilter | None = None,
+    ):
         self.clock = clock
-        self.on_text = on_text
         self.first_chunk: float | None = None
         self.usage: dict[str, Any] | None = None
         self.sent_text = False  # some of this reply has reached `on_text`
+        self.feed: Callable[[str], None] | None = None
+        if on_text is not None:
+
+            def sink(text: str) -> None:
+                self.sent_text = True
+                on_text(text)
+
+            self.feed = sink if hold is None else hold(sink)
 
     def on_llm_new_token(self, token: str, *, chunk: Any = None, **kwargs: Any) -> None:
         if self.first_chunk is None:
             self.first_chunk = self.clock()
-        if self.on_text is not None and chunk is not None and chunk.message.text:
-            self.sent_text = True
-            self.on_text(chunk.message.text)
+        if self.feed is not None and chunk is not None and chunk.message.text:
+            self.feed(chunk.message.text)
 
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
         message = getattr(response.generations[0][0], "message", None)
@@ -278,12 +293,14 @@ class Gateway:
         creative: bool,
         parse: Callable[[Any], T],
         on_text: Callable[[str], None] | None = None,
+        hold: TextFilter | None = None,
     ) -> Generated[T]:
         """Each provider in turn, retried; a refusal (TutorRefused) ends the call at once, and
         a rejected key or unknown model is a ConfigError. A reply `parse` rejects with
         OutputParserException or ValidationError is invalid, like one that failed `schema`.
         Every attempt is recorded under one call id. `on_text` receives a plain reply's text
-        as it streams; once some has reached it, a failure ends the call, so no second reply
+        as it streams, through `hold` if given (built anew for each attempt, it may hold text
+        back); once some has reached `on_text`, a failure ends the call, so no second reply
         is spliced onto the first."""
         call_id, attempt = uuid4(), 0
 
@@ -309,7 +326,7 @@ class Gateway:
         for index, provider in enumerate(self.chains[role]):
             for tried in range(1, self.attempts + 1):
                 attempt += 1
-                meter = _Meter(self.clock, on_text if schema is None else None)
+                meter = _Meter(self.clock, on_text if schema is None else None, hold)
                 try:
                     value = attempt_once(provider, index, meter)
                 except PROVIDER_ERRORS as error:

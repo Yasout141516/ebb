@@ -6,6 +6,8 @@ describe("costFormat", () => {
     expect(money("0.00042")).toBe("$0.00042");
     expect(money("0.0003")).toBe("$0.0003");
     expect(money("0.42")).toBe("$0.42");
+    expect(money("0.5")).toBe("$0.50"); // cents keep both digits
+    expect(money("0.30")).toBe("$0.30");
     expect(money("0.0123")).toBe("$0.012");
     expect(money("12.5")).toBe("$12.50");
     expect(money("0")).toBe("$0.00");
