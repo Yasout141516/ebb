@@ -23,6 +23,7 @@ export const summaryPage: CostSummaryPage = {
   summary: {
     cost_usd: "0.00042",
     unpriced_calls: 0,
+    unreported_calls: 0,
     input_tokens: 1310,
     output_tokens: 530,
     calls: 12,
@@ -177,6 +178,7 @@ export const emptyPage: CostSummaryPage = {
   summary: {
     cost_usd: null,
     unpriced_calls: 0,
+    unreported_calls: 0,
     input_tokens: null,
     output_tokens: null,
     calls: 0,

@@ -677,6 +677,20 @@ describe("the learn phase", () => {
     expect(screen.getByPlaceholderText("Type your answer…")).toBeDisabled();
   });
 
+  it("shows no empty lesson card when the concept was learned elsewhere", async () => {
+    // The learn start answers `learned` at once: the quiz never heard it, and no lesson was loaded.
+    const start = await learning();
+    start.emit("learned", { concept_id: "c1" });
+    await start.end();
+    await waitFor(() => expect(streams.at(-1)!.path).toBe("/sessions/t1/reply"));
+    const quiz = streams.at(-1)!;
+    expect(quiz.body).toEqual({ driver: "drv-1", reply: { learned: true } });
+    quiz.emit("turn", { payload: mcq({ concept: "TCP handshake" }) });
+    await quiz.end();
+    expect(screen.getByText("Multiple choice · TCP handshake · Q1")).toBeInTheDocument();
+    expect(screen.queryByRole("article", { name: "Lesson" })).not.toBeInTheDocument();
+  });
+
   it("shows the last answer's grade above the lesson, and starts the lesson again on a refresh", async () => {
     const graded = learnTurn({
       feedback: { value: "correct", explanation: "Yes.", misconception: null, claims: [], citations: [], general_knowledge: false },

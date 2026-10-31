@@ -29,7 +29,8 @@ Code makes every decision; the LLM only generates questions, grades short answer
 ## Where things stand
 
 - **The pre-milestone-5 round is built** on branch `pre-m5-learn-gateway-costs` (worktree
-  `.claude/worktrees/pre-m5`); its whole-branch review is still to do. Spec:
+  `.claude/worktrees/pre-m5`); its whole-branch review is done and
+  its fix wave applied; a live smoke run with real keys is still needed before merge. Spec:
   `docs/superpowers/specs/2026-10-27-learn-phase-gateway-costs-design.md`; the 33 decisions taken
   on the owner's behalf and the deferred minor items: `docs/superpowers/pre-m5-rulings.md`.
   What it added:
@@ -52,7 +53,9 @@ Code makes every decision; the LLM only generates questions, grades short answer
     multiple-choice answer and the Costs page. `backend/tests/e2e_server.py` records
     representative `LlmCall`s for its fake tutor's calls, since the fake bypasses the gateway.
   - **Before the first start of this branch against the real database**, back it up as
-    `ebb_pre005` (README, Run it): the API migrates `ebb` to `006`.
+    `ebb_pre005` (README, Run it): the API migrates `ebb` to `006`. The branch adds Python
+    (`langchain-openai`) and npm (`react-markdown`, `remark-gfm`) packages, so start it with
+    `docker compose up --build` (or `docker compose build` first): plain `up` reuses old images.
 
 - **Milestone 4 is merged and pushed (2026-10-27).** `docker compose up` starts the database,
   the API (port 8000) and the website (http://localhost:3000), all bound to this PC only:
@@ -210,7 +213,7 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run e2e   # e2e: npx
 ## Next steps
 
 0. **Pre-5 branch:** the whole-branch review and merge (with the owner's OK), after the owner
-   tries it: back up `ebb_pre005`, `docker compose up`, open a new concept (lesson streams,
+   tries it: back up `ebb_pre005`, `docker compose up --build`, open a new concept (lesson streams,
    "Answer this for me", a chip, "I'm ready, quiz me", first question is multiple choice), then
    look at Costs. Worth a live check: that Groq returns token usage while streaming (else the
    Costs rows honestly show "not reported"). Deferred: switching models when the main one is

@@ -99,6 +99,26 @@ describe("CostsView", () => {
     expect(within(models.getByRole("row", { name: /Mistral/ })).getAllByText("—").length).toBeGreaterThan(0);
   });
 
+  it("never shows $0.00 when the provider reported no tokens", async () => {
+    const page = {
+      ...summaryPage,
+      summary: {
+        ...summaryPage.summary,
+        cost_usd: null,
+        unreported_calls: 2,
+        input_tokens: null,
+        output_tokens: null,
+        all_free_tier: false,
+      },
+    };
+    serve(page);
+    render(<CostsView />);
+    const summary = within(await screen.findByRole("region", { name: "Summary" }));
+    expect(summary.getByText("price unknown")).toBeInTheDocument();
+    expect(summary.getByText("2 calls reported no token usage")).toBeInTheDocument();
+    expect(summary.queryByText("$0.00")).not.toBeInTheDocument();
+  });
+
   it("empty range shows the empty copy", async () => {
     serve(emptyPage);
     render(<CostsView />);

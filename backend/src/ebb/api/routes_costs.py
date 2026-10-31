@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -80,6 +80,10 @@ def _records(services: Services, f: Filters) -> tuple[list[LlmCall], list[LlmCal
     )
 
 
+def _today(services: Services) -> date:
+    return services.now().astimezone(services.tz).date()
+
+
 def _row(call: LlmCall, anomaly: str | None = None) -> CostCall:
     label = costs.ENDPOINTS[call.endpoint][0] if call.endpoint in costs.ENDPOINTS else call.endpoint
     return CostCall(**asdict(call), endpoint_label=label, anomaly=anomaly)
@@ -110,12 +114,13 @@ def cost_summary(services: Shown, f: Filtered) -> CostSummaryPage:
         by_model=[CostBreakdown(**asdict(b)) for b in costs.by_model(calls)],
         by_endpoint=[CostBreakdown(**asdict(b)) for b in costs.by_endpoint(calls)],
         by_tenant=[CostBreakdown(**asdict(b)) for b in costs.by_tenant(calls)],
-        anomalies=[CostAnomaly(**asdict(a)) for a in costs.anomalies(calls, history, services.tz)],
+        anomalies=[
+            CostAnomaly(**asdict(a))
+            for a in costs.anomalies(calls, history, services.tz, _today(services))
+        ],
         failures=[_row(c) for c in costs.failures(calls)],
         daily_calls=DailyCalls(
-            used=services.store.ai_calls_used(
-                services.user_id, services.now().astimezone(services.tz).date()
-            ),
+            used=services.store.ai_calls_used(services.user_id, _today(services)),
             limit=services.settings.ebb_daily_ai_calls,
         ),
     )
@@ -127,7 +132,7 @@ def cost_calls(
 ) -> list[CostCall]:
     calls, history = _records(services, f)
     first: dict[UUID, str] = {}  # call_id -> the message of its first anomaly
-    for a in costs.anomalies(calls, history, services.tz):
+    for a in costs.anomalies(calls, history, services.tz, _today(services)):
         if a.call_id is not None:
             first.setdefault(a.call_id, a.message)
     newest = sorted(calls, key=lambda c: (c.at, c.id), reverse=True)[:limit]

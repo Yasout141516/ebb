@@ -71,7 +71,7 @@ Minor findings from reviews that are still open (none blocks the work). Items a 
 - Task 4: live smoke check that Groq streams usage under x_groq (else rows honestly record None)
 - Task 4: test_tutor.py ~34 s because retry tests really sleep (inject no-op sleep in those tests)
 - Task 5: no test that GeneratorExit drain keeps the turn's id; drafts test's main-thread `current()==(None,None)` proves nothing; generate not asserted; dead `thread_id="unset"`
-- Task 6: role_health counts invalid attempts as failed while failures() drops recovered invalid ones; messages show HH:MM without date; chain[0] IndexError on empty chain
+- Task 6: role_health counts invalid attempts as failed while failures() drops recovered invalid ones; chain[0] IndexError on empty chain
 - Task 6: DayTokens fields are int | None now; a call over 3× on both counts yields two token anomalies (UI may show two rows for one call); baselines take previous 50 ok calls then filter to known values
 - Task 7: /costs/calls tenant/endpoint/model filters and tenant-filtered anomalies untested; retry+fallback rows of one call repeat the same anomaly message; /costs/calls loads the whole range then slices
 - Task 8: header's own /health fetch = one extra request per full-header page
@@ -86,4 +86,5 @@ Minor findings from reviews that are still open (none blocks the work). Items a 
 - Task 12: latest-answer tie-break uses random uuid id (repo.py ~379, fakes.py ~208); two answers in the same microsecond could refuse a legit dispute — consider an insertion sequence. Real-app risk low. **Real-app behaviour.**
 - Task 14: notice de-dup across the whole learn phase; answer step label shows under Ready; GFM footnote back-links lose links
 - Task 14: a quick 4xx on the auto {learned:true} hand-off leaves handed set (no resend except Retry); GET lesson does an extra get_concept for subject_id
+- Task 14/15: learn checkpoints (`learn:{user}:{concept}`) are never pruned unless the concept is learned (`threads_to_prune` only covers study sessions); harmless at one per concept, for milestone 6
 - Task 6: flooring still prints "3.0 times" for a call at e.g. 3.007× — consider "just over 3 times" wording or two decimals near the threshold (my requested fix was insufficient)

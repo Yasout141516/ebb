@@ -62,8 +62,9 @@ FEATURES: dict[str, str] = {
 
 @dataclass(frozen=True)
 class Summary:
-    cost_usd: Decimal | None  # None when some ok call has tokens but no price
-    unpriced_calls: int
+    cost_usd: Decimal | None  # None when some ok call has no price or reported no tokens
+    unpriced_calls: int  # ok calls with token counts but no price
+    unreported_calls: int  # ok calls whose provider reported no tokens, so no cost
     input_tokens: int | None  # None when no call reported any
     output_tokens: int | None
     calls: int
@@ -144,19 +145,21 @@ def _sum_known(values: Iterable[int | None]) -> int | None:
     return sum(known) if known else None
 
 
-def _cost(calls: Sequence[LlmCall]) -> tuple[Decimal | None, int]:
-    """Estimated cost over every attempt, and how many calls had an ok attempt with token
-    counts but no price (then the total is unknown)."""
-    unpriced = {
-        c.call_id
-        for c in calls
-        if c.outcome == "ok"
-        and c.cost_usd is None
-        and c.input_tokens is not None
-        and c.output_tokens is not None
-    }
+def _cost(calls: Sequence[LlmCall]) -> tuple[Decimal | None, int, int]:
+    """Estimated cost over every attempt, how many calls had an ok attempt with token counts
+    but no price, and how many had one whose provider reported no tokens. Either makes the
+    total unknown: a missing cost is not zero."""
+    unpriced = set()
+    unreported = set()
+    for c in calls:
+        if c.outcome != "ok" or c.cost_usd is not None:
+            continue
+        if c.input_tokens is None or c.output_tokens is None:
+            unreported.add(c.call_id)
+        else:
+            unpriced.add(c.call_id)
     total = sum((c.cost_usd for c in calls if c.cost_usd is not None), Decimal(0))
-    return (None if unpriced else total), len(unpriced)
+    return (None if unpriced or unreported else total), len(unpriced), len(unreported)
 
 
 def _by_call(calls: Iterable[LlmCall]) -> dict[UUID, list[LlmCall]]:
@@ -189,10 +192,11 @@ def summary(calls: Sequence[LlmCall]) -> Summary:
     ok = _ok(calls)
     ttfts = [c.ttft_ms for c in ok if c.ttft_ms is not None]
     totals = [c.total_ms for c in ok]
-    cost, unpriced = _cost(calls)
+    cost, unpriced, unreported = _cost(calls)
     return Summary(
         cost_usd=cost,
         unpriced_calls=unpriced,
+        unreported_calls=unreported,
         input_tokens=_sum_known(c.input_tokens for c in calls),
         output_tokens=_sum_known(c.output_tokens for c in calls),
         calls=len(grouped),
@@ -212,7 +216,7 @@ def _breakdown(key: str, label: str, calls: Sequence[LlmCall]) -> Breakdown:
     ok = _ok(calls)
     ttfts = [c.ttft_ms for c in ok if c.ttft_ms is not None]
     totals = [c.total_ms for c in ok]
-    cost, unpriced = _cost(calls)
+    cost, unpriced, _ = _cost(calls)
     return Breakdown(
         key=key,
         label=label,
@@ -335,7 +339,7 @@ def failures(calls: Sequence[LlmCall]) -> list[LlmCall]:
 
 
 def _call_anomalies(
-    calls: Sequence[LlmCall], history: Sequence[LlmCall], tz: ZoneInfo
+    calls: Sequence[LlmCall], history: Sequence[LlmCall], tz: ZoneInfo, today: date
 ) -> list[Anomaly]:
     ok_by_endpoint: dict[str, list[LlmCall]] = defaultdict(list)
     for c in sorted(_ok(_merged(history, calls)), key=lambda c: c.at):
@@ -350,7 +354,10 @@ def _call_anomalies(
                 continue
             end = bisect_left(times[endpoint], c.at)  # strictly before c
             previous = rows[max(0, end - BASELINE_CALLS) : end]
-            when = f"{label} at {c.at.astimezone(tz):%H:%M}"
+            local = c.at.astimezone(tz)
+            # The date only when it is not today there, so a 7-day range reads unambiguously.
+            stamp = f"{local:%H:%M}" if local.date() == today else f"{local:%d %b %H:%M}"
+            when = f"{label} at {stamp}"
             for kind, value, usual, floor, text in (
                 (
                     "tokens",
@@ -414,9 +421,14 @@ def _day_anomalies(
     return found
 
 
-def anomalies(calls: Sequence[LlmCall], history: Sequence[LlmCall], tz: ZoneInfo) -> list[Anomaly]:
+def anomalies(
+    calls: Sequence[LlmCall], history: Sequence[LlmCall], tz: ZoneInfo, today: date
+) -> list[Anomaly]:
     """Calls that were unusually big or slow for their endpoint, then days that were unusually
-    big. `history` is what came before the range, so the first calls have a baseline."""
+    big. `history` is what came before the range, so the first calls have a baseline. `today`
+    is the local date, which decides whether a call's message names its date."""
     by_call_time = {c.call_id: c.at for c in calls}
-    per_call = sorted(_call_anomalies(calls, history, tz), key=lambda a: by_call_time[a.call_id])
+    per_call = sorted(
+        _call_anomalies(calls, history, tz, today), key=lambda a: by_call_time[a.call_id]
+    )
     return [*per_call, *_day_anomalies(calls, history, tz)]

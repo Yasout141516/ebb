@@ -12,6 +12,7 @@ from ebb.domain import LlmCall
 from ebb.llm.gateway import Endpoint
 
 T0 = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+TODAY = T0.date()
 USER = uuid4()
 GROQ = ("groq", "openai/gpt-oss-120b")
 
@@ -106,20 +107,37 @@ def test_unpriced_model_makes_cost_unknown():
 
 
 def test_tokens_not_reported_stay_none():
-    s = costs.summary([call(input_tokens=None, output_tokens=None, cost_usd=None)])
+    rows = [call(input_tokens=None, output_tokens=None, cost_usd=None)]
+    s = costs.summary(rows)
     assert s.input_tokens is None and s.output_tokens is None
+    assert s.cost_usd is None  # no usage reported: unknown, not $0.00
+    assert (s.unpriced_calls, s.unreported_calls) == (0, 1)
+    for table in (costs.by_endpoint(rows), costs.by_feature(rows), costs.by_model(rows)):
+        assert all(b.cost_usd is None for b in table if b.calls)
+
+
+def test_anomaly_names_the_date_unless_it_is_today():
+    old = call(at=T0 - timedelta(days=2), total_ms=9000)
+    history = [replace(c, at=c.at - timedelta(days=2)) for c in series(10)]
+    found = costs.anomalies([old], history, UTC, TODAY)
+    assert found[0].message.startswith("Grade answer at 18 Oct 12:00 took")
+    found = costs.anomalies([old], history, UTC, TODAY - timedelta(days=2))
+    assert found[0].message.startswith("Grade answer at 12:00 took")
 
 
 def test_token_anomaly_needs_ten_previous_calls():
     big = call(input_tokens=1000, output_tokens=500)
-    assert costs.anomalies([big], series(9), UTC) == []
-    assert kinds(costs.anomalies([big], series(10), UTC)) == ["tokens", "tokens"]  # in and out
+    assert costs.anomalies([big], series(9), UTC, TODAY) == []
+    assert kinds(costs.anomalies([big], series(10), UTC, TODAY)) == [
+        "tokens",
+        "tokens",
+    ]  # in and out
 
 
 def test_token_anomaly_over_three_times_median():
     history = series(10)  # 150 tokens each
-    assert costs.anomalies([call(input_tokens=300, output_tokens=150)], history, UTC) == []
-    found = costs.anomalies([call(input_tokens=300, output_tokens=151)], history, UTC)
+    assert costs.anomalies([call(input_tokens=300, output_tokens=150)], history, UTC, TODAY) == []
+    found = costs.anomalies([call(input_tokens=300, output_tokens=151)], history, UTC, TODAY)
     assert kinds(found) == ["tokens"]  # only the output count is over
     a = found[0]
     assert a.endpoint == "grade" and a.ratio == pytest.approx(151 / 50)
@@ -129,7 +147,7 @@ def test_token_anomaly_over_three_times_median():
 
 
 def test_token_anomaly_names_input_when_only_input_spikes():
-    found = costs.anomalies([call(input_tokens=410, output_tokens=50)], series(10), UTC)
+    found = costs.anomalies([call(input_tokens=410, output_tokens=50)], series(10), UTC, TODAY)
     assert kinds(found) == ["tokens"]
     assert found[0].ratio == pytest.approx(4.1)
     assert found[0].message == (
@@ -138,72 +156,72 @@ def test_token_anomaly_names_input_when_only_input_spikes():
 
 
 def test_token_anomaly_checks_the_one_count_a_call_reported():
-    found = costs.anomalies([call(input_tokens=None, output_tokens=500)], series(10), UTC)
+    found = costs.anomalies([call(input_tokens=None, output_tokens=500)], series(10), UTC, TODAY)
     assert kinds(found) == ["tokens"] and "output tokens" in found[0].message
     unknown_before = series(10, input_tokens=None)  # baseline for input has no known values
-    assert costs.anomalies([call(input_tokens=5000)], unknown_before, UTC) == []
+    assert costs.anomalies([call(input_tokens=5000)], unknown_before, UTC, TODAY) == []
 
 
 def test_ratio_in_messages_rounds_down():
-    found = costs.anomalies([call(total_ms=5990)], series(10, total_ms=1000), UTC)
+    found = costs.anomalies([call(total_ms=5990)], series(10, total_ms=1000), UTC, TODAY)
     assert "took 5.9 times" in found[0].message  # 5.99, never rounded up
 
 
 def test_baseline_is_built_once_when_history_and_range_overlap():
     seen = series(5)
     big = call(input_tokens=5000)
-    assert costs.anomalies([*seen, big], seen, UTC) == []  # five distinct calls, not ten
+    assert costs.anomalies([*seen, big], seen, UTC, TODAY) == []  # five distinct calls, not ten
 
 
 def test_baseline_is_the_previous_fifty_ok_calls_of_that_endpoint():
     old = [replace(c, at=c.at - timedelta(hours=2)) for c in series(50, input_tokens=1000)]
     history = old + series(50)  # the last fifty are 150 tokens each
-    found = costs.anomalies([call(input_tokens=500, output_tokens=0)], history, UTC)
+    found = costs.anomalies([call(input_tokens=500, output_tokens=0)], history, UTC, TODAY)
     assert kinds(found) == ["tokens"]
     # another endpoint's calls are no baseline
     other = series(10, endpoint="lesson", input_tokens=1000)
-    assert costs.anomalies([call(input_tokens=500)], series(9) + other, UTC) == []
+    assert costs.anomalies([call(input_tokens=500)], series(9) + other, UTC, TODAY) == []
 
 
 def test_baseline_only_uses_ok_calls_strictly_before():
     failed = [call(outcome="error", at=T0 - timedelta(minutes=i + 1)) for i in range(10)]
-    assert costs.anomalies([call(input_tokens=5000)], failed, UTC) == []
+    assert costs.anomalies([call(input_tokens=5000)], failed, UTC, TODAY) == []
     # inside one range, calls count only once they are behind the call being judged
     inside = series(10)
     big = call(at=T0 - timedelta(hours=1), input_tokens=5000)
-    assert costs.anomalies([big, *inside], [], UTC) == []
+    assert costs.anomalies([big, *inside], [], UTC, TODAY) == []
 
 
 def test_ttft_anomaly_needs_both_ratio_and_two_seconds():
     history = series(10, ttft_ms=500)
-    assert costs.anomalies([call(ttft_ms=1900)], history, UTC) == []  # 3.8x but under 2 s
-    assert costs.anomalies([call(ttft_ms=2000)], history, UTC) == []  # not over 2 s
-    found = costs.anomalies([call(ttft_ms=2001)], history, UTC)
+    assert costs.anomalies([call(ttft_ms=1900)], history, UTC, TODAY) == []  # 3.8x but under 2 s
+    assert costs.anomalies([call(ttft_ms=2000)], history, UTC, TODAY) == []  # not over 2 s
+    found = costs.anomalies([call(ttft_ms=2001)], history, UTC, TODAY)
     assert kinds(found) == ["ttft"]
     assert found[0].message == (
         "Grade answer at 12:00 took 4.0 times as long to start replying "
         "as a grading call usually does"
     )
     slow = series(10, ttft_ms=1000)
-    assert costs.anomalies([call(ttft_ms=2500)], slow, UTC) == []  # over 2 s, only 2.5x
+    assert costs.anomalies([call(ttft_ms=2500)], slow, UTC, TODAY) == []  # over 2 s, only 2.5x
 
 
 def test_total_anomaly_needs_both_ratio_and_five_seconds():
     history = series(10, total_ms=1000)
-    assert costs.anomalies([call(total_ms=4900)], history, UTC) == []
-    assert costs.anomalies([call(total_ms=5000)], history, UTC) == []
-    found = costs.anomalies([call(total_ms=5001)], history, UTC)
+    assert costs.anomalies([call(total_ms=4900)], history, UTC, TODAY) == []
+    assert costs.anomalies([call(total_ms=5000)], history, UTC, TODAY) == []
+    found = costs.anomalies([call(total_ms=5001)], history, UTC, TODAY)
     assert kinds(found) == ["total"]
     assert found[0].message == (
         "Grade answer at 12:00 took 5.0 times as long to finish as a grading call usually does"
     )
     slow = series(10, total_ms=3000)
-    assert costs.anomalies([call(total_ms=8000)], slow, UTC) == []
+    assert costs.anomalies([call(total_ms=8000)], slow, UTC, TODAY) == []
 
 
 def test_anomaly_time_is_in_the_given_zone():
     zone = ZoneInfo("Asia/Karachi")  # UTC+5
-    found = costs.anomalies([call(total_ms=9000)], series(10), zone)
+    found = costs.anomalies([call(total_ms=9000)], series(10), zone, TODAY)
     assert "at 17:00 " in found[0].message
 
 
@@ -220,21 +238,21 @@ def day_found(found):
 
 def test_day_anomaly_over_twice_the_seven_day_mean():
     history = [c for d in range(1, 8) for c in day_calls(date(2026, 10, d), 100)]
-    found = day_found(costs.anomalies(day_calls(date(2026, 10, 8), 201), history, UTC))
+    found = day_found(costs.anomalies(day_calls(date(2026, 10, 8), 201), history, UTC, TODAY))
     assert len(found) == 1
     a = found[0]
     assert a.day == date(2026, 10, 8) and a.call_id is None and a.endpoint is None
     assert a.ratio == pytest.approx(2.01)
     assert a.message == "Tokens on 2026-10-08 were 2.0 times the daily average of the week before"
-    assert day_found(costs.anomalies(day_calls(date(2026, 10, 8), 200), history, UTC)) == []
+    assert day_found(costs.anomalies(day_calls(date(2026, 10, 8), 200), history, UTC, TODAY)) == []
 
 
 def test_day_anomaly_needs_three_days_and_uses_only_the_last_seven():
     two = [c for d in (6, 7) for c in day_calls(date(2026, 10, d), 100)]
-    assert day_found(costs.anomalies(day_calls(date(2026, 10, 8), 900), two, UTC)) == []
+    assert day_found(costs.anomalies(day_calls(date(2026, 10, 8), 900), two, UTC, TODAY)) == []
     far = day_calls(date(2026, 10, 1), 100000)  # eight days back: outside the window
     near = [c for d in (2, 3, 4) for c in day_calls(date(2026, 10, d), 100)]
-    found = day_found(costs.anomalies(day_calls(date(2026, 10, 9), 250), far + near, UTC))
+    found = day_found(costs.anomalies(day_calls(date(2026, 10, 9), 250), far + near, UTC, TODAY))
     assert len(found) == 1
 
 
@@ -276,7 +294,7 @@ def test_unknown_endpoint_is_listed_not_a_crash():
     assert feats[-1].label == "Other" and feats[-1].calls == 1
     assert [b.key for b in costs.by_feature([call()])][-1] == "evals"  # no Other row without need
     history = series(10, endpoint="brand_new", total_ms=1000)
-    found = costs.anomalies([call(endpoint="brand_new", total_ms=9000)], history, UTC)
+    found = costs.anomalies([call(endpoint="brand_new", total_ms=9000)], history, UTC, TODAY)
     assert kinds(found) == ["total"] and "brand_new at 12:00" in found[0].message
 
 
@@ -293,7 +311,7 @@ def test_failures_listed_not_anomalies():
     recovered_ok = call(call_id=retried, attempt=2)
     rows = [call(), err, refused, invalid_only, recovered_bad, recovered_ok]
     assert {f.id for f in costs.failures(rows)} == {err.id, refused.id, invalid_only.id}
-    assert costs.anomalies([err], series(10), UTC) == []
+    assert costs.anomalies([err], series(10), UTC, TODAY) == []
 
 
 def test_by_feature_groups():

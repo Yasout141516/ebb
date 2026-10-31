@@ -220,6 +220,7 @@ class Progress(BaseModel):
 class CostSummary(BaseModel):
     cost_usd: Decimal | None
     unpriced_calls: int
+    unreported_calls: int
     input_tokens: int | None
     output_tokens: int | None
     calls: int

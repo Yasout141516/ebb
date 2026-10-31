@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import date, datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -659,10 +659,12 @@ class PgStore:
     def llm_calls(
         self, user_id: UUID, since: datetime, until: datetime, all_tenants: bool = False
     ) -> list[LlmCall]:
+        # Named columns, so a column added to the table later can't break LlmCall(**row).
+        columns = ", ".join(f.name for f in fields(LlmCall))
         with self.pool.connection() as conn:
             rows = conn.execute(
-                "select * from llm_calls where (user_id = %s or %s) and at >= %s and at < %s"
-                " order by at, id",
+                f"select {columns} from llm_calls where (user_id = %s or %s)"
+                " and at >= %s and at < %s order by at, id",
                 (user_id, all_tenants, since, until),
             ).fetchall()
         return [LlmCall(**row) for row in rows]

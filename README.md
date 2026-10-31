@@ -46,10 +46,12 @@ Then:
 
 ```bash
 cp .env.example .env              # then put your key in GROQ_API_KEY
-docker compose up                 # starts Postgres, the API (port 8000) and the website
+docker compose up --build         # starts Postgres, the API (port 8000) and the website
 ```
 
-Open http://localhost:3000. The first start builds the images, which takes a few minutes. The
+Open http://localhost:3000. The first start builds the images, which takes a few minutes.
+After pulling a new version (this one adds Python and npm packages), use `--build` again:
+plain `docker compose up` reuses the images it already has. The
 website, the API and the database are reachable from this computer only: Ebb has no sign-in yet.
 
 The terminal app still works, next to the website and on the same data:

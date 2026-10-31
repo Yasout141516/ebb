@@ -120,6 +120,8 @@ export default function Thread({ study, onDispute }: Props) {
           />
         );
       case "learn": {
+        // Learned in another tab, its lesson never loaded here: nothing to show, not an empty card.
+        if (card.learned && card.lesson === null) return null;
         const open = learning?.id === card.id;
         const asked = cards.flatMap((c) =>
           c.kind === "exchange" && c.conceptId === card.conceptId && c.askKind === "check" ? [c.question] : [],

@@ -82,6 +82,19 @@ def test_summary_filters_by_endpoint_and_model():
     # an unpriced call: the total is unknown, so null, not 0
     assert mine["summary"]["cost_usd"] is None
     assert mine["summary"]["unpriced_calls"] == 1
+    assert mine["summary"]["unreported_calls"] == 0
+
+
+def test_summary_cost_is_unknown_when_no_tokens_were_reported():
+    services = make_services()
+    _record(
+        services,
+        _call(NOW - timedelta(hours=1), input_tokens=None, output_tokens=None, cost_usd=None),
+    )
+    body = client(services).get("/costs/summary").json()
+    assert body["summary"]["cost_usd"] is None  # not "0"
+    assert body["summary"]["unreported_calls"] == 1
+    assert body["by_endpoint"][0]["cost_usd"] is None
 
 
 def test_summary_shape_and_configured_roles_without_calls():

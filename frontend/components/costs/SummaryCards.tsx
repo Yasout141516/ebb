@@ -26,7 +26,10 @@ export default function SummaryCards({
 }) {
   // A total only when both sides were reported: a missing side is not zero.
   const known = s.input_tokens !== null && s.output_tokens !== null;
-  const unpriced = s.unpriced_calls > 0 && !s.all_free_tier;
+  const notes = [
+    s.unpriced_calls > 0 && `${s.unpriced_calls} ${s.unpriced_calls === 1 ? "call has" : "calls have"} no known price`,
+    s.unreported_calls > 0 && `${s.unreported_calls} ${s.unreported_calls === 1 ? "call" : "calls"} reported no token usage`,
+  ].filter(Boolean);
   return (
     <section aria-label="Summary" className={styles.grid}>
       <Card
@@ -35,8 +38,8 @@ export default function SummaryCards({
         note={
           s.all_free_tier
             ? "Real spend: $0.00 on free tiers"
-            : unpriced
-              ? `${s.unpriced_calls} ${s.unpriced_calls === 1 ? "call has" : "calls have"} no known price`
+            : notes.length > 0
+              ? notes.join(" · ")
               : undefined
         }
       />
