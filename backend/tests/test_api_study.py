@@ -30,7 +30,8 @@ from ebb.llm.tutor import EXHAUSTED_NOTICE, AllProvidersExhausted, Tutor
 from ebb.study import BUSY, Step, StudySessions
 from ebb.ui import next_review_line
 from tests.api_support import NOW, USER, client, make_services
-from tests.fakes import FakeTutor, make_subject
+from tests.fakes import FakeTutor, MemoryStore, learn
+from tests.fakes import make_subject as new_subject
 
 type Sse = tuple[str, dict[str, Any]]
 
@@ -47,6 +48,14 @@ class Clock:
 
     def advance(self, **delta: float) -> None:
         self.at += timedelta(**delta)
+
+
+def make_subject(store: MemoryStore, user_id: UUID, **options: Any) -> UUID:
+    """A subject whose concepts are learned already, so a session goes straight to questions."""
+    subject_id = new_subject(store, user_id, **options)
+    for concept in store.list_concepts(user_id, subject_id):
+        learn(store, user_id, concept.id)
+    return subject_id
 
 
 def _with(services: Services, tutor: Tutor, clock: Clock | None = None) -> Services:
@@ -490,7 +499,9 @@ class _Failing:
     def housekeeping(self, user_id: UUID) -> None:
         pass
 
-    def start(self, user_id: UUID, subject_id: UUID, driver: str) -> tuple[str, str, Any]:
+    def start(
+        self, user_id: UUID, subject_id: UUID, driver: str, learn_first: bool = False
+    ) -> tuple[str, str, Any]:
         def events() -> Iterator[Step]:
             if not self.at_once:
                 yield Step("Writing questions…")
@@ -653,3 +664,62 @@ def test_unknown_sessions_are_404_and_malformed_ids_422():
     assert web.get(f"/subjects/{uuid4()}/session?driver=tab-a").status_code == 404
     assert web.post("/sessions/not-a-uuid/resume", json={"driver": "tab-a"}).status_code == 422
     assert web.post(f"/subjects/{subject_id}/session", json={"driver": ""}).status_code == 422
+
+
+def _learned() -> dict[str, Any]:
+    return {"driver": "tab-a", "reply": {"learned": True}}
+
+
+def test_quiz_start_returns_a_learn_turn_for_a_new_concept():
+    services = make_services()
+    subject_id = new_subject(services.store, USER)
+
+    _, events = _start(client(services), subject_id)
+
+    assert [name for name, _ in events][-1] == "turn"
+    payload = events[-1][1]["payload"]
+    assert payload["kind"] == "learn" and payload["number"] == 0
+
+
+def test_quiz_reply_learned_continues():
+    services = make_services()
+    subject_id = new_subject(services.store, USER)
+    web = client(services)
+    thread_id, events = _start(web, subject_id)
+    concept_id = UUID(events[-1][1]["payload"]["concept_id"])
+
+    refused = _events(web.post(f"/sessions/{thread_id}/reply", json=_learned()))
+    assert refused[-1][1]["payload"]["kind"] == "learn"  # not learned in the store yet
+    learn(services.store, USER, concept_id)
+    after = _events(web.post(f"/sessions/{thread_id}/reply", json=_learned()))
+
+    assert after[-1][0] == "turn"
+    assert "question" in after[-1][1]["payload"]
+    assert after[-1][1]["payload"]["number"] == 1
+
+
+def test_an_answer_to_a_learn_turn_is_422_and_runs_nothing():
+    services = make_services()
+    subject_id = new_subject(services.store, USER)
+    web = client(services)
+    thread_id, events = _start(web, subject_id)
+    shown = events[-1][1]["payload"]
+    answer = {"driver": "tab-a", "reply": {"attempt_id": str(uuid4()), "answer": "hello"}}
+
+    response = web.post(f"/sessions/{thread_id}/reply", json=answer)
+
+    assert response.status_code == 422
+    assert services.sessions.pending(USER, thread_id) == shown  # still waiting on the lesson
+
+
+def test_skip_is_not_accepted_from_the_web():
+    services = make_services()
+    subject_id = new_subject(services.store, USER)
+    web = client(services)
+    thread_id, _ = _start(web, subject_id)
+
+    response = web.post(
+        f"/sessions/{thread_id}/reply", json={"driver": "tab-a", "reply": {"skip": True}}
+    )
+
+    assert response.status_code == 422

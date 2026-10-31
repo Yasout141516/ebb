@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from ebb.api.errors import install_error_handlers
 from ebb.api.routes_costs import router as costs_router
+from ebb.api.routes_learn import router as learn_router
 from ebb.api.routes_notes import router as notes_router
 from ebb.api.routes_progress import router as progress_router
 from ebb.api.routes_study import router as study_router
@@ -30,6 +31,7 @@ def create_app(services: Services) -> FastAPI:
     app.include_router(notes_router)
     app.include_router(progress_router)
     app.include_router(study_router)
+    app.include_router(learn_router)
     app.include_router(costs_router)
 
     @app.get("/health")

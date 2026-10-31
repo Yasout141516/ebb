@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from ebb.api.drafts import EXPIRED, DraftExpired, EmptyDraft
 from ebb.config import ConfigError
+from ebb.learn.service import LearnNotStarted
 from ebb.llm.tutor import TutorUnavailable
 from ebb.store import SubjectExists
 from ebb.study import BUSY, SessionBusy
@@ -32,6 +33,10 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(SessionBusy)
     async def session_busy(request: Request, error: SessionBusy) -> JSONResponse:
         return _reply(409, {"error": BUSY})
+
+    @app.exception_handler(LearnNotStarted)
+    async def learn_not_started(request: Request, error: LearnNotStarted) -> JSONResponse:
+        return _reply(409, {"error": "Start the lesson first."})
 
     @app.exception_handler(DraftExpired)
     async def draft_expired(request: Request, error: DraftExpired) -> JSONResponse:

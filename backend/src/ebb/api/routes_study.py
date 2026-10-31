@@ -53,7 +53,9 @@ def session_offer(
 def start_session(subject_id: UUID, body: Driver, request: Request) -> EventSourceResponse:
     services = services_of(request)
     services.sessions.housekeeping(services.user_id)
-    thread_id, greeting, events = services.sessions.start(services.user_id, subject_id, body.driver)
+    thread_id, greeting, events = services.sessions.start(
+        services.user_id, subject_id, body.driver, learn_first=True
+    )
     started = ("started", {"thread_id": thread_id, "greeting": greeting})
     return _respond(services, events, started)
 
@@ -103,11 +105,23 @@ def heartbeat(thread_id: UUID, body: Driver, request: Request) -> None:
 
 
 def _check_choice(services: Services, thread_id: str, reply: dict[str, Any]) -> None:
-    """A multiple-choice answer must pick one of the waiting question's options. An answer
-    already applied isn't checked against the question after it: it gets that turn back."""
+    """A multiple-choice answer must pick one of the waiting question's options, and no
+    answer fits a lesson turn. An answer already applied isn't checked against the question
+    after it: it gets that turn back."""
     pending = services.sessions.pending(services.user_id, thread_id, reply)
-    options = [] if pending is None else pending["question"]["options"]
     answer = reply["answer"]
+    if pending is not None and pending.get("kind") == "learn":
+        raise RequestValidationError(
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("body", "reply", "answer"),
+                    "msg": "Read the lesson first, then press Ready.",
+                    "input": answer,
+                }
+            ]
+        )
+    options = [] if pending is None else pending["question"]["options"]
     if options and parse_choice(options, answer) is None:
         error = {
             "type": "value_error",
@@ -127,8 +141,8 @@ def _respond(services: Services, events: Iterator[Event], *before: Sse) -> Event
     except SessionBusy, SessionNotFound:
         raise
     except Exception as error:
-        return event_stream(iter([*before, _failure(error)]), _encode)
-    return event_stream(_items(services, before, first, events), _encode, source=events)
+        return event_stream(iter([*before, failure(error)]), encode)
+    return event_stream(_items(services, before, first, events), encode, source=events)
 
 
 def _items(
@@ -142,12 +156,12 @@ def _items(
         for event in events:
             yield _sse(services, event)
     except Exception as error:
-        yield _failure(error)
+        yield failure(error)
     finally:
         close(events)  # a reader gone mid-turn: the turn finishes, and its answer counts
 
 
-def _failure(error: Exception) -> Sse:
+def failure(error: Exception) -> Sse:
     """The `error` event: {error} only for a configuration problem (nothing to retry);
     {notice} for a failure worth trying again."""
     match error:
@@ -180,6 +194,6 @@ def _sse(services: Services, event: Event) -> Sse:
             }
 
 
-def _encode(item: Sse) -> bytes:
+def encode(item: Sse) -> bytes:
     name, data = item
     return format_sse_event(event=name, data_str=json.dumps(jsonable_encoder(data)))

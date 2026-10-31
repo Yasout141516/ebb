@@ -14,6 +14,8 @@ from ebb.api.drafts import Drafts
 from ebb.api.services import Services
 from ebb.config import Settings
 from ebb.graph.build import build_graph
+from ebb.learn.graph import build_learn_graph
+from ebb.learn.service import LearnSessions
 from ebb.study import StudySessions
 from tests.fakes import FakeTutor, MemoryStore
 
@@ -33,6 +35,7 @@ def make_services(**overrides: Any) -> Services:
         config_error=None,
         web=None,
         sessions=StudySessions(store, graph, saver, lambda: NOW),
+        learn=LearnSessions(store, build_learn_graph(tutor, store, saver, now=lambda: NOW), saver),
         # Reads `services` when called, so it sees the tutor the overrides put in.
         drafts=Drafts(lambda: services.require_tutor(), lambda: NOW),
         user_id=USER,

@@ -17,6 +17,7 @@ from ebb.db.migrate import migrate
 from ebb.db.pool import make_pool
 from ebb.db.repo import PgStore
 from ebb.domain import Subject
+from ebb.learn.service import LearnSessions
 from ebb.llm.tutor import Tutor
 from ebb.store import Store
 from ebb.study import StudySessions
@@ -36,6 +37,7 @@ class Services:
     config_error: str | None
     web: WebSearch | None
     sessions: StudySessions
+    learn: LearnSessions
     drafts: Drafts
     user_id: UUID
     tz: ZoneInfo
@@ -78,6 +80,7 @@ class NoTutor:
 def build_services(settings: Settings) -> Services:
     from ebb.db.saver import postgres_saver
     from ebb.graph.build import build_graph
+    from ebb.learn.graph import build_learn_graph
     from ebb.llm.gateway import StoreRecorder
     from ebb.llm.quota import CappedTutor
     from ebb.llm.tutor import LangChainTutor
@@ -114,6 +117,8 @@ def build_services(settings: Settings) -> Services:
     saver = postgres_saver(store)
     graph = build_graph(tutor or NoTutor(config_error or ""), store, saver, web=web)
     sessions = StudySessions(store, graph, saver, utc_now)
+    learn_graph = build_learn_graph(tutor or NoTutor(config_error or ""), store, saver, web=web)
+    learn = LearnSessions(store, learn_graph, saver)
     services = Services(
         settings=settings,
         store=store,
@@ -121,6 +126,7 @@ def build_services(settings: Settings) -> Services:
         config_error=config_error,
         web=web,
         sessions=sessions,
+        learn=learn,
         drafts=Drafts(lambda: services.require_tutor(), utc_now),
         user_id=user_id,
         tz=tz,

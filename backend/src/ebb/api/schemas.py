@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
@@ -133,9 +133,34 @@ class QuitReply(_Reply):
     quit: Literal[True]
 
 
+class LearnedReply(_Reply):
+    learned: Literal[True]
+
+
 class ReplyBody(BaseModel):
     driver: DriverId
-    reply: AnswerReply | DisputeReply | QuitReply
+    reply: AnswerReply | DisputeReply | QuitReply | LearnedReply
+
+
+class AskReply(_Reply):
+    """A question about the lesson; `ask_id` makes a retry or double click count once."""
+
+    ask: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+    kind: Literal["check", "suggested", "typed"]
+    ask_id: Annotated[str, StringConstraints(min_length=1, max_length=100)]
+
+
+class ReadyReply(_Reply):
+    ready: Literal[True]
+
+
+class LearnReplyBody(BaseModel):
+    reply: AskReply | ReadyReply
+
+
+class LessonPage(BaseModel):
+    lesson: dict[str, Any]  # a kept lesson and its exchanges, as the learn turn shows them
+    exchanges: list[dict[str, Any]]
 
 
 class Streak(BaseModel):
