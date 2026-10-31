@@ -270,6 +270,9 @@ def at_second_lesson(s: Setup, ready: bool = False) -> tuple[str, Pending]:
         s.sessions.reply(USER, thread_id, "tab-a", {"learned" if ready else "skip": True})
     )
     for _ in range(2):
+        # Answers a second apart: only the latest answer can be disputed, and the store
+        # breaks a tie on graded_at by (random) attempt id.
+        s.clock.advance(seconds=1)
         wrong = {"answer": "no idea", "attempt_id": str(uuid4())}
         turn = ending(s.sessions.reply(USER, thread_id, "tab-a", wrong))
     assert isinstance(turn, Pending)
