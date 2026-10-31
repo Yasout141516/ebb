@@ -11,6 +11,7 @@ import styles from "./MemoryPanel.module.css";
 const TIDE_TIP = "Tide: the chance you'd recall it right now. It ebbs every day and rises when you review.";
 const STAGE_TIP = "Stage: how far along its reviews are. Each right answer moves it up and widens the gap.";
 const LOAD_FAILED = "Couldn't load your memory levels.";
+const LEARNING = "learning · not quizzed yet";
 
 /** The gap before the next review if the next answer at this stage is right. */
 export function nextGap(stage: number): number {
@@ -150,13 +151,15 @@ export function NothingDue({ at, className = styles.calm }: { at: string; classN
 
 type Props = {
   concepts: Concepts | null;
+  /** The concept in its learn phase, by id. */
+  learning?: string | null;
   failed?: boolean;
   onRetry?: () => void;
   now?: Date;
 };
 
 /** The right column: what's due, and every concept's tide, band and stage. */
-export default function MemoryPanel({ concepts, failed = false, onRetry, now = new Date() }: Props) {
+export default function MemoryPanel({ concepts, learning = null, failed = false, onRetry, now = new Date() }: Props) {
   const due = concepts ? dueFirst(concepts.concepts) : [];
   const id = useId();
   return (
@@ -219,7 +222,11 @@ export default function MemoryPanel({ concepts, failed = false, onRetry, now = n
                     <Tip tip={STAGE_TIP} className={styles.stage}>
                       <Dots stage={c.stage} />
                       <span className={styles.stageText}>
-                        {c.tide === null ? "No reviews yet" : `level ${c.stage} · next gap ${nextGap(c.stage)} days`}
+                        {c.id === learning
+                          ? LEARNING
+                          : c.tide === null
+                            ? "No reviews yet"
+                            : `level ${c.stage} · next gap ${nextGap(c.stage)} days`}
                       </span>
                     </Tip>
                   </span>
@@ -260,6 +267,7 @@ export function MemoryPeek({ concepts }: { concepts: Concepts | null }) {
 /** The bottom sheet's body (375 px), as tpl-WorkspaceMobile lays it out; it links to `subjectId`'s dashboard. */
 export function MemorySheetBody({
   concepts,
+  learning = null,
   subjectId,
   failed = false,
   onRetry,
@@ -300,7 +308,7 @@ export function MemorySheetBody({
             <span className={styles.sheetName}>{c.name}</span>
             <span className={styles.sheetLevel}>
               <TideValue tide={c.tide} className={styles.sheetValue} />{" "}
-              <span className={styles.band}>{c.band}</span>
+              <span className={styles.band}>{c.id === learning ? LEARNING : c.band}</span>
               <AheadText c={c} />
             </span>
           </li>

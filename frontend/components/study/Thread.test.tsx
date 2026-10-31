@@ -1,10 +1,10 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_URL, ApiError, getJson, postJson } from "@/lib/api";
 import { saveThread, rememberThread, type Card } from "@/lib/session";
 import { CUT_OFF, streamPost, type SseEvent } from "@/lib/sse";
-import type { Finished, TurnPayload } from "@/lib/types";
+import type { Exchange, Finished, LearnPayload, LearnTurn, QuizTurn, StoredLesson, TurnPayload } from "@/lib/types";
 import Thread from "./Thread";
 import useStudy from "./useStudy";
 import Workspace from "./Workspace";
@@ -107,7 +107,7 @@ const lastStream = async () => {
   return streams[streams.length - 1];
 };
 
-async function startedAt(turn: TurnPayload) {
+async function startedAt(turn: QuizTurn) {
   render(<Harness />);
   const stream = await lastStream();
   stream.emit("started", { thread_id: "t1", greeting: "Welcome back — 3 ideas are ebbing. Reviewing those first." });
@@ -496,5 +496,210 @@ describe("this tab's own session", () => {
     act(() => void window.dispatchEvent(new Event("pagehide")));
     expect(fetch).not.toHaveBeenCalled();
     fetch.mockRestore();
+  });
+});
+
+describe("the learn phase", () => {
+  const learnTurn = (over: Partial<LearnTurn> = {}): LearnTurn => ({
+    kind: "learn",
+    concept: "TCP handshake",
+    concept_id: "c1",
+    number: 0,
+    feedback: null,
+    lesson: null,
+    notices: [],
+    can_dispute: false,
+    dispute_result: null,
+    ...over,
+  });
+  const notes = {
+    kind: "chunk" as const,
+    ref: "k1",
+    label: "Week_1.pdf, p. 14",
+    page: 14,
+    quote: "The SYN carries the starting number.",
+    name: "Week_1.pdf",
+    heading: null,
+    title: null,
+  };
+  const lesson: StoredLesson = {
+    concept_id: "c1",
+    markdown: "# TCP handshake\n\nThree messages open a connection.\n\n| Step | Flags |\n|---|---|\n| 1 | SYN |",
+    citations: [notes],
+    web_pages: [],
+    suggestions: ["How do SYN cookies work?", "What does TLS add?"],
+    checks: ["Why can't the server skip the SYN-ACK?", "What ack follows a SYN numbered 1000?"],
+    source_summary: { notes: 2, notes_pages: [12, 15], web_pages: 2, label: null },
+    model: "m",
+    written_at: "2026-10-31T09:00:00Z",
+    learned_at: null,
+  };
+  const payload = (over: Partial<LearnPayload> = {}): LearnPayload => ({
+    kind: "learn",
+    concept_id: "c1",
+    concept: "TCP handshake",
+    lesson,
+    exchanges: [],
+    suggestions: lesson.suggestions,
+    notices: [],
+    ...over,
+  });
+  const exchange = (question: string, kind: Exchange["kind"]): Exchange => ({
+    position: 0,
+    kind,
+    question,
+    answer: "Because the SYN-ACK carries the server's own number.",
+    citations: [],
+    suggestions: ["What is a SYN flood?"],
+    asked_at: "2026-10-31T09:01:00Z",
+  });
+
+  /** The quiz paused on a new concept; its lesson is being started. */
+  async function learning(turn: LearnTurn = learnTurn()) {
+    await startedAt(turn);
+    await waitFor(() => expect(streams.at(-1)!.path).toBe("/concepts/c1/learn"));
+    return streams.at(-1)!;
+  }
+
+  async function lessonShown() {
+    const start = await learning();
+    start.emit("learn", { payload: payload() });
+    await start.end();
+  }
+
+  it("LearnLesson streams deltas then shows chips", async () => {
+    const start = await learning();
+    expect(start.body).toEqual({});
+    start.emit("step", { label: "Writing the lesson…" });
+    expect(screen.getByText(/Writing the lesson…/)).toBeInTheDocument();
+    start.emit("text", { delta: "# TCP handshake\n\nThree mess" });
+    start.emit("text", { delta: "ages, streamed  " });
+    const article = screen.getByRole("article", { name: "Lesson" });
+    expect(within(article).getByText("Lesson · quiz opens when you press Ready")).toBeInTheDocument();
+    expect(within(article).getByText(/Three messages, streamed/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "I'm ready, quiz me" })).not.toBeInTheDocument();
+    // The kept markdown replaces what streamed.
+    start.emit("learn", { payload: payload() });
+    await start.end();
+    expect(screen.queryByText(/streamed/)).not.toBeInTheDocument();
+    expect(within(article).getByText("Three messages open a connection.")).toBeInTheDocument();
+    expect(within(article).getByRole("table")).toBeInTheDocument();
+    expect(within(article).getByText("Your notes · pp. 12 to 15")).toBeInTheDocument();
+    expect(within(article).getByText("2 web sources")).toBeInTheDocument();
+    expect(within(article).getByRole("button", { name: "[Notes p.14]" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Answer this for me" })).toHaveLength(2);
+    expect(screen.getByText("Suggested next")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "What does TLS add?" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "I'm ready, quiz me" })).toBeEnabled();
+    // Kept in the tab, like the quiz's cards.
+    const saved = JSON.parse(window.sessionStorage.getItem("ebb-thread:t1")!) as Card[];
+    expect(saved.find((c) => c.kind === "learn")).toMatchObject({ conceptId: "c1", lesson: { markdown: lesson.markdown } });
+  });
+
+  it("discard clears text and shows Retry", async () => {
+    await lessonShown();
+    await userEvent.click(screen.getByRole("button", { name: "What does TLS add?" }));
+    const ask = streams.at(-1)!;
+    const sent = ask.body as { reply: { ask: string; kind: string; ask_id: string } };
+    expect(sent.reply).toMatchObject({ ask: "What does TLS add?", kind: "suggested" });
+    ask.emit("text", { delta: "TLS adds encryp" });
+    expect(screen.getByText("TLS adds encryp")).toBeInTheDocument();
+    ask.emit("discard", {});
+    expect(screen.queryByText("TLS adds encryp")).not.toBeInTheDocument();
+    ask.emit("error", { notice: EXHAUSTED });
+    await ask.end();
+    expect(screen.getByRole("alert")).toHaveTextContent(EXHAUSTED);
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry).toHaveFocus();
+    expect(screen.getByText("What does TLS add?", { selector: "p" })).toBeInTheDocument(); // the question stays
+    await userEvent.click(retry);
+    const again = streams.at(-1)!;
+    expect(again).not.toBe(ask);
+    expect(again.path).toBe("/concepts/c1/learn/reply");
+    expect(again.body).toEqual(sent); // the same ask_id: the server retries that question
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("Answer this for me posts a check ask", async () => {
+    await lessonShown();
+    const check = lesson.checks[0];
+    await userEvent.click(screen.getAllByRole("button", { name: "Answer this for me" })[0]);
+    const ask = streams.at(-1)!;
+    expect(ask.path).toBe("/concepts/c1/learn/reply");
+    const sent = ask.body as { reply: { ask: string; kind: string; ask_id: string } };
+    expect(sent.reply.ask).toBe(check);
+    expect(sent.reply.kind).toBe("check");
+    expect(sent.reply.ask_id).toMatch(/^[0-9a-f-]{36}$/);
+    // While it is answered, nothing else can be asked.
+    expect(screen.getByRole("button", { name: "Answer this for me" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "I'm ready, quiz me" })).toBeDisabled();
+    expect(screen.getByPlaceholderText("Ask your own question about TCP handshake")).toBeDisabled();
+    ask.emit("text", { delta: "Because the SYN-ACK" });
+    ask.emit("learn", {
+      payload: payload({ exchanges: [exchange(check, "check")], suggestions: ["What is a SYN flood?"] }),
+    });
+    await ask.end();
+    expect(screen.getByText("Because the SYN-ACK carries the server's own number.")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Answer this for me" })).toHaveLength(1); // asked: no button
+    expect(screen.getByRole("button", { name: "What is a SYN flood?" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "What does TLS add?" })).not.toBeInTheDocument();
+  });
+
+  it("composer placeholder names the concept during learn", async () => {
+    await lessonShown();
+    const box = screen.getByPlaceholderText("Ask your own question about TCP handshake");
+    expect(box).toBeEnabled();
+    await userEvent.type(box, "Is UDP the same?{Enter}");
+    const sent = streams.at(-1)!.body as { reply: { ask: string; kind: string } };
+    expect(sent.reply).toMatchObject({ ask: "Is UDP the same?", kind: "typed" });
+    expect(screen.getByText("Is UDP the same?", { selector: "p" })).toBeInTheDocument();
+  });
+
+  it("Ready posts ready then learned to the quiz", async () => {
+    await lessonShown();
+    await userEvent.click(screen.getByRole("button", { name: "I'm ready, quiz me" }));
+    const ready = streams.at(-1)!;
+    expect(ready.path).toBe("/concepts/c1/learn/reply");
+    expect(ready.body).toEqual({ reply: { ready: true } });
+    ready.emit("learned", { concept_id: "c1" });
+    await ready.end();
+    await waitFor(() => expect(streams.at(-1)!.path).toBe("/sessions/t1/reply"));
+    const quiz = streams.at(-1)!;
+    expect(quiz.body).toEqual({ driver: "drv-1", reply: { learned: true } });
+    quiz.emit("turn", { payload: mcq({ concept: "TCP handshake" }) });
+    await quiz.end();
+    expect(screen.getByText("Multiple choice · TCP handshake · Q1")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "I'm ready, quiz me" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Answer this for me" })).not.toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "Lesson" })).toHaveTextContent("Three messages open a connection.");
+    expect(screen.getByRole("radio", { name: "64" })).toHaveFocus();
+    expect(screen.getByPlaceholderText("Type your answer…")).toBeDisabled();
+  });
+
+  it("shows the last answer's grade above the lesson, and starts the lesson again on a refresh", async () => {
+    const graded = learnTurn({
+      feedback: { value: "correct", explanation: "Yes.", misconception: null, claims: [], citations: [], general_knowledge: false },
+      can_dispute: true,
+    });
+    const start = await learning(graded);
+    start.emit("learn", { payload: payload() });
+    await start.end();
+    const order = screen.getAllByRole("article").map((a) => a.getAttribute("aria-label"));
+    expect(order).toEqual(["Grade: Correct", "Lesson"]);
+    cleanup();
+    streams = [];
+    // The same tab, refreshed: the saved cards show at once, then the session and the lesson reconnect.
+    render(<Harness />);
+    const resume = await lastStream();
+    expect(resume.path).toBe("/sessions/t1/resume");
+    expect(screen.getByText("Three messages open a connection.")).toBeInTheDocument();
+    resume.emit("turn", { payload: graded });
+    await resume.end();
+    await waitFor(() => expect(streams.at(-1)!.path).toBe("/concepts/c1/learn"));
+    const again = streams.at(-1)!;
+    again.emit("learn", { payload: payload() });
+    await again.end();
+    expect(screen.getAllByRole("article", { name: "Lesson" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "I'm ready, quiz me" })).toHaveLength(1);
   });
 });

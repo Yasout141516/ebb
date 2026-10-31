@@ -138,6 +138,64 @@ export type TurnPayload = {
   dispute_result: DisputeResult | null;
 };
 
+/** A question's turn has no `kind`; the learn phase's turn says "learn". */
+export type QuestionTurn = TurnPayload & { kind?: undefined };
+
+/**
+ * The quiz pausing on a new concept for its lesson: the previous answer's grade, lesson,
+ * notices and dispute come with it, as with a question.
+ */
+export type LearnTurn = Omit<TurnPayload, "question"> & { kind: "learn"; concept_id: string };
+
+export type QuizTurn = QuestionTurn | LearnTurn;
+
+// The learn phase (routes_learn.py)
+
+export type AskKind = "check" | "suggested" | "typed";
+
+/** What a lesson was written from; `label` only when no web page was ("Your notes only", …). */
+export type SourceSummary = { notes: number; notes_pages: number[]; web_pages: number; label: string | null };
+
+export type StoredLesson = {
+  concept_id: string;
+  markdown: string;
+  citations: Citation[];
+  web_pages: { url: string; title: string; site: string }[];
+  suggestions: string[];
+  checks: string[];
+  source_summary: SourceSummary;
+  model: string;
+  written_at: string;
+  learned_at: string | null;
+};
+
+/** A question asked about the lesson, and its answer. */
+export type Exchange = {
+  position: number;
+  kind: AskKind;
+  question: string;
+  answer: string;
+  citations: Citation[];
+  suggestions: string[];
+  asked_at: string;
+};
+
+/** The learn phase's waiting turn: the lesson (once written), the questions so far, what to ask next. */
+export type LearnPayload = {
+  kind: "learn";
+  concept_id: string;
+  concept: string;
+  lesson: StoredLesson | null;
+  exchanges: Exchange[];
+  suggestions: string[];
+  notices: string[];
+};
+
+export type LessonPage = { lesson: StoredLesson; exchanges: Exchange[] };
+
+export type AskReply = { ask: string; kind: AskKind; ask_id: string };
+export type LearnReply = AskReply | { ready: true };
+
 export type ConceptResult = {
   concept: string;
   concept_id: string;
@@ -164,7 +222,7 @@ export type StreamError = { notice: string } | { error: string };
 export type StudyEvent =
   | { event: "started"; data: Started }
   | { event: "step"; data: Step }
-  | { event: "turn"; data: { payload: TurnPayload } }
+  | { event: "turn"; data: { payload: QuizTurn } }
   | { event: "finished"; data: Finished }
   | { event: "error"; data: StreamError };
 
@@ -173,7 +231,8 @@ export type DisputeReply = {
   dispute: { id: string; reason: DisputeReason; explanation: string };
 };
 export type QuitReply = { quit: true };
-export type Reply = AnswerReply | DisputeReply | QuitReply;
+export type LearnedReply = { learned: true };
+export type Reply = AnswerReply | DisputeReply | QuitReply | LearnedReply;
 export type ReplyBody = { driver: string; reply: Reply };
 
 // Progress

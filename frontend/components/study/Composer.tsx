@@ -4,20 +4,30 @@ import { useEffect, useRef, useState } from "react";
 import styles from "./Composer.module.css";
 
 type Props = {
-  /** Only while a short-answer question waits. */
+  /** Only while a short-answer question waits, or a lesson takes questions. */
   enabled: boolean;
   onSend: (text: string) => void;
+  label?: string;
+  placeholder?: string;
+  /** Take focus when enabled (not while an error card's Retry has it). */
+  autoFocus?: boolean;
 };
 
 /** The answer box at the bottom of the thread: Enter sends, Shift+Enter starts a new line. */
-export default function Composer({ enabled, onSend }: Props) {
+export default function Composer({
+  enabled,
+  onSend,
+  label = "Your answer",
+  placeholder = "Type your answer…",
+  autoFocus = true,
+}: Props) {
   const [draft, setDraft] = useState("");
   const box = useRef<HTMLTextAreaElement>(null);
   const canSend = enabled && draft.trim() !== "";
 
   useEffect(() => {
-    if (enabled) box.current?.focus();
-  }, [enabled]);
+    if (enabled && autoFocus) box.current?.focus();
+  }, [enabled, autoFocus]);
 
   function send() {
     if (!canSend) return;
@@ -30,7 +40,7 @@ export default function Composer({ enabled, onSend }: Props) {
       <div className={styles.inner}>
         <div className={styles.box}>
           <label htmlFor="composer" className={styles.hidden}>
-            Your answer
+            {label}
           </label>
           <textarea
             id="composer"
@@ -44,7 +54,7 @@ export default function Composer({ enabled, onSend }: Props) {
                 send();
               }
             }}
-            placeholder="Type your answer…"
+            placeholder={placeholder}
             disabled={!enabled}
             className={styles.input}
           />

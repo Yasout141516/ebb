@@ -1,8 +1,8 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getJson } from "@/lib/api";
-import type { Source } from "@/lib/types";
+import { ApiError, getJson } from "@/lib/api";
+import type { ConceptState, Concepts, LessonPage, Source } from "@/lib/types";
 import SourceList from "./SourceList";
 import SubjectColumn from "./SubjectColumn";
 
@@ -185,5 +185,86 @@ describe("the 375 px drawer", () => {
     await userEvent.click(screen.getByRole("link", { name: /Computer Networks/ }));
     document.removeEventListener("click", stay, true);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("Read the lesson again", () => {
+  const state = (id: string, name: string, tide: number | null): ConceptState => ({
+    id,
+    name,
+    description: "",
+    stage: tide === null ? 0 : 1,
+    tide,
+    band: tide === null ? "new" : "ebbing",
+    next_review_at: null,
+    due: false,
+    projected_tide: null,
+  });
+  const concepts: Concepts = {
+    concepts: [state("c1", "TCP handshake", null), state("c2", "Subnetting", 0.71), state("c3", "DNS", 0.48)],
+    due_count: 0,
+    next_review_at: null,
+  };
+  const page: LessonPage = {
+    lesson: {
+      concept_id: "c2",
+      markdown: "# Subnetting\n\nA mask splits an address.",
+      citations: [],
+      web_pages: [],
+      suggestions: [],
+      checks: ["How many hosts fit in a /26?"],
+      source_summary: { notes: 0, notes_pages: [], web_pages: 0, label: "General knowledge · not from your notes" },
+      model: "m",
+      written_at: "2026-10-30T09:00:00Z",
+      learned_at: "2026-10-30T09:10:00Z",
+    },
+    exchanges: [
+      {
+        position: 0,
+        kind: "typed",
+        question: "Why /26?",
+        answer: "Six bits are left for hosts.",
+        citations: [],
+        suggestions: [],
+        asked_at: "2026-10-30T09:05:00Z",
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.mocked(getJson).mockImplementation(async (path: string) => {
+      if (path === "/subjects") return [{ id: "s1", name: "Computer Networks", concept_count: 3, due_count: 0 }];
+      if (path === "/subjects/s1/sources") return [];
+      if (path === "/concepts/c2/lesson") return page;
+      if (path === "/concepts/c3/lesson") throw new ApiError(404, "Not found."); // studied before lessons
+      throw new Error(`unexpected ${path}`);
+    });
+  });
+
+  it("Read the lesson again shows stored exchanges", async () => {
+    render(<SubjectColumn subjectId="s1" updates={0} concepts={concepts} learning="c1" />);
+    const list = screen.getByRole("list", { name: "Concepts" });
+    expect(within(list).getByText("Learning now · not quizzed yet")).toBeInTheDocument();
+    const again = await within(list).findByRole("button", { name: "Read the lesson again" });
+    expect(again).toHaveAccessibleDescription("Subnetting");
+    expect(within(list).getAllByRole("button", { name: "Read the lesson again" })).toHaveLength(1);
+    await userEvent.click(again);
+    const dialog = await screen.findByRole("dialog", { name: "Lesson: Subnetting" });
+    expect(await within(dialog).findByText("A mask splits an address.")).toBeInTheDocument();
+    expect(within(dialog).getByText("How many hosts fit in a /26?")).toBeInTheDocument();
+    expect(within(dialog).getByText("Why /26?")).toBeInTheDocument();
+    expect(within(dialog).getByText("Six bits are left for hosts.")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "Answer this for me" })).not.toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(again).toHaveFocus();
+  });
+
+  it("offers a lesson learned in this tab without asking the API", async () => {
+    render(<SubjectColumn subjectId="s1" updates={0} concepts={concepts} learned={["c1"]} />);
+    const list = screen.getByRole("list", { name: "Concepts" });
+    const buttons = await within(list).findAllByRole("button", { name: "Read the lesson again" });
+    expect(buttons[0]).toHaveAccessibleDescription("TCP handshake");
+    expect(getJson).not.toHaveBeenCalledWith("/concepts/c1/lesson", expect.anything());
   });
 });

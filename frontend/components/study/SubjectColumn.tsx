@@ -4,9 +4,11 @@ import Link from "next/link";
 import { type RefObject, useEffect, useId, useRef, useState } from "react";
 import ErrorCard from "@/components/ErrorCard";
 import { ThemeToggle } from "@/components/Header";
-import { getJson } from "@/lib/api";
+import { ApiError, getJson } from "@/lib/api";
 import { modalKeys, useFocusReturn } from "@/lib/modal";
-import type { Source, SubjectSummary } from "@/lib/types";
+import { percent } from "@/lib/format";
+import type { ConceptState, Concepts, LessonPage, Source, SubjectSummary } from "@/lib/types";
+import LessonDialog from "./LessonDialog";
 import { Gauge } from "./MemoryPanel";
 import SourceList from "./SourceList";
 import styles from "./SubjectColumn.module.css";
@@ -57,17 +59,58 @@ function DrawerOpen({ drawer, bar }: { drawer: RefObject<HTMLElement | null>; ba
   return null;
 }
 
+/**
+ * The concepts among `candidates` (ids) with a lesson learned, asked of the API once each
+ * (one studied before lessons has none). `known` are learned already, without asking.
+ */
+function useLearnedLessons(candidates: string[], known: string[]): Set<string> {
+  const [found, setFound] = useState<string[]>([]);
+  const asked = useRef(new Set<string>());
+  const controller = useRef<AbortController | null>(null);
+  const key = candidates.filter((id) => !known.includes(id)).join(" ");
+  useEffect(() => {
+    controller.current ??= new AbortController();
+    const signal = controller.current.signal;
+    for (const id of key.split(" ").filter((id) => id && !asked.current.has(id))) {
+      asked.current.add(id);
+      getJson<LessonPage>(`/concepts/${id}/lesson`, signal)
+        .then((page) => {
+          if (page.lesson.learned_at !== null) setFound((f) => [...f, id]);
+        })
+        .catch((error) => {
+          // None kept (404): it stays asked. Anything else is asked again with the next list.
+          if (!(error instanceof ApiError && error.status === 404)) asked.current.delete(id);
+        });
+    }
+  }, [key]);
+  useEffect(() => () => controller.current?.abort(), []);
+  return new Set([...found, ...known]);
+}
+
+/** A concept's line under its name in the left column. */
+function conceptMeta(c: ConceptState, learning: boolean): string {
+  if (learning) return "Learning now · not quizzed yet";
+  if (c.tide === null) return "Not quizzed yet";
+  return `Tide ${percent(c.tide)}%${c.due ? ", due today" : ""}`;
+}
+
 type Props = {
   subjectId: string;
   /** Changes after every turn: the due counts are loaded again. */
   updates: number;
+  /** The subject's concepts, as the memory panel has them. */
+  concepts?: Concepts | null;
+  /** The concept in its learn phase, by id. */
+  learning?: string | null;
+  /** The concepts learned in this tab, by id. */
+  learned?: string[];
 };
 
 /**
  * The left column: the learner's subjects (switching leaves the session open and
  * resumable) and this subject's sources. At 375 px it opens from the bar's menu button.
  */
-export default function SubjectColumn({ subjectId, updates }: Props) {
+export default function SubjectColumn({ subjectId, updates, concepts = null, learning = null, learned = [] }: Props) {
   const subjects = useLoaded<SubjectSummary[]>("/subjects", updates);
   const sources = useLoaded<Source[]>(`/subjects/${subjectId}/sources`, updates);
   const [open, setOpen] = useState(false);
@@ -76,6 +119,14 @@ export default function SubjectColumn({ subjectId, updates }: Props) {
   const asideId = useId();
   const current = subjects.value?.find((s) => s.id === subjectId);
   const count = sources.value?.length;
+  const listId = useId();
+  const list = concepts?.concepts ?? [];
+  // Only a concept quizzed at least once can have a lesson learned on another visit.
+  const lessons = useLearnedLessons(
+    list.filter((c) => c.tide !== null && c.id !== learning).map((c) => c.id),
+    learned,
+  );
+  const [reading, setReading] = useState<ConceptState | null>(null);
 
   return (
     <>
@@ -148,6 +199,33 @@ export default function SubjectColumn({ subjectId, updates }: Props) {
             New subject
           </Link>
         </section>
+        {list.length > 0 && (
+          <section className={styles.section}>
+            <h2 id={listId} className={styles.heading}>
+              Concepts
+            </h2>
+            <ul aria-labelledby={listId} className={styles.concepts}>
+              {list.map((c) => (
+                <li key={c.id} className={`${styles.concept} ${c.id === learning ? styles.learning : ""}`}>
+                  <span id={`${listId}-${c.id}`} className={styles.conceptName}>
+                    {c.name}
+                  </span>
+                  <span className={styles.conceptMeta}>{conceptMeta(c, c.id === learning)}</span>
+                  {lessons.has(c.id) && c.id !== learning && (
+                    <button
+                      type="button"
+                      onClick={() => setReading(c)}
+                      aria-describedby={`${listId}-${c.id}`}
+                      className={`${styles.again} hov`}
+                    >
+                      Read the lesson again
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
         <SourceList
           subjectId={subjectId}
           sources={sources.value}
@@ -155,6 +233,7 @@ export default function SubjectColumn({ subjectId, updates }: Props) {
           onRetry={sources.retry}
         />
       </aside>
+      {reading && <LessonDialog conceptId={reading.id} concept={reading.name} onClose={() => setReading(null)} />}
     </>
   );
 }

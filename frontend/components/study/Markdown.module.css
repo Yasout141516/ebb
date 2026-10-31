@@ -1,0 +1,132 @@
+/* The lesson's text, from the design canvas's "Study: learn phase". */
+.markdown {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 17px;
+  line-height: 1.7;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+/* An answer: the size of a message, not of the lesson. */
+.compact {
+  gap: 10px;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.markdown > * {
+  margin: 0;
+}
+
+.markdown h1 {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: clamp(30px, 3.4vw, 42px);
+  line-height: 1.1;
+  letter-spacing: -0.015em;
+}
+
+.markdown h2 {
+  margin-top: 8px;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.markdown h3,
+.markdown h4 {
+  margin-top: 4px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.markdown strong {
+  font-weight: 600;
+}
+
+.markdown ul,
+.markdown ol {
+  padding-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.markdown a {
+  color: var(--accent-ink);
+  text-underline-offset: 2px;
+}
+
+.markdown blockquote {
+  padding: 4px 0 4px 14px;
+  border-left: 3px solid var(--line);
+  color: var(--ink-2);
+}
+
+.markdown code {
+  font: 500 0.88em var(--mono);
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+
+.markdown pre {
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  overflow-x: auto;
+  line-height: 1.5;
+}
+
+.markdown pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 14px;
+}
+
+.tableFrame {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.tableFrame table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.tableFrame th,
+.tableFrame td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.tableFrame th {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: var(--surface-2);
+}
+
+.tableFrame tr:last-child td {
+  border-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .markdown {
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  .markdown h2 {
+    font-size: 22px;
+  }
+}

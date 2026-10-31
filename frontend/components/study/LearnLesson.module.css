@@ -1,0 +1,149 @@
+/* The design canvas's "Study: learn phase" lesson card. */
+.card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: clamp(20px, 3vw, 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: var(--shadow);
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.notes,
+.web {
+  font: 500 12px var(--mono);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.notes {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.web {
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+}
+
+.badge {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.checks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.checksTitle {
+  margin: 8px 0 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 26px;
+}
+
+.checksNote {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink-3);
+}
+
+.checkList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  counter-reset: check;
+}
+
+.check {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--bg);
+  counter-increment: check;
+}
+
+.checkText {
+  flex: 1 1 320px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.checkText::before {
+  content: counter(check) ". ";
+}
+
+.answer {
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 10px;
+  border: 1px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  font: 500 14px var(--sans);
+  cursor: pointer;
+}
+
+.answer:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 640px) {
+  .card {
+    padding: 18px;
+    gap: 16px;
+  }
+
+  .checkText {
+    flex-basis: 100%;
+  }
+}

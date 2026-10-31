@@ -32,4 +32,9 @@ describe("ResumeCard", () => {
     expect(screen.queryByRole("button", { name: "Resume" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start fresh" })).toBeInTheDocument();
   });
+
+  it("names the lesson when the session stopped on one", () => {
+    render(<ResumeCard offer={offer({ number: 0 })} now={NOW} onResume={() => {}} onStartFresh={() => {}} />);
+    expect(screen.getByText(/^You stopped on the lesson for DNS resolution, /)).toBeInTheDocument();
+  });
 });

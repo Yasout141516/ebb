@@ -1,0 +1,51 @@
+/* The design canvas's "Ready to be quizzed?" card. */
+.card {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 20px 22px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: var(--shadow);
+}
+
+.text {
+  flex: 1 1 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 22px;
+}
+
+.note {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.ready {
+  height: 48px;
+  padding: 0 22px;
+  border-radius: 10px;
+  border: 0;
+  background: var(--primary-bg);
+  color: var(--primary-ink);
+  font: 500 15px var(--sans);
+  cursor: pointer;
+}
+
+.ready:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

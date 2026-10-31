@@ -13,6 +13,8 @@ import {
   disputeSent,
   driverId,
   forgetThread,
+  type LearnCard,
+  learningCard,
   loadThread,
   type QuestionCard,
   rememberThread,
@@ -22,7 +24,8 @@ import {
   waitingQuestion,
 } from "@/lib/session";
 import { streamPost, type SseEvent } from "@/lib/sse";
-import type { DisputeReason, Finished, Offer, SessionOffer, Started, StreamError, TurnPayload } from "@/lib/types";
+import type { AskKind, DisputeReason, Finished, Offer, QuizTurn, SessionOffer, Started, StreamError } from "@/lib/types";
+import useLearn from "./useLearn";
 
 /** How often an open session renews this tab's lease on it. */
 const HEARTBEAT_MS = 30_000;
@@ -33,8 +36,11 @@ const FINISHING_MS = 30_000;
 
 type Streaming = { refused?: (error: ApiError) => boolean; step?: string | null; resumed?: boolean };
 
-/** A failure shown as the error card; `retry` sends the failed request again. */
-export type StudyError = { message: string; retry: (() => void) | null };
+/**
+ * A failure shown as the error card; `retry` sends the failed request again. `focus`: text
+ * it was writing was wiped, so focus moves to Retry.
+ */
+export type StudyError = { message: string; retry: (() => void) | null; focus?: boolean };
 
 export type Study = {
   cards: Card[];
@@ -51,12 +57,22 @@ export type Study = {
   backup: boolean;
   /** The question waiting for an answer, if one is and nothing is in flight. */
   waiting: QuestionCard | null;
+  /** The new concept's lesson the session is paused on, until Ready is pressed. */
+  learning: LearnCard | null;
+  /** The lesson or answer streaming in, until its turn replaces it. */
+  live: string | null;
+  /** The concepts learned in this tab, whose lessons can be read again. */
+  learned: string[];
   /** The session is under way: its End session button shows. */
   open: boolean;
   /** Counts the turns and endings so far: memory levels may have changed with each. */
   updates: number;
   answer: (text: string, choice: number | null) => void;
   dispute: (gradeId: string, reason: DisputeReason, explanation: string) => void;
+  /** Ask a question about the lesson being learned. */
+  ask: (question: string, kind: AskKind) => void;
+  /** I'm ready, quiz me. */
+  ready: () => void;
   end: () => void;
   resume: () => void;
   startFresh: () => void;
@@ -67,7 +83,8 @@ const dayCard = (): Card => ({ kind: "day", id: uuid(), text: `Today · ${clockT
 /**
  * One subject's study session in this tab: opening it (reconnect, Resume card or a new
  * start), its streamed turns, and the learner's replies. Every request that fails can be
- * sent again as it was, so a resent answer keeps its attempt id.
+ * sent again as it was, so a resent answer keeps its attempt id. A turn that pauses on a
+ * new concept hands over to useLearn until the concept is learned.
  */
 export default function useStudy(subjectId: string): Study {
   const [cards, setCards] = useState<Card[]>([]);
@@ -79,6 +96,7 @@ export default function useStudy(subjectId: string): Study {
   const [updates, setUpdates] = useState(0);
   const thread = useRef<string | null>(null); // the open session's id, once known
   const inFlight = useRef<AbortController | null>(null);
+  const learn = useLearn(setCards, { onLearned: () => reply({ learned: true }), onFatal: setFatal });
 
   useEffect(() => {
     if (thread.current) saveThread(thread.current, cards);
@@ -87,6 +105,7 @@ export default function useStudy(subjectId: string): Study {
   /** A new request, showing `step` until the API names one; the one before it (if any) is abandoned. */
   function begin(step: string | null = null): AbortSignal {
     inFlight.current?.abort();
+    learn.cancel();
     const controller = new AbortController();
     inFlight.current = controller;
     setRunning(true);
@@ -116,7 +135,7 @@ export default function useStudy(subjectId: string): Study {
         break;
       case "turn":
         setStep(null);
-        setCards((c) => applyTurn(c, (event.data as { payload: TurnPayload }).payload, resumed));
+        setCards((c) => applyTurn(c, (event.data as { payload: QuizTurn }).payload, resumed));
         setUpdates((n) => n + 1);
         break;
       case "finished":
@@ -316,9 +335,24 @@ export default function useStudy(subjectId: string): Study {
     send();
   }
 
+  const busy = running || learn.running;
   const finished = cards.some((c) => c.kind === "summary");
-  const waiting = running || offer ? null : waitingQuestion(cards);
-  const sessionOpen = !finished && offer === null && cards.some((c) => c.kind === "question");
+  const waiting = busy || offer ? null : waitingQuestion(cards);
+  const learning = offer ? null : learningCard(cards);
+  const sessionOpen =
+    !finished && offer === null && cards.some((c) => c.kind === "question" || c.kind === "learn");
+
+  // A turn paused on a new concept: once the quiz's request is done, its lesson starts (or,
+  // after a refresh, carries on: the kept lesson comes back without a model call).
+  const begun = useRef<string | null>(null);
+  const startLearning = useEffectEvent((conceptId: string) => learn.start(conceptId));
+  const learningId = learning?.id ?? null;
+  const learningConcept = learning?.conceptId ?? null;
+  useEffect(() => {
+    if (!learningId || !learningConcept || running || begun.current === learningId) return;
+    begun.current = learningId;
+    startLearning(learningConcept);
+  }, [learningId, learningConcept, running]);
 
   /**
    * Renew this tab's lease while the session is open; a request in flight renews it
@@ -375,28 +409,41 @@ export default function useStudy(subjectId: string): Study {
   }
 
   function dispute(gradeId: string, reason: DisputeReason, explanation: string) {
-    if (running) return;
+    if (busy) return;
     setCards((c) => disputeSent(c, gradeId));
     reply({ dispute: { id: uuid(), reason, explanation } }, cards.filter((c) => c.id === gradeId));
   }
 
   function end() {
-    if (!running) reply({ quit: true });
+    if (!busy) reply({ quit: true });
+  }
+
+  function ask(question: string, kind: AskKind) {
+    if (learning?.lesson && !busy) learn.ask(learning.conceptId, question, kind);
+  }
+
+  function ready() {
+    if (learning?.lesson && !busy) learn.ready(learning.conceptId);
   }
 
   return {
     cards,
     offer,
-    step,
-    error,
+    step: step ?? learn.step,
+    error: error ?? learn.error,
     fatal,
-    running,
+    running: busy,
     backup: cards.some((c) => c.kind === "notice" && c.text.startsWith(FALLBACK_NOTICE)),
     waiting,
+    learning,
+    live: learn.live,
+    learned: cards.flatMap((c) => (c.kind === "learn" && c.learned ? [c.conceptId] : [])),
     open: sessionOpen,
     updates,
     answer,
     dispute,
+    ask,
+    ready,
     end,
     resume,
     startFresh,

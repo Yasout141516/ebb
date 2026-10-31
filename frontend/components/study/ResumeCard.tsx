@@ -13,9 +13,9 @@ type Props = {
 
 /** An open session to carry on with, or (driven elsewhere) only to replace. */
 export default function ResumeCard({ offer, now = new Date(), onResume, onStartFresh }: Props) {
-  const text = offer.busy
-    ? BUSY
-    : `You stopped on ${offer.concept}, question ${offer.number}, ${formatAgo(offer.last_active_at, now)}.`;
+  // Number 0: paused on the concept's lesson, before its questions.
+  const where = offer.number === 0 ? `the lesson for ${offer.concept}` : `${offer.concept}, question ${offer.number}`;
+  const text = offer.busy ? BUSY : `You stopped on ${where}, ${formatAgo(offer.last_active_at, now)}.`;
   return (
     <div className={styles.card}>
       <span className={styles.name}>Ebb</span>

@@ -42,6 +42,7 @@ export default function Workspace({ subjectId, onBackup }: Props) {
   // The grade card the dispute dialog is open for.
   const [disputing, setDisputing] = useState<string | null>(null);
   const context = disputing ? disputeContext(study.cards, disputing) : null;
+  const learning = study.learning?.conceptId ?? null;
 
   // A dispute just sent: focus moves to its card's "re-checking" line, where the button was.
   const sent = useRef<string | null>(null);
@@ -62,13 +63,25 @@ export default function Workspace({ subjectId, onBackup }: Props) {
   }
   return (
     <div className={styles.columns}>
-      <SubjectColumn subjectId={subjectId} updates={study.updates} />
+      <SubjectColumn
+        subjectId={subjectId}
+        updates={study.updates}
+        concepts={memory.concepts}
+        learning={learning}
+        learned={study.learned}
+      />
       <Thread study={study} onDispute={setDisputing} />
       <aside aria-label="Memory" className={styles.right}>
-        <MemoryPanel concepts={memory.concepts} failed={memory.failed} onRetry={memory.retry} />
+        <MemoryPanel concepts={memory.concepts} learning={learning} failed={memory.failed} onRetry={memory.retry} />
       </aside>
       <BottomSheet title="Memory" peek={<MemoryPeek concepts={memory.concepts} />}>
-        <MemorySheetBody concepts={memory.concepts} subjectId={subjectId} failed={memory.failed} onRetry={memory.retry} />
+        <MemorySheetBody
+          concepts={memory.concepts}
+          learning={learning}
+          subjectId={subjectId}
+          failed={memory.failed}
+          onRetry={memory.retry}
+        />
       </BottomSheet>
       {disputing && context && (
         <DisputeDialog

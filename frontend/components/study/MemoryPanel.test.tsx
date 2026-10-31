@@ -45,6 +45,15 @@ describe("MemoryPanel", () => {
     expect(within(due).queryByRole("button")).toBeNull();
   });
 
+  it("shows the concept in its learn phase as learning, not yet quizzed", () => {
+    const { unmount } = render(<MemoryPanel concepts={data} now={NOW} learning="NAT" />);
+    const row = within(screen.getByRole("region", { name: "All concepts" })).getAllByRole("listitem").at(-1)!;
+    expect(within(row).getAllByRole("button")[0]).toHaveAccessibleName("learning · not quizzed yet");
+    unmount();
+    render(<MemorySheetBody concepts={data} now={NOW} subjectId="s1" learning="NAT" />);
+    expect(screen.getByText("learning · not quizzed yet")).toBeInTheDocument();
+  });
+
   it("shows every concept's tide, band and stage dots, highest tide first, new ones last", () => {
     render(<MemoryPanel concepts={data} now={NOW} />);
     const all = screen.getByRole("region", { name: "All concepts" });
